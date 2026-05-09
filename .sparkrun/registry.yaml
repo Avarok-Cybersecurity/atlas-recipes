@@ -1,0 +1,4 @@
+registries:
+  - name: atlas
+    description: Official Atlas Spark recipes — the curated lineup from the avarok/atlas-gb10 catalogue (Qwen3.5/3-Next/Coder-Next, Gemma-4, Nemotron-3, Mistral-Small-4, MiniMax-M2.7, Qwen3-VL). Maintained by the Atlas team.
+    recipes: recipes
