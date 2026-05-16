@@ -15,12 +15,12 @@ metadata:
   model_params: 30B
   model_dtype: nvfp4
   quantization: nvfp4
-  kv_dtype: nvfp4
+  kv_dtype: fp8
 
 defaults:
   port: 8888
   host: 0.0.0.0
   max_model_len: 8192
-  kv_cache_dtype: nvfp4
+  kv_cache_dtype: fp8
   gpu_memory_utilization: 0.88
   scheduling_policy: slai

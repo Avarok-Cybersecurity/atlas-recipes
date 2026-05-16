@@ -17,7 +17,7 @@ metadata:
   model_params: 122B
   model_dtype: nvfp4
   quantization: nvfp4
-  kv_dtype: nvfp4
+  kv_dtype: fp8
 
 defaults:
   port: 8888
@@ -25,8 +25,8 @@ defaults:
   ep_size: 2
   max_model_len: 4096
   max_batch_size: 1
-  kv_cache_dtype: nvfp4
+  kv_cache_dtype: fp8
   gpu_memory_utilization: 0.70
   scheduling_policy: slai
   speculative: true
-  mtp_quantization: nvfp4
+  mtp_quantization: bf16
