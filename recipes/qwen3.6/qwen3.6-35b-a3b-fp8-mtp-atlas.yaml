@@ -1,0 +1,30 @@
+recipe_version: "2"
+model: Qwen/Qwen3.6-35B-A3B-FP8
+runtime: atlas
+container: avarok/atlas-gb10:latest
+max_nodes: 1
+
+metadata:
+  description: |
+    Qwen3.6-35B-A3B (qwen3_5_moe architecture) at native FP8 on the
+    Atlas runtime, with the upstream-bundled MTP draft head enabled for
+    K=2 speculative decoding. A3B MoE attention (not dense) so FP8 KV is
+    stable here — mirrors qwen3.6-35b-a3b-nvfp4-atlas but serves the FP8
+    checkpoint with no NVFP4 conversion overhead. Single GB10.
+  maintainer: avarok
+  category: agent
+  model_params: 35B
+  model_dtype: fp8
+  quantization: fp8
+  kv_dtype: fp8
+
+defaults:
+  port: 8888
+  host: 0.0.0.0
+  max_model_len: 131072
+  kv_cache_dtype: fp8
+  gpu_memory_utilization: 0.88
+  scheduling_policy: slai
+  speculative: true
+  mtp_quantization: bf16
+  enable_prefix_caching: true
