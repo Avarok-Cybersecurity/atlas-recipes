@@ -23,9 +23,14 @@ metadata:
 defaults:
   port: 8888
   host: 0.0.0.0
-  max_model_len: 60000
-  kv_cache_dtype: bf16
+  max_model_len: 262144
+  max_batch_size: 2
+  max_num_seqs: 2
+  kv_cache_dtype: fp8
+  kv_high_precision_layers: auto
   gpu_memory_utilization: 0.88
   scheduling_policy: slai
   speculative: false
+  mtp_quantization: bf16
   enable_prefix_caching: true
+  oom_guard_mb: 1024
