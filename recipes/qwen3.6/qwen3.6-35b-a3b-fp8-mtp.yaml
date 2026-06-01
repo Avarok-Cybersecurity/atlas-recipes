@@ -21,16 +21,15 @@ metadata:
 defaults:
   port: 8888
   host: 0.0.0.0
-  # max_model_len was 131072 with no batch cap, so Atlas provisioned the
-  # KV pool for 131072 x default-batch-8 tokens. On a single GB10 that
-  # overcommits the post-weights GPU slice at gpu_memory_utilization 0.88:
-  # single-thread requests work, but concurrency 2-4 and any request at
-  # depth 8192 push live KV allocation past the pool and the server
-  # crashes (0 tok/s). Cap context to a single-GB10-serviceable length
-  # and bound the batch so concurrency 2-4 admits cleanly.
+  # Default was 131072, which provisions a huge KV pool and leaves no
+  # headroom at depth on a single GB10. 16384 is a single-GB10-serviceable
+  # context that still covers the deep (depth-8192) prompts users run.
+  # NOTE: do NOT cap max_batch_size here. The SSM state pool is sized to
+  # max_batch_size (impl_a1.rs), and shrinking it triggers a slot-leak that
+  # bricks the server on the first aborted deep prefill. Concurrency>=4 with
+  # deep context is a separate Atlas runtime crash, tracked in
+  # Avarok-Cybersecurity/atlas#110 — not fixable from the recipe.
   max_model_len: 16384
-  max_batch_size: 4
-  max_num_seqs: 4
   kv_cache_dtype: fp8
   kv_high_precision_layers: auto
   gpu_memory_utilization: 0.88
