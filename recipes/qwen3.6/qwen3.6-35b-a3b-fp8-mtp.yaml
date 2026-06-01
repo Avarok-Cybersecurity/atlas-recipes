@@ -21,10 +21,21 @@ metadata:
 defaults:
   port: 8888
   host: 0.0.0.0
-  max_model_len: 131072
+  # max_model_len was 131072 with no batch cap, so Atlas provisioned the
+  # KV pool for 131072 x default-batch-8 tokens. On a single GB10 that
+  # overcommits the post-weights GPU slice at gpu_memory_utilization 0.88:
+  # single-thread requests work, but concurrency 2-4 and any request at
+  # depth 8192 push live KV allocation past the pool and the server
+  # crashes (0 tok/s). Cap context to a single-GB10-serviceable length
+  # and bound the batch so concurrency 2-4 admits cleanly.
+  max_model_len: 16384
+  max_batch_size: 4
+  max_num_seqs: 4
   kv_cache_dtype: fp8
+  kv_high_precision_layers: auto
   gpu_memory_utilization: 0.88
   scheduling_policy: slai
   speculative: true
   mtp_quantization: bf16
   enable_prefix_caching: true
+  oom_guard_mb: 1024
