@@ -22,8 +22,9 @@ sparkrun registry add https://github.com/Avarok-Cybersecurity/atlas-recipes.git
 
 | Recipe | Model | Topology | Notes |
 |---|---|---|---|
+| `qwen3.6-27b-fp8-mtp` | Qwen/Qwen3.6-27B-FP8 | single | Dense hybrid SSM+Attn, ~15 tok/s |
+| `qwen3.6-35b-a3b-nvfp4` | RedHatAI/Qwen3.6-35B-A3B-NVFP4 | single | Fastest catalogue model, MTP K=2, ~157 tok/s |
 | `qwen3.5-27b-dense-nvfp4` | Kbenkhaled/Qwen3.5-27B-NVFP4 | single | Dense hybrid SSM+Attn, ~14 tok/s |
-| `qwen3.5-35b-a3b-nvfp4` | Sehyo/Qwen3.5-35B-A3B-NVFP4 | single | Fastest catalogue model, MTP K=2, ~131 tok/s |
 | `qwen3.5-122b-a10b-nvfp4-single` | Sehyo/Qwen3.5-122B-A10B-NVFP4 | single | Tight KV/seq budget, all 256 experts on one node |
 | `qwen3.5-122b-a10b-nvfp4-ep2` | Sehyo/Qwen3.5-122B-A10B-NVFP4 | 2-node | EP=2 + MTP K=2 |
 | `qwen3-next-80b-a3b-nvfp4` | nvidia/Qwen3-Next-80B-A3B-Instruct-NVFP4 | single | MTP, ~74-104 tok/s |
