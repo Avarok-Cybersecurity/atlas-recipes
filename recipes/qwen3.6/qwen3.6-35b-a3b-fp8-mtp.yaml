@@ -21,10 +21,20 @@ metadata:
 defaults:
   port: 8888
   host: 0.0.0.0
-  max_model_len: 131072
+  # Default was 131072, which provisions a huge KV pool and leaves no
+  # headroom at depth on a single GB10. 16384 is a single-GB10-serviceable
+  # context that still covers the deep (depth-8192) prompts users run.
+  # NOTE: do NOT cap max_batch_size here. The SSM state pool is sized to
+  # max_batch_size (impl_a1.rs), and shrinking it triggers a slot-leak that
+  # bricks the server on the first aborted deep prefill. Concurrency>=4 with
+  # deep context is a separate Atlas runtime crash, tracked in
+  # Avarok-Cybersecurity/atlas#110 — not fixable from the recipe.
+  max_model_len: 16384
   kv_cache_dtype: fp8
+  kv_high_precision_layers: auto
   gpu_memory_utilization: 0.88
   scheduling_policy: slai
   speculative: true
   mtp_quantization: bf16
   enable_prefix_caching: true
+  oom_guard_mb: 1024

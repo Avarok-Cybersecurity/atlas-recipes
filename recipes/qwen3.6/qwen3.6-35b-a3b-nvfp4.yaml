@@ -25,5 +25,5 @@ defaults:
   gpu_memory_utilization: 0.88
   scheduling_policy: slai
   speculative: true
-  mtp_quantization: bf16
+  mtp_quantization: fp8
   enable_prefix_caching: true
