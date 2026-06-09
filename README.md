@@ -22,20 +22,24 @@ sparkrun registry add https://github.com/Avarok-Cybersecurity/atlas-recipes.git
 
 | Recipe | Model | Topology | Notes |
 |---|---|---|---|
-| `qwen3.6-27b-fp8-mtp` | Qwen/Qwen3.6-27B-FP8 | single | Dense hybrid SSM+Attn, ~15 tok/s |
-| `qwen3.6-35b-a3b-nvfp4` | RedHatAI/Qwen3.6-35B-A3B-NVFP4 | single | Fastest catalogue model, MTP K=2, ~157 tok/s |
+| `qwen3.6-35b-a3b-fp8-mtp` | Qwen/Qwen3.6-35B-A3B-FP8 | single | **FLAGSHIP** — native FP8, bf16 head + bf16 KV, 64K ctx, MTP K=2, live tool-call streaming |
+| `qwen3.6-35b-a3b-nvfp4` | nvidia/Qwen3.6-35B-A3B-NVFP4 | single | Fastest catalogue model, MTP K=2, calibrated fp8 KV (128K), ~157 tok/s |
+| `qwen3.6-35b-a3b-fp8-bf16head` | Qwen/Qwen3.6-35B-A3B-FP8 | single | 32K safe profile of the flagship (same bf16 head/KV) |
+| `qwen3.6-35b-a3b-fp8-nvfp4head` | Qwen/Qwen3.6-35B-A3B-FP8 | single | nvfp4 lm-head sibling — near-neutral wall, lower VRAM |
+| `qwen3.6-27b-fp8-mtp` | Qwen/Qwen3.6-27B-FP8 | single | Dense hybrid SSM+Attn, MTP K=2, ~15 tok/s |
+| `qwen3.5-35b-a3b-nvfp4` | Sehyo/Qwen3.5-35B-A3B-NVFP4 | single | MTP K=2, ~131 tok/s |
 | `qwen3.5-27b-dense-nvfp4` | Kbenkhaled/Qwen3.5-27B-NVFP4 | single | Dense hybrid SSM+Attn, ~14 tok/s |
 | `qwen3.5-122b-a10b-nvfp4-single` | Sehyo/Qwen3.5-122B-A10B-NVFP4 | single | Tight KV/seq budget, all 256 experts on one node |
 | `qwen3.5-122b-a10b-nvfp4-ep2` | Sehyo/Qwen3.5-122B-A10B-NVFP4 | 2-node | EP=2 + MTP K=2 |
 | `qwen3-next-80b-a3b-nvfp4` | nvidia/Qwen3-Next-80B-A3B-Instruct-NVFP4 | single | MTP, ~74-104 tok/s |
-| `qwen3-vl-30b-a3b-nvfp4` | ig1/Qwen3-VL-30B-A3B-Instruct-NVFP4 | single | Vision-language, ~97 tok/s |
 | `qwen3-coder-next-fp8` | Qwen/Qwen3-Coder-Next-FP8 | single | Native FP8, ~58 tok/s, BF16 KV |
-| `gemma-4-26b-a4b-nvfp4` | bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4A16 | single | MoE GeGLU, ~67 tok/s |
-| `gemma-4-31b-nvfp4` | nvidia/Gemma-4-31B-IT-NVFP4 | single | Dense, sliding+full attention, gemma4 tool parser |
-| `nemotron-3-nano-30b-a3b-nvfp4` | nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4 | single | Mamba-2 + MoE, ~88 tok/s |
-| `nemotron-3-super-120b-a12b-nvfp4` | nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4 | single | LatentMoE, ~24 tok/s |
-| `mistral-small-4-119b-nvfp4` | mistralai/Mistral-Small-4-119B-2603-NVFP4 | single | MLA, BF16-only KV (mandatory) |
+| `qwen3-vl-30b-a3b-nvfp4` | ig1/Qwen3-VL-30B-A3B-Instruct-NVFP4 | single | Vision-language, ~97 tok/s |
 | `minimax-m2.7-nvfp4-ep2` | lukealonso/MiniMax-M2.7-NVFP4 | 2-node | EP=2, BF16 KV bring-up, no MTP |
+| `gemma-4-31b-nvfp4` | nvidia/Gemma-4-31B-IT-NVFP4 | single | Dense, sliding+full attention, gemma4 tool parser |
+| `gemma-4-26b-a4b-nvfp4` | bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4A16 | single | MoE GeGLU, ~67 tok/s |
+| `nemotron-3-super-120b-a12b-nvfp4` | nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4 | single | LatentMoE, ~24 tok/s |
+| `nemotron-3-nano-30b-a3b-nvfp4` | nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4 | single | Mamba-2 + MoE, ~88 tok/s |
+| `mistral-small-4-119b-nvfp4` | mistralai/Mistral-Small-4-119B-2603-NVFP4 | single | MLA, BF16-only KV (mandatory) |
 
 ## Layout
 

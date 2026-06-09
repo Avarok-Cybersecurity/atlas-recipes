@@ -6,35 +6,47 @@ max_nodes: 1
 
 metadata:
   description: |
-    Qwen3.6-35B-A3B (qwen3_5_moe architecture) at native FP8 on the
-    Atlas runtime, with the upstream-bundled MTP draft head enabled for
-    K=2 speculative decoding. A3B MoE attention (not dense) so FP8 KV is
-    stable here — mirrors qwen3.6-35b-a3b-nvfp4-atlas but serves the FP8
-    checkpoint with no NVFP4 conversion overhead. Single GB10.
+    THE FLAGSHIP. Qwen3.6-35B-A3B (qwen3_5_moe architecture) at native FP8
+    on the Atlas runtime: bf16 lm-head (full-precision 248K-vocab logit
+    projection), bf16 KV cache, 64K context, MTP K=2 speculative decoding,
+    live-streamed tool-call argument deltas. Single GB10 (~109 of 119.7 GB).
+
+    Config rationale (gate-measured, opencode webserver_ok harness, N=10):
+      - bf16 lm-head: ws_ok 10/10, tightest wall distribution of the
+        lm-head dtype A/B (vs nvfp4/fp8 heads, 2026-06-07).
+      - bf16 KV: faster (~2-3%) AND higher quality than calibrated fp8 KV
+        at agentic lengths; fp8 KV is a memory-only lever for ~128K.
+      - Re-verified post --lm-head-dtype merge 2026-06-09: 10/10 ws_ok,
+        10/10 followed_directions.
   maintainer: avarok
   category: agent
   model_params: 35B
   model_dtype: fp8
   quantization: fp8
-  kv_dtype: fp8
+  kv_dtype: bf16
 
 defaults:
   port: 8888
   host: 0.0.0.0
-  # Default was 131072, which provisions a huge KV pool and leaves no
-  # headroom at depth on a single GB10. 16384 is a single-GB10-serviceable
-  # context that still covers the deep (depth-8192) prompts users run.
+  # 64K with bf16 KV fits next to the FP8 weights on one GB10 (~109/119.7
+  # GB, live-validated 2026-06-09 incl. streaming tool calls). The earlier
+  # 16384 cap limited exposure to the concurrency>=4 + deep-context runtime
+  # crash (Avarok-Cybersecurity/atlas#110) — that bug is unchanged and NOT
+  # recipe-tunable; 64K is the flagship single/low-concurrency agentic
+  # operating point. Drop back toward 16384 for many-user serving until
+  # #110 lands.
   # NOTE: do NOT cap max_batch_size here. The SSM state pool is sized to
   # max_batch_size (impl_a1.rs), and shrinking it triggers a slot-leak that
-  # bricks the server on the first aborted deep prefill. Concurrency>=4 with
-  # deep context is a separate Atlas runtime crash, tracked in
-  # Avarok-Cybersecurity/atlas#110 — not fixable from the recipe.
-  max_model_len: 16384
-  kv_cache_dtype: fp8
+  # bricks the server on the first aborted deep prefill.
+  max_model_len: 65536
+  kv_cache_dtype: bf16
   kv_high_precision_layers: auto
   gpu_memory_utilization: 0.88
   scheduling_policy: slai
   speculative: true
   mtp_quantization: bf16
   enable_prefix_caching: true
+  # bf16 lm-head: the 248K-vocab projection stays full-precision (the
+  # single largest per-token weight read). Argmax over the vocab is exact.
+  lm_head_dtype: bf16
   oom_guard_mb: 1024

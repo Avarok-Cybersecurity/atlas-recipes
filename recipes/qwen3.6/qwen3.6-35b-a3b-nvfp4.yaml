@@ -1,15 +1,19 @@
 recipe_version: "2"
-model: RedHatAI/Qwen3.6-35B-A3B-NVFP4
+model: nvidia/Qwen3.6-35B-A3B-NVFP4
 runtime: atlas
 container: avarok/atlas-gb10:latest
 max_nodes: 1
 
 metadata:
   description: |
-    Qwen3.6-35B-A3B (RedHatAI NVFP4) with MTP K=2 on the Atlas runtime.
-    Mirrors the qwen3.5-35b-a3b-nvfp4 recipe but uses the qwen3_5_moe
-    architecture from Qwen3.6, served on a single GB10. NVFP4 weights +
-    NVFP4 KV cache + NVFP4 MTP-quantized draft head.
+    Qwen3.6-35B-A3B (nvidia modelopt NVFP4) with MTP K=2 on the Atlas
+    runtime. Mirrors the qwen3.5-35b-a3b-nvfp4 recipe but uses the
+    qwen3_5_moe architecture from Qwen3.6, served on a single GB10.
+    NVFP4 weights + calibrated fp8 KV (128K memory lever) + the
+    checkpoint's native bf16 MTP draft head and bf16 lm-head.
+    Gate-verified 2026-06-09 (opencode webserver_ok N=10): 9/10 with the
+    single miss a 360s harness-cap timeout (code cargo-valid), not a
+    correctness failure.
   maintainer: avarok
   category: agent
   model_params: 35B
@@ -25,5 +29,15 @@ defaults:
   gpu_memory_utilization: 0.88
   scheduling_policy: slai
   speculative: true
-  mtp_quantization: fp8
+  # The nvidia checkpoint ships its MTP draft head in bf16 — load it
+  # native (downcasting buys nothing and lowers draft acceptance).
+  mtp_quantization: bf16
   enable_prefix_caching: true
+  lm_head_dtype: bf16
+  # fp8 KV requires online K/V scale calibration on these checkpoints (no
+  # shipped k/v scales) — without it, bare fp8 KV clips to E4M3 [-448,448]
+  # and Atlas refuses to serve. Gate-validated 2026-06-06: calibrated fp8
+  # KV holds quality (9/10 == bf16 10/10 within N=10 noise) and halves
+  # KV-cache memory. kv_high_precision_layers auto keeps sink+output bf16.
+  fp8_kv_calibration_tokens: 256
+  kv_high_precision_layers: auto
