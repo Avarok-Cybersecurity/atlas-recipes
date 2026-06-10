@@ -10,10 +10,12 @@ metadata:
     runtime. Mirrors the qwen3.5-35b-a3b-nvfp4 recipe but uses the
     qwen3_5_moe architecture from Qwen3.6, served on a single GB10.
     NVFP4 weights + calibrated fp8 KV (128K memory lever) + the
-    checkpoint's native bf16 MTP draft head and bf16 lm-head.
-    Gate-verified 2026-06-09 (opencode webserver_ok N=10): 9/10 with the
-    single miss a 360s harness-cap timeout (code cargo-valid), not a
-    correctness failure.
+    checkpoint's native bf16 MTP draft head. The checkpoint ships its
+    lm_head pre-packed as NVFP4 (no BF16 tensor exists), so Atlas uses
+    the packed head directly (atlas#150); do not set lm_head_dtype here.
+    Gate-verified 2026-06-10 on the atlas#150 fix (opencode webserver_ok
+    N=10): 9/10 with the single miss a benign run-1 cold-start early-quit,
+    not a correctness failure.
   maintainer: avarok
   category: agent
   model_params: 35B
@@ -33,7 +35,6 @@ defaults:
   # native (downcasting buys nothing and lowers draft acceptance).
   mtp_quantization: bf16
   enable_prefix_caching: true
-  lm_head_dtype: bf16
   # fp8 KV requires online K/V scale calibration on these checkpoints (no
   # shipped k/v scales) — without it, bare fp8 KV clips to E4M3 [-448,448]
   # and Atlas refuses to serve. Gate-validated 2026-06-06: calibrated fp8
