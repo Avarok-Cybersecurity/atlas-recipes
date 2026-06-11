@@ -29,22 +29,31 @@ defaults:
   port: 8888
   host: 0.0.0.0
   # 64K with bf16 KV fits next to the FP8 weights on one GB10 (~109/119.7
-  # GB, live-validated 2026-06-09 incl. streaming tool calls). The earlier
-  # 16384 cap limited exposure to the concurrency>=4 + deep-context runtime
-  # crash (Avarok-Cybersecurity/atlas#110) — that bug is unchanged and NOT
-  # recipe-tunable; 64K is the flagship single/low-concurrency agentic
-  # operating point. Drop back toward 16384 for many-user serving until
-  # #110 lands.
-  # NOTE: do NOT cap max_batch_size here. The SSM state pool is sized to
-  # max_batch_size (impl_a1.rs), and shrinking it triggers a slot-leak that
-  # bricks the server on the first aborted deep prefill.
+  # GB, live-validated 2026-06-09 incl. streaming tool calls).
   max_model_len: 65536
+  # max_batch_size 2: REQUIRED until Avarok-Cybersecurity/atlas#110 lands —
+  # an uncapped batch hits the concurrency>=4 + deep-context CUDA-700 crash
+  # (re-confirmed live 2026-06-11 at n_decode=2 + n_prefill=2, ~8.5K ctx).
+  # The old warning here against capping (SSM slot-leak on aborted deep
+  # prefill) is obsolete: that slot leak was fixed (slot-release-first
+  # ordering in free_sequence). The cap also matches the gate-measured
+  # fast path (mixed-batch scheduling overhead avoided).
+  max_batch_size: 2
+  # Single-chunk prefill up to 32K: chunked (4096) prefill is slower and
+  # was the surface of the warm-turn suffix-token bug fixed in atlas#156.
+  # Prompts >32K still chunk safely.
+  max_prefill_tokens: 32768
   kv_cache_dtype: bf16
   kv_high_precision_layers: auto
   gpu_memory_utilization: 0.88
   scheduling_policy: slai
   speculative: true
   mtp_quantization: bf16
+  # Prefix caching: the warm-restore corruption (atlas#155) is fixed in
+  # atlas#156 (warm-turn suffix tokens, decode-ckpt registration
+  # off-by-one, snapshot eviction inversion, finish-leaf commit race).
+  # Gate 2026-06-11: webserver_ok 10/10, zero path-drift, median run
+  # ~125s with caching ON + MTP K=2 (image digest 637e7b32).
   enable_prefix_caching: true
   # bf16 lm-head: the 248K-vocab projection stays full-precision (the
   # single largest per-token weight read). Argmax over the vocab is exact.
