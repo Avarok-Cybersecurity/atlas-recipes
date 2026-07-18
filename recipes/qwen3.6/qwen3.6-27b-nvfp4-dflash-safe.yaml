@@ -51,7 +51,7 @@ defaults:
   max_model_len: 32768
   max_batch_size: 1
   kv_cache_dtype: bf16
-  gpu_memory_utilization: 0.85
+  gpu_memory_utilization: 0.55
   enable_prefix_caching: true
   # tool_call_parser / disable_tool_grammar inherited from the qwen3.6-27b-nvfp4
   # default; NOT independently validated with DFlash (spec-decode benches use no
