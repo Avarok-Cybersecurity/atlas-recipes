@@ -67,6 +67,7 @@ image — pull a newer `avarok/atlas-gb10:dev`.
 
 | Recipe | Model | Topology | Notes |
 |---|---|---|---|
+| `laguna-s-2.1-nvfp4` | poolside/Laguna-S-2.1-NVFP4 | single | 200K context, FP8 KV, 16K prefill, NFS-aware load, no DFlash; requires Atlas PR #350 |
 | `qwen3.6-35b-a3b-nvfp4` | nvidia/Qwen3.6-35B-A3B-NVFP4 | single | **DEFAULT 35B** — MTP K=1 (pinned; 116.5 tok/s), calibrated fp8 KV (128K), qwen3_coder agentic stack; requires :dev ≥ 2026-07-10 (atlas#287) |
 | `qwen3.6-27b-nvfp4` | nvidia/Qwen3.6-27B-NVFP4 | single | **DEFAULT 27B** — dense hybrid SSM+Attn, MTP K=1 (pinned), bf16 KV, qwen3_coder agentic stack; requires :dev ≥ 2026-07-10 (atlas#287) |
 | `qwen3.6-35b-a3b-fp8-mtp` | Qwen/Qwen3.6-35B-A3B-FP8 | single | Flagship FP8 — native FP8, bf16 head + bf16 KV, 64K ctx, MTP K=2, live tool-call streaming |
