@@ -13,8 +13,9 @@ metadata:
     FP8 KV scheme, keeps the BF16 lm-head, and exposes 200K logical context via
     KV overcommit while limiting Atlas's physical allocation to 80% of unified
     memory. Prefix caching is enabled for agentic loops; SSM snapshot storage is
-    explicitly disabled because Laguna has no SSM state. The checkpoint's Jinja
-    template defaults `enable_thinking` to false and permits per-request opt-in.
+    explicitly disabled because Laguna has no SSM state. Thinking is enabled by
+    default for agentic coding, as recommended by Poolside, and clients can
+    still disable it per request through the Jinja `enable_thinking` control.
 
     The 16K prefill chunk is the measured balanced setting. Exact MoE tiles
     improved cold 8K TTFT by 3.7%. The NFS prefetch flag is intentional: Laguna's
