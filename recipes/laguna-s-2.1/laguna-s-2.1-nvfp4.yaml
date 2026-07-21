@@ -42,6 +42,7 @@ defaults:
   ssm_cache_slots: 0
   max_thinking_budget: 1024
   scheduling_policy: slai
+  tbt_deadline_ms: 100
 
 env:
   ATLAS_KV_OVERCOMMIT: "1"
@@ -66,4 +67,5 @@ command: |
     --enable-prefix-caching \
     --ssm-cache-slots {ssm_cache_slots} \
     --max-thinking-budget {max_thinking_budget} \
-    --scheduling-policy {scheduling_policy}
+    --scheduling-policy {scheduling_policy} \
+    --tbt-deadline-ms {tbt_deadline_ms}
