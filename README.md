@@ -69,6 +69,7 @@ image — pull a newer `avarok/atlas-gb10:dev`.
 |---|---|---|---|
 | `qwen3.6-35b-a3b-nvfp4` | nvidia/Qwen3.6-35B-A3B-NVFP4 | single | **DEFAULT 35B** — MTP K=1 (pinned; 116.5 tok/s), calibrated fp8 KV (128K), qwen3_coder agentic stack; requires :dev ≥ 2026-07-10 (atlas#287) |
 | `qwen3.6-27b-nvfp4` | nvidia/Qwen3.6-27B-NVFP4 | single | **DEFAULT 27B** — dense hybrid SSM+Attn, MTP K=1 (pinned), bf16 KV, qwen3_coder agentic stack; requires :dev ≥ 2026-07-10 (atlas#287) |
+| `qwen3.6-27b-w4a4-concurrency` | centml/Qwen3.6-27B-NVFP4-W4A4-mlpinf | single | **MANY-CLIENT 27B** — batch 128, MTP K=3, FP16 GDN h-state; 24.2/205.1/472.1 tok/s at C=1/16/128 and ahead of vLLM on all eight rungs. A THROUGHPUT config: the top two rungs invert on time-to-answer. Needs an image carrying the enterprise-concurrency merge |
 | `qwen3.6-35b-a3b-fp8-mtp` | Qwen/Qwen3.6-35B-A3B-FP8 | single | Flagship FP8 — native FP8, bf16 head + bf16 KV, 64K ctx, MTP K=2, live tool-call streaming |
 | `qwen3.6-35b-a3b-fp8-bf16head` | Qwen/Qwen3.6-35B-A3B-FP8 | single | 32K safe profile of the FP8 flagship (same bf16 head/KV) |
 | `qwen3.6-35b-a3b-fp8-nvfp4head` | Qwen/Qwen3.6-35B-A3B-FP8 | single | nvfp4 lm-head sibling — near-neutral wall, lower VRAM |

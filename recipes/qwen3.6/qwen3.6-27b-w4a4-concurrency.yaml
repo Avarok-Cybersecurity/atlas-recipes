@@ -1,0 +1,117 @@
+recipe_version: "2"
+model: centml/Qwen3.6-27B-NVFP4-W4A4-mlpinf
+runtime: atlas
+container: avarok/atlas-gb10:dev
+max_nodes: 1
+
+metadata:
+  description: |
+    Qwen3.6-27B W4A4 — the CONCURRENCY config. Tuned for many simultaneous
+    clients on one GB10, not for a single interactive stream.
+
+    This is the configuration from the enterprise-concurrency campaign
+    (2026-07/08). Measured on a DGX Spark GB10, one session, both engines
+    on the same box and driver, decode_short (ISL 128 / OSL 1024, temp 0,
+    token-matched, 3 reps per rung), against vLLM on the same checkpoint
+    family:
+
+      C=1   1.694x   C=2   1.281x   C=4   1.368x   C=8   1.167x
+      C=16  1.205x   C=32  1.105x   C=64  1.021x   C=128 1.040x
+
+    Atlas throughput, same run:
+
+      C=1    24.20    C=2    35.71    C=4    73.06    C=8   114.85
+      C=16  205.10    C=32  295.71    C=64  380.89    C=128 472.14  tok/s
+
+    THREE THINGS THAT MUST TRAVEL WITH THAT TABLE:
+
+    1. It needs gpu_memory_utilization 0.85. GB10 is UNIFIED memory
+       (121 GB CPU+GPU shared) and 0.90 froze a box hard enough to need a
+       physical power-cycle. The floor is ~0.82, set by the MTP verify
+       pools rather than by the KV dtype. Watch host headroom during a
+       run; abort below ~8 GB available rather than freezing the machine.
+
+    2. It is a TUNED config. A stock `atlas serve` with none of these
+       settings LOSES to vLLM at C=16 and C=32 — the tuning is worth
+       +36.9% at C=32. "Atlas beats vLLM" and "Atlas-as-shipped beats
+       vLLM" are different claims, and this recipe is the first one.
+
+    3. It is a THROUGHPUT config, not a time-to-answer config. Measured
+       uncapped, with natural stopping and thinking disabled on both
+       engines, the top two rungs INVERT: Atlas is 4.5% slower at C=64 and
+       10.8% slower at C=128 in wall clock, because it emits ~8-10% more
+       tokens for the same prompts. Cause unexplained. Do not quote the
+       ladder above as a time-to-answer win.
+
+    mtp_gate is set to `force` because that is how the table was measured,
+    not because it is recommended — see the comment on the setting.
+
+    ssm_h_dtype f16 is the single largest lever here (+13.25% at C=16,
+    +19.67% at C=32, 1.286x wall at C=64). It is NOT the engine default
+    and should not be: it changes the GDN h-state numerics, which shifts
+    speculative accept patterns and therefore the emitted trajectory — a
+    +3.17% token tax was measured in the speculation-ON regime at low
+    concurrency (p=0.030), and it vanishes by C=64. It earns its place in
+    THIS recipe, at these concurrencies. gdn_fused_norm is required
+    alongside it: the FP16 h-state twins exist only on the fused-norm
+    decode arm, and the server refuses to start without it rather than
+    reading the FP16 pool as FP32.
+
+    CHECKPOINT: this recipe serves `centml/...-W4A4-mlpinf`, NOT the
+    `nvidia/Qwen3.6-27B-NVFP4` that qwen3.6-27b-nvfp4.yaml serves. The
+    campaign measured the centml checkpoint end to end and no rung of the
+    table above was reproduced on the nvidia one. In particular
+    num_drafts 3 is right HERE and is measurably wrong there — the
+    default recipe pins num_drafts 1 with a "do not raise it" note, on
+    its own checkpoint's evidence. Neither note generalises to the other
+    checkpoint. Do not merge the two recipes.
+
+    REQUIRES an atlas-gb10 image built from a commit carrying the
+    enterprise-concurrency merge (the `--ssm-h-dtype`, `--gdn-fused-norm`,
+    `--ssm-batched-recurrent`, `--ssm-tail-midchunk` and `--mtp-gate`
+    flags). Before that merge these were `ATLAS_*` environment variables;
+    an older image will silently ignore the flags — or refuse to parse
+    them, which is the better failure of the two.
+  maintainer: avarok
+  category: agent
+  model_params: 27B
+  model_dtype: nvfp4
+  quantization: w4a4
+  kv_dtype: bf16
+
+defaults:
+  port: 8888
+  host: 0.0.0.0
+  max_model_len: 4096
+  # The whole point of this recipe. 128 is the validated ceiling
+  # (DECODE_META_MAX_ROWS); the server rejects more at startup.
+  max_batch_size: 128
+  kv_cache_dtype: bf16
+  # 0.85, not 0.90 — see the description. Unified memory, hard freeze.
+  gpu_memory_utilization: 0.85
+  enable_prefix_caching: true
+  ssm_cache_slots: 32
+  ssm_checkpoint_interval: 32
+  speculative: true
+  # 3 on THIS checkpoint. The default 27B recipe pins 1 on the nvidia
+  # checkpoint, where 3 is worse. Checkpoint-specific, both measured.
+  num_drafts: 3
+  mtp_quantization: bf16
+  scheduling_policy: fifo
+  tool_call_parser: qwen3_xml
+  disable_tool_grammar: true
+  disable_thinking: true
+  # ── GDN decode path ──
+  ssm_h_dtype: f16
+  gdn_fused_norm: true
+  ssm_batched_recurrent: true
+  ssm_tail_midchunk: false
+  # ⚠ DIAGNOSTIC, and it is here only because the table above was measured
+  # with it. `force` disarms the MTP throughput arbiter, so speculative
+  # verify keeps running even in regimes where the arbiter would measure it
+  # net-negative. It is labelled diagnostic in the engine, and the standing
+  # conclusion is that if forcing WINS then the gate is miscalibrated and
+  # THAT is the fix. Set `mtp_gate: auto` for a production deployment and
+  # expect the ladder to move; the campaign never gated auto-vs-force on its
+  # own, so the size of that move is not known.
+  mtp_gate: force
