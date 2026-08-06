@@ -1,0 +1,67 @@
+recipe_version: "2"
+model: unsloth/Qwen3.6-27B-NVFP4
+runtime: atlas
+container: avarok/atlas-gb10:latest
+max_nodes: 1
+
+metadata:
+  description: |
+    Qwen3.6-27B (unsloth NVFP4, dense hybrid SSM+Attn) — the BFCL / tool-calling
+    checkpoint, and the config the `bfcl-subset` PR gate is measured under.
+
+    Checkpoint choice is WORKLOAD-SPLIT, and this recipe exists because of it.
+    For BFCL / function calling the unsloth checkpoint wins decisively: it
+    reaches 87.44 overall / 88.59 normalized on the golden n=995 MLPerf draw,
+    where the nvidia checkpoint has a hard ~82 BFCL ceiling — which is BELOW
+    the 83.64 MLPerf floor. For agentic / IoU work the nvidia checkpoint is the
+    better one; use qwen3.6-27b-nvfp4.yaml there. Never mix the two.
+
+    ⚠ The unsloth repo was re-quantized IN PLACE on 2026-07-10 into a mixed
+    precision layout (NVFP4 layers 0-55, FP8 E4M3 with a per-row weight_scale
+    for 56-63, FP8 linear_attn projections). Atlas loads that layout as of
+    atlas#297; older releases cannot. That in-place change is why the default
+    27B recipes track nvidia, whose on-disk format has been stable since
+    2026-06-12. This recipe is deliberately scoped to the BFCL gate.
+
+    PROVENANCE OF THE FLAGS BELOW — read before changing any of them.
+
+    These are the Gate-D golden serve flags, the config both high-water runs
+    were taken under. Two honest caveats:
+
+    1. `gpu_memory_utilization: 0.70` is what the one run with a RECORDED util
+       actually used (2026-07-26 dgx2, atlas-gb10:pr369, 87.34/88.59, n=995
+       confirmed, 4753 s). The benchmark-pr skill's Gate D block writes 0.85.
+       0.70 is used here because it is the value tied to a measured run rather
+       than to prose. The 87.44 component's util is NOT recorded anywhere.
+    2. The gate's ratchet is a COMPOSITE OF TWO RUNS: overall 87.44 comes from
+       2026-07-13 prestack b45af988, normalized 88.59 from 2026-07-26 pr369
+       de6153f3. No single run produced both. This recipe reproduces the CONFIG
+       those runs shared; it does not claim to reproduce either number exactly.
+
+    Draw pinning lives on the client side, not here: the golden draw is
+    62/10/10 with a 25-sample floor = exactly n=995, asserted in-tree by
+    bfcl/draw_tests.rs::the_golden_draw_is_exactly_995.
+
+  maintainer: Atlas
+  category: function-calling
+  model_params: 27B dense hybrid (48 GDN linear-attn + 16 softmax-attn layers)
+  quantization: NVFP4 (mixed precision above layer 55)
+  kv_dtype: bf16
+  updated: "2026-08-06"
+
+defaults:
+  host: 0.0.0.0
+  port: 8888
+  max_model_len: 32768
+  max_batch_size: 1
+  gpu_memory_utilization: 0.70
+  kv_cache_dtype: bf16
+  enable_prefix_caching: true
+  ssm_cache_slots: 128
+  ssm_checkpoint_interval: 32
+  speculative: true
+  num_drafts: 1
+  mtp_quantization: bf16
+  tool_call_parser: qwen3_coder
+  disable_tool_grammar: true
+  disable_thinking: true
