@@ -39,6 +39,20 @@ defaults:
   scheduling_policy: slai
   speculative: true
   mtp_quantization: bf16
+  # ★ DETERMINISM PIN, not a performance knob. Without it the MTP gate runs in
+  # `auto`, where it is a bandit arbiter that switches MTP<->serial at runtime
+  # on WALL-CLOCK tok/s. Speculation is not output-neutral at temperature 0
+  # (rollback and SSM-conv restore are inexact; structural 4.1-nat margins
+  # measured 2026-07-22), so a throughput-timed path switch makes greedy decode
+  # depend on how fast the box happened to be that minute.
+  #
+  # This recipe backs Atlas's Gate A (agentic-webserver), whose client is pinned
+  # to the bone -- temperature 0.0, seed 0, constant prompt, normalised tool
+  # output -- and none of that helps while the SERVER picks numeric paths by
+  # stopwatch. Measured 2026-08-09: two runs of ONE binary on ONE box scored
+  # followed_directions 9/10 then 10/10, and iteration 9 of each built a
+  # different cargo profile from identical inputs.
+  mtp_gate: force
   enable_prefix_caching: true
   # bf16 lm-head: the 248K-vocab projection stays full-precision (the single
   # largest per-token weight read). Argmax over the vocab is exact — no flips.
