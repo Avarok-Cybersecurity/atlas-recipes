@@ -69,6 +69,9 @@ image — pull a newer `avarok/atlas-gb10:dev`.
 |---|---|---|---|
 | `qwen3.6-35b-a3b-nvfp4` | nvidia/Qwen3.6-35B-A3B-NVFP4 | single | **DEFAULT 35B** — MTP K=1 (pinned; 116.5 tok/s), calibrated fp8 KV (128K), qwen3_coder agentic stack; requires :dev ≥ 2026-07-10 (atlas#287) |
 | `qwen3.6-27b-nvfp4` | nvidia/Qwen3.6-27B-NVFP4 | single | **DEFAULT 27B** — dense hybrid SSM+Attn, MTP K=1 (pinned), bf16 KV, qwen3_coder agentic stack; requires :dev ≥ 2026-07-10 (atlas#287) |
+| `qwen3.6-27b-nvfp4-dflash` | nvidia/Qwen3.6-27B-NVFP4 | single | **DFlash - balanced (default).** EAGLE drafter + fused GDN verify, spec-through-think + adaptive. ~20-25 code / ~15 prose parity. Approx-lossless (NOSPEC for byte-exact). Requires a DFlash-carrying image. |
+| `qwen3.6-27b-nvfp4-dflash-safe` | nvidia/Qwen3.6-27B-NVFP4 | single | **DFlash - conservative.** Answer-body spec only, adaptive on. ~20 code / ~15.4 prose parity, no coherence risk, never below serial. |
+| `qwen3.6-27b-nvfp4-dflash-code` | nvidia/Qwen3.6-27B-NVFP4 | single | **DFlash - code peak.** Spec-through-think, adaptive off (no serial fallback). ~29.9 code; prose net-negative. Code-heavy only. |
 | `qwen3.6-35b-a3b-fp8-mtp` | Qwen/Qwen3.6-35B-A3B-FP8 | single | Flagship FP8 — native FP8, bf16 head + bf16 KV, 64K ctx, MTP K=2, live tool-call streaming |
 | `qwen3.6-35b-a3b-fp8-bf16head` | Qwen/Qwen3.6-35B-A3B-FP8 | single | 32K safe profile of the FP8 flagship (same bf16 head/KV) |
 | `qwen3.6-35b-a3b-fp8-nvfp4head` | Qwen/Qwen3.6-35B-A3B-FP8 | single | nvfp4 lm-head sibling — near-neutral wall, lower VRAM |

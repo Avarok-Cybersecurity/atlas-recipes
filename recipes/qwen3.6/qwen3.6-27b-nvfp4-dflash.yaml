@@ -1,0 +1,84 @@
+# CONFIRM before publish: the container tag that carries the DFlash binary + drafter.
+# Schema VERIFIED 2026-07-13 vs sparkrun runtimes/atlas.py: dflash (bool flag),
+# draft_model + dflash_gamma (flag map), and the env: block are all supported keys.
+recipe_version: "2"
+model: nvidia/Qwen3.6-27B-NVFP4
+runtime: atlas
+container: avarok/atlas-gb10:dev        # CONFIRM: tag that actually carries DFlash
+max_nodes: 1
+
+metadata:
+  description: |
+    Qwen3.6-27B (nvidia modelopt NVFP4, dense hybrid SSM+Attn) with DFlash
+    speculative decoding - MID / balanced (recommended default). EAGLE-style
+    external drafter (z-lab/Qwen3.6-27B-DFlash) with fused GDN K=gamma verify.
+    Speculates THROUGH the <think> reasoning phase (spec-through-think ON) with
+    adaptive suspend ON so prose stays at serial parity.
+
+    Measured - GB10 single-user, MinHeap code / Volvo prose. A gradient by
+    workload, not one number:
+    - Code (temp=0):      ~24-25 tok/s typical, up to ~28; tau ~7 (accept ~6-7/16)
+    - Math (temp=0):      ~21 tok/s
+    - Logic/reasoning:    ~20 tok/s
+    - Open prose (temp=0):~15 tok/s (serial parity floor; adaptive suspends)
+    - Code (temp=0.7):    ~24 tok/s, output quality clean
+    So ~20-25 across real reasoning/code traffic; open prose is the ~15 floor,
+    never worse. (NOSPEC serial reference = 15.3.)
+
+    Output fidelity (applies to ALL DFlash profiles):
+    - DFlash is a legitimate SAMPLING speculative decoder; this build's fused GDN
+      verify has a small numerics gap -> APPROXIMATELY, not exactly, distribution-
+      preserving.
+    - At temp=0 the output is NOT byte-exact vs base-model greedy. Because
+      spec-through-think is ON, an early low-margin flip in the reasoning phase
+      compounds: DFlash tracks greedy briefly, then diverges to a DIFFERENT but
+      equally valid/coherent trajectory (measured: different reasoning + code, both
+      correct). It does not re-sync to the greedy path. For byte-exact / reference-
+      reproducible output at temp=0, use NOSPEC (or the -safe profile for a smaller
+      divergence).
+    - At temp>0 (sampling) the divergence is ordinary sampling variance - the same
+      you'd get from the base model - and the numerics gap is an invisible sub-
+      distributional shift. Output quality is unaffected.
+
+    max_tokens: caps CONTENT tokens and IS enforced on the spec path (budget +
+    rollback). Thinking tokens are free (standard reasoning-model behavior), so
+    total completion_tokens exceeds max_tokens (e.g. ~1500 content + ~1300-1600
+    thinking). NOT runaway generation. Only gap: max_thinking_budget is not
+    force-enforced on the spec path (default: none, thinking ends naturally).
+
+    Known residual caveat (UNDER RE-VERIFICATION): on a prior binary, dense
+    TECHNICAL prose (e.g. ZKP / SQL-injection explainers) occasionally derailed at
+    the </think> seam (5/7 clean). Not re-confirmed on the current binary.
+  maintainer: rstesiak
+  category: agent
+  model_params: 27B
+  model_dtype: nvfp4
+  quantization: nvfp4
+  kv_dtype: bf16
+
+defaults:
+  port: 8888
+  host: 0.0.0.0
+  max_model_len: 32768
+  max_batch_size: 1
+  kv_cache_dtype: bf16
+  gpu_memory_utilization: 0.55
+  enable_prefix_caching: true
+  # tool_call_parser / disable_tool_grammar inherited from the qwen3.6-27b-nvfp4
+  # default; NOT independently validated with DFlash (spec-decode benches use no
+  # tool calls). Note atlas #231 may favor grammar-on for parallel calls.
+  tool_call_parser: qwen3_coder
+  disable_tool_grammar: true
+
+  # DFlash speculative (NOT MTP) - keys verified vs sparkrun runtimes/atlas.py
+  dflash: true
+  draft_model: z-lab/Qwen3.6-27B-DFlash
+  dflash_gamma: 17                       # FLAG value = literature gamma 16; fused GDN verify
+  env:
+    ATLAS_DFLASH_SPEC_THINK: "1"         # ON = spec through <think> (the code win)
+    ATLAS_DFLASH_ADAPTIVE: "1"           # suspend->serial on low accept (prose parity)
+    ATLAS_DFLASH_SEAM_SERIAL: "1"        # T=0 spec-entry flip fix
+    ATLAS_DFLASH_MASKED_VERIFY: "1"      # special-token leak fix (~free)
+    ATLAS_DFLASH_DRAFTER_FP8: "1"
+    ATLAS_DFLASH_OPTION_B: "1"
+    ATLAS_DFLASH_EAGLE_FIX: "1"

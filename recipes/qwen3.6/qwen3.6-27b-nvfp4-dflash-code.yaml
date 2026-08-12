@@ -1,0 +1,71 @@
+# CONFIRM before publish: the container tag that carries the DFlash binary + drafter.
+# Schema VERIFIED 2026-07-13 vs sparkrun runtimes/atlas.py: dflash (bool flag),
+# draft_model + dflash_gamma (flag map), and the env: block are all supported keys.
+recipe_version: "2"
+model: nvidia/Qwen3.6-27B-NVFP4
+runtime: atlas
+container: avarok/atlas-gb10:dev        # CONFIRM: tag that actually carries DFlash
+max_nodes: 1
+
+metadata:
+  description: |
+    Qwen3.6-27B (nvidia modelopt NVFP4, dense hybrid SSM+Attn) with DFlash
+    speculative decoding - BOUTIQUE / code-peak. WICKED FAST on code, MOST caveats.
+    EAGLE-style external drafter with fused GDN K=gamma verify. Spec-through-think
+    ON and adaptive suspend OFF: forces the spec path with NO serial fallback.
+    Optimal for code-heavy workloads ONLY.
+
+    Measured - GB10 single-user, temp=0, MinHeap code / Volvo prose:
+    - Code:  ~29.9 tok/s (fastest; reproduced r1/r2, tau ~7-8)
+    - Prose: ~12.9 tok/s (NET-NEGATIVE vs serial 15.3 - no safety net)
+
+    Output fidelity (applies to ALL DFlash profiles):
+    - DFlash is a legitimate SAMPLING speculative decoder; this build's fused GDN
+      verify has a small numerics gap -> APPROXIMATELY, not exactly, distribution-
+      preserving.
+    - At temp=0, NOT byte-exact vs base-model greedy - with spec-through-think ON,
+      an early low-margin flip compounds into a different but valid/coherent
+      trajectory. Use NOSPEC (or -safe) for byte-exact output.
+    - At temp>0, divergence is ordinary sampling variance; quality unaffected.
+
+    max_tokens: caps CONTENT (enforced on the spec path); thinking tokens are free,
+    so total completion exceeds max_tokens (standard for reasoning models, not
+    runaway generation).
+
+    WHY "MOST caveats" - carries all of -dflash's caveats PLUS the adaptive-off cost:
+    - ADAPTIVE OFF = NO serial fallback. On prose / low-accept prompts it goes
+      net-negative (12.9 < 15.3 serial) and has no suspend to rescue it. Do NOT use
+      as a general-purpose default. Code-heavy workloads only.
+  maintainer: rstesiak
+  category: agent
+  model_params: 27B
+  model_dtype: nvfp4
+  quantization: nvfp4
+  kv_dtype: bf16
+
+defaults:
+  port: 8888
+  host: 0.0.0.0
+  max_model_len: 32768
+  max_batch_size: 1
+  kv_cache_dtype: bf16
+  gpu_memory_utilization: 0.55
+  enable_prefix_caching: true
+  # tool_call_parser / disable_tool_grammar inherited from the qwen3.6-27b-nvfp4
+  # default; NOT independently validated with DFlash (spec-decode benches use no
+  # tool calls). Note atlas #231 may favor grammar-on for parallel calls.
+  tool_call_parser: qwen3_coder
+  disable_tool_grammar: true
+
+  # DFlash speculative (NOT MTP) - keys verified vs sparkrun runtimes/atlas.py
+  dflash: true
+  draft_model: z-lab/Qwen3.6-27B-DFlash
+  dflash_gamma: 17                       # FLAG value = literature gamma 16; fused GDN verify
+  env:
+    ATLAS_DFLASH_SPEC_THINK: "1"         # ON = spec through <think>
+    ATLAS_DFLASH_ADAPTIVE: "0"           # OFF = no serial fallback (code peak; erodes prose)
+    ATLAS_DFLASH_SEAM_SERIAL: "1"        # T=0 spec-entry flip fix
+    ATLAS_DFLASH_MASKED_VERIFY: "1"      # special-token leak fix (~free)
+    ATLAS_DFLASH_DRAFTER_FP8: "1"
+    ATLAS_DFLASH_OPTION_B: "1"
+    ATLAS_DFLASH_EAGLE_FIX: "1"
