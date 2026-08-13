@@ -12,17 +12,62 @@ metadata:
     Nemotron-3-Nano sibling; it differs by shipping a DeepSeek-style
     1-step MTP draft head and by wanting the OPPOSITE thinking policy.
 
-    Boot-verified on a GB10 (2026-08-13):
+    Measured on a GB10 (2026-08-13) in exactly this profile — 256K
+    context, C=8, fp8 KV, util 0.60:
       kernel audit  154 lookups, 0 unresolved, 9 expected-absent, PASS
       target        (sm_121, nemotron-3.5-lightning-30b-a3b, nvfp4)
       config        52 layers, 6 attn, 23 SSM, 128 experts, rotary_dim=0
+      C=8 chat      8/8 non-empty, agg 113.8 tok/s
+      needle         61153 prompt tokens -> PASS, prefill 2123 tok/s
+                    122242 prompt tokens -> PASS, prefill 2061 tok/s
+      prose         no degeneration, max 5-gram repeat <= 0.003 over 8 runs
+    Single-stream decode and a full agentic sweep are still outstanding.
 
-    THROUGHPUT AND AGENTIC NUMBERS ARE NOT YET MEASURED for this
-    checkpoint and are deliberately omitted rather than copied from the
-    Nano sibling — the two share dimensions but not the sampling or
-    thinking policy, and MTP changes the decode path. This recipe
-    documents the serve CONFIGURATION only. Fill the table in before
-    undrafting.
+    ── LONG CONTEXT IS CHEAP ON THIS MODEL ──
+    Only 6 of 52 layers are attention, so KV runs ~3072 bytes/token at
+    fp8. 8 x 256K = 2.1M tokens needs ~6.4 GB. At util 0.60 the pool
+    holds 8957184 tokens — a 4.3x margin over the worst case — so the
+    KV OVERCOMMIT warning does not fire and `max_num_seqs: 8` at full
+    256K is a genuine fit rather than a paged gamble. That is why util
+    is 0.60 and not 0.80: the GPU headroom is better spent elsewhere.
+
+    ── max_tokens MUST EXCEED THE THINKING BUDGET ──
+    Easy to misread as a broken model. `max_thinking_budget = 2048` with
+    `cap_thinking_at_max_tokens = false`, so a request whose max_tokens
+    is below ~2048 spends the whole budget inside <think> and returns
+    EMPTY `content`, with the text in `reasoning_content`. Measured:
+    max_tokens=300 gave 297 completion tokens and empty content;
+    max_tokens=4000 gave 1221 tokens and a real answer. Budget >= 3000
+    on thinking turns, or send enable_thinking=false for pure retrieval
+    (the needle rows above did).
+
+    ── MULTI-TURN TOOL LOOPS ARE WEAK HERE (single-turn is fine) ──
+    Single tool calls are clean: `get_weather` for both Santiago and
+    Kyoto returned well-formed arguments in 23 completion tokens.
+    CHAINED loops (tool -> result -> tool -> final answer) are not, and
+    the failure mode depends on thinking, N=6 per cell on a 3-step task:
+      thinking OFF (the target's tool policy)  0/6 pass, 6/6 leaked raw
+        `<parameter=...>` / `<parameter name=...>` markup into `content`
+      thinking ON (explicit kwarg)             1/6 pass, 0/6 leaked,
+        but 5/6 ran the step budget out without terminating
+    Sampling is NOT the variable — sigma/min_p made no difference to any
+    cell. The Puzzle sibling passes this identical task, so it is not
+    the harness. Treat Lightning as good for single-shot tool use and
+    unproven for chained agents until this is chased down.
+
+    ── SAMPLING FILTERS THAT LEAK IN FROM THE CLI ──
+    The target declares temperature/top_k/top_p presets but no min_p and
+    no top_n_sigma, so the server defaults survive into every request:
+    `top_n_sigma=1, min_p=0.08`. Measured on this checkpoint at
+    temperature 1.6, 8 samples:
+      min_p        LIVE      — min_p=0.95 collapsed 8 samples to 1
+                               distinct output, min_p=0.0 gave 8/8
+      top_n_sigma  NO-OP     — 8/8 distinct at sigma 0.0, 0.2 AND 0.5,
+                               where a restrictive 0.2 should collapse
+                               like min_p did. Matches the Laguna-XS
+                               finding that top_n_sigma does nothing.
+    Neither changed prose quality or the agentic result, so this recipe
+    leaves them alone; both can be overridden per request if needed.
 
     ── REQUIRES AN IMAGE NEWER THAN :latest ──
     As of 2026-08-13 this recipe cannot work on the published
@@ -100,26 +145,35 @@ metadata:
   model_params: 30B
   model_dtype: nvfp4
   quantization: nvfp4
-  kv_dtype: bf16
+  kv_dtype: fp8
 
 defaults:
   port: 8888
   host: 0.0.0.0
-  # KV is not the binding constraint on this model: with only 6 attention
-  # layers, util 0.80 leaves room for millions of KV tokens (a util-0.90
-  # boot measured 1407573 blocks x 16 = ~22.5M). This ceiling is set by
-  # what has been exercised, not by what fits — raise it with a needle
-  # run at the new length, the same way the Puzzle sibling is bounded.
-  max_model_len: 32768
+  # 256K, needle-verified to 122242 prompt tokens. The model declares
+  # max_position_embeddings = 1048576 and it is NoPE, so position is not
+  # the limit; this ceiling is what has been exercised. Raise it with a
+  # needle run at the new length.
+  max_model_len: 262144
   max_num_seqs: 8
-  # bf16 by choice. Not yet A/B'd ON THIS CHECKPOINT — it is the
-  # conservative setting carried over from the Puzzle sibling, whose
-  # target documents fp8 KV corrupting a thinking model's long reasoning
-  # context, and Lightning is thinking-first. Given the KV headroom
-  # above, bf16 costs nothing here. Revisit with a measurement, not a
-  # guess.
-  kv_cache_dtype: bf16
-  gpu_memory_utilization: 0.80
+  max_batch_size: 8
+  # fp8 is what this checkpoint is designed for and is the engine
+  # default here. It halves KV to ~3072 bytes/token, and 8 x 256K then
+  # fits with 4.3x margin at util 0.60 — MORE total KV capacity
+  # (8957184 tokens) than bf16 achieved at util 0.80 (8733808), for half
+  # the GPU budget. Long-context retrieval was verified ON fp8: needle
+  # PASS at both 61k and 122k prompt tokens.
+  #
+  # Boot raises "⚠ --kv-high-precision-layers is 0: all KV layers use
+  # fp8 ... NVFP4 models may hallucinate or lose coherence at long
+  # context". Retrieval at 122k was unaffected, but that warning is
+  # about long REASONING, which is not yet tested here. With only 6
+  # attention layers, `--kv-high-precision-layers 2` is nearly free if
+  # long-form thinking quality ever looks off.
+  kv_cache_dtype: fp8
+  # 0.60, not 0.80 — see the KV note in the description. The profile
+  # fits outright at 0.60, so the rest of the GB10 stays available.
+  gpu_memory_utilization: 0.60
   scheduling_policy: slai
   enable_prefix_caching: true
   ssm_cache_slots: 64
