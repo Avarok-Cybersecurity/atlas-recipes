@@ -37,8 +37,9 @@ metadata:
       ATLAS_MOE_PREFILL_EXACT_TILES=1
       ATLAS_HOLO_NATIVE_FP8_ATTN=1     # see the attention note below
       ATLAS_HOLO_NATIVE_FP8_SSM=1
-      ATLAS_GDN_FLASHINFER=1           # needs libatlasgdn.so in the image;
-                                       # verify: "FlashInfer GDN kernel loaded"
+      ATLAS_GDN_FLASHINFER=1           # SEE "THE GDN TRAP" BELOW -- this one
+                                       # fails OPEN and costs ~45% prefill
+      ATLAS_GDN_LIB=/abs/path/to/libatlasgdn.so   # REQUIRED, see below
       ATLAS_FLASHINFER_PREFILL=1
       ATLAS_CUBLAS_GEMM=1
       ATLAS_CUTLASS_WORKSPACE_MB=512
@@ -48,6 +49,46 @@ metadata:
       ATLAS_Q12_BATCHED_FIRST_CHUNK=1
       ATLAS_MAX_BATCH_TOKENS=16384
       ATLAS_SSM_BATCHED_RECURRENT=1
+
+    ── THE GDN TRAP: ATLAS_GDN_FLASHINFER FAILS OPEN ──
+    Re-measured 2026-08-13 on a GB10. This is the single biggest thing
+    that can go wrong with this recipe, and it goes wrong quietly.
+
+    `ATLAS_GDN_FLASHINFER=1` makes the engine dlopen the AOT FlashInfer
+    GDN library. If that dlopen fails it logs one WARN and serves anyway
+    on the FLA fallback -- correct output, much slower prefill. Setting
+    the flag is NOT the same as engaging the kernel.
+
+    Two ways it fails, and BOTH must be fixed:
+      1. The loader dlopens the bare name `libatlasgdn.so` unless
+         `ATLAS_GDN_LIB` gives an absolute path. Set `ATLAS_GDN_LIB`.
+      2. libatlasgdn.so itself links `libcute_dsl_runtime.so`, which
+         ships in the `nvidia_cutlass_dsl` Python package, NOT with
+         CUDA. Its directory must be on `LD_LIBRARY_PATH` or the dlopen
+         still fails even with an absolute ATLAS_GDN_LIB.
+      Check before serving:  ldd libatlasgdn.so | grep "not found"
+
+    Measured cost of getting this wrong, same box, same binary, same
+    flags, ONLY the GDN library resolving or not (aggregate prefill
+    tok/s; the fallback column is two independent boots agreeing within
+    1%, the loaded column is one run):
+
+      ISL / conc     FLA fallback     GDN loaded     delta
+       3k  C=1           3292            4602        +40%
+       3k  C=4           3718            5419        +46%
+       3k  C=8           3801            5580        +47%
+       8k  C=1           5817            5809          ~0
+       8k  C=4           3919            5868        +50%
+       8k  C=8           3951            5919        +50%
+
+    Note the shape: at C=1/8k the fallback is already fine, so a
+    single-stream smoke test CANNOT detect this. The loss is entirely at
+    concurrency, which is where the recipe's headline numbers live.
+
+    VERIFY, every deploy:
+      INFO ... ATLAS_GDN_FLASHINFER: FlashInfer GDN kernel loaded (opt-in)
+    and the absence of:
+      WARN ... dlopen('...') failed — falling back to FLA
 
     ── KV MUST BE bf16, NOT fp8 ──
     Paged FlashInfer requires bf16 KV. Setting fp8 here silently
