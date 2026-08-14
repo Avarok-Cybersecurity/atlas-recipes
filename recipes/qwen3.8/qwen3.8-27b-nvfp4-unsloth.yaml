@@ -82,6 +82,45 @@ metadata:
     (kernels/gb10/qwen3.8-27b/BENCH.toml) carries an explicitly PROVISIONAL
     2500 s ceiling for exactly that reason. Do not read 1925 s as a target.
 
+    ★ RAISE `max_model_len` FOR REAL AGENTIC CODING — 32768 IS A GATE VALUE,
+      NOT A RECOMMENDATION.
+
+    32K is here because it is the operating point the reference run was
+    measured at, and a gate config must be reproducible. It is NOT the right
+    context for day-to-day agentic coding: a coding session that reads a few
+    files, holds a diff and keeps tool history will exhaust 32K quickly, and
+    once it does you lose the earliest turns — usually the task statement.
+    The checkpoint supports 262144 natively and extends to ~1M with YaRN.
+
+    To raise it, override `max_model_len` at run time rather than editing this
+    file, so the gate config stays reproducible:
+
+        sparkrun run @atlas/qwen3.8-27b-nvfp4-unsloth --max-model-len 131072
+
+    Two honest constraints before you do:
+
+    1. QUALITY IS NOT CHARACTERIZED ABOVE ~24K. The kernel target declares
+       `effective_context = 24576` for this model — an empirical bound carried
+       over from Qwen3.6-27B and explicitly UNMEASURED on 3.8 weights. So even
+       the 32K default already sits above the bound anyone has evidence for,
+       and a larger window is extrapolating twice. Longer context will not
+       error; it may quietly get worse. Treat a big window as "more room
+       before truncation", not as "more usable reasoning".
+
+    2. KV MEMORY IS THE BINDING CONSTRAINT, and this profile has little slack.
+       Weights alone commit 57.4 GB of a 121.7 GB board, and 0.85 util is
+       already near the top (see note 1 — the boot failure is real and easy to
+       reproduce). Raising context without freeing KV bytes will fail at boot
+       the same way. The lever is `kv_cache_dtype: fp8`, which roughly halves
+       KV bytes and is what this model's own MODEL.toml carries as its
+       default; the bf16-KV preference in note 4 is specific to <=32K, so it
+       is the right trade to make when you leave that regime. Keep
+       `max_batch_size: 1`.
+
+    In short: 32K + bf16 KV for reproducing the gate; larger context + fp8 KV
+    for actually working in the model, accepting that quality past ~24K is
+    uncharacterized on these weights.
+
   maintainer: Atlas
   category: agent
   model_params: 27B dense hybrid (48 GDN linear-attn + 16 softmax-attn layers)
@@ -93,7 +132,12 @@ metadata:
 defaults:
   host: 0.0.0.0
   port: 8888
-  # 32K agentic operating point — matches the reference run exactly.
+  # 32K is the GATE operating point — it matches the reference run exactly and
+  # exists to be reproducible, not because it is the right context for real
+  # work. ★ For agentic coding, RAISE THIS at run time (e.g.
+  # `--max-model-len 131072`) and pair it with `kv_cache_dtype: fp8`; see the
+  # "RAISE max_model_len" section above for the two constraints that come with
+  # it (quality is uncharacterized above ~24K, and KV memory is the binder).
   max_model_len: 32768
   # See provenance note 1: 0.85/1 is the only combination that boots.
   max_batch_size: 1
