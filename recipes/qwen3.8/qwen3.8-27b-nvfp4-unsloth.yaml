@@ -1,0 +1,114 @@
+recipe_version: "2"
+model: unsloth/Qwen3.8-27B-NVFP4
+runtime: atlas
+container: avarok/atlas-gb10:latest
+max_nodes: 1
+
+metadata:
+  description: |
+    Qwen3.8-27B (unsloth NVFP4, dense hybrid SSM+Attn) — the AGENTIC profile,
+    and the config the `agentic-webserver` gate's dense variant is measured
+    under.
+
+    Qwen3.8-27B is ARCHITECTURALLY IDENTICAL to Qwen3.6-27B: all 1968 tensors
+    match in name, shape and dtype; the compressed-tensors quantization config
+    differs only by a version string (0.17.2.a20260707 → a20260716); the
+    tokenizer vocab (248044), merges (247587) and 33 added_tokens hash
+    identically. Verified 2026-08-14. Only the WEIGHTS differ. Practical
+    consequences: the kernel path, serve flags and BFCL draw all carry over
+    unchanged — but no score baseline does, because scores are a property of
+    weights.
+
+    ⚠ THIS IS THE AGENTIC PROFILE, NOT THE BFCL ONE. Thinking is ON and there
+    is no tool-call parser pinned here. The 27B sibling recipe
+    qwen3.6-27b-nvfp4-unsloth.yaml is the BFCL/tool-calling config (thinking
+    OFF, qwen3_coder parser, grammar disabled) and is measured on a completely
+    different gate. Do not cross-use them: the two differ in thinking, KV/head
+    precision, scheduler, SSM cache geometry AND memory budget.
+
+    PROVENANCE OF THE FLAGS BELOW — read before changing any of them.
+
+    Every value here is pinned to ONE measured run, not to prose:
+    2026-08-14, dgx2 (GB10), binary main 680b3a568 — which is exactly what
+    `avarok/atlas-gb10:latest` resolved to on that date — agentic-webserver
+    N=10: webserver_ok 10/10, followed_directions 10/10, Σwall 1925.1 s,
+    per-run walls 156.0 / 187.3 / 274.2 / 144.7 / 230.5 / 243.3 / 205.2 /
+    117.3 / 185.2 / 181.4 s (117–274 s, 2.3× min-to-max).
+
+    1. `gpu_memory_utilization: 0.85` + `max_batch_size: 1` are REQUIRED, not
+       preferences. The 35B flagship's agentic profile (0.70 util, batch 2)
+       CANNOT serve this model at all — it dies at boot with
+       "No memory left for KV cache: total GPU = 121.7 GB, budget 85.2 GB, but
+       57.4 GB already consumed + 44.0 GB inference reserve = 101.4 GB
+       committed." A dense 27B commits 57.4 GB where the 35B MoE commits ~35.
+       Lowering util or raising batch size here reproduces that boot failure.
+
+    2. `lm_head_dtype: bf16` is a correctness pin, not a tuning knob. The
+       248K-vocab projection stays full precision so argmax over the vocab is
+       exact. Reducing it below bf16 is measured-catastrophic on long
+       structured agentic generation for this family (low-margin argmax flips
+       compound over a trajectory) even when short-prompt coherence looks
+       clean — so it cannot be validated by a smoke test.
+
+    3. `num_drafts: 3` (MTP K=4 verify) is EXPLICIT on purpose, and is the K
+       the reference run actually executed. Two reasons it must be written out
+       rather than left to default:
+         - On images at/older than 680b3a568, `--num-drafts` was silently
+           discarded (it carried a clap default of 1 which the MODEL.toml merge
+           also used as its "flag not passed" sentinel), and this checkpoint
+           resolved to the qwen3.6-27b kernel target whose
+           `default_num_drafts = 3` then won. So the reference tier ran at K=4
+           whatever the recipe said.
+         - On images carrying the fix plus the dedicated qwen3.8-27b target,
+           that target deliberately omits `default_num_drafts`, so an OMITTED
+           value would resolve to the engine default of 1 (K=2) — a different
+           config from the one measured.
+       Writing `3` yields K=4 on both sides of that change, which is the only
+       value that keeps this recipe reproducing its own reference run.
+       ★ K=2 is UNTESTED on these weights. If a future tier A/Bs it and wins,
+       change this — but do not assume it, and do not "tidy" it away.
+
+    4. `kv_cache_dtype: bf16` at the 32K agentic operating point: bf16 KV is
+       both faster and higher quality than calibrated fp8 KV at ≤32K for this
+       family; fp8 KV is a memory lever for ~128K, which this profile is not.
+
+    5. `ssm_cache_slots: 256` / `ssm_checkpoint_interval: 16` is the agentic
+       (multi-turn, long-prefix) geometry, deliberately denser than the
+       128/32 the BFCL sibling uses — agentic trajectories re-enter long
+       shared prefixes far more often.
+
+    WHAT THIS RECIPE DOES NOT CLAIM: a wall-time band. Σwall 1925 s is ONE
+    tier. The gate entry that consumes this recipe
+    (kernels/gb10/qwen3.8-27b/BENCH.toml) carries an explicitly PROVISIONAL
+    2500 s ceiling for exactly that reason. Do not read 1925 s as a target.
+
+  maintainer: Atlas
+  category: agent
+  model_params: 27B dense hybrid (48 GDN linear-attn + 16 softmax-attn layers)
+  model_dtype: nvfp4
+  quantization: NVFP4 (mixed precision above layer 55, FP8 linear_attn projections)
+  kv_dtype: bf16
+  updated: "2026-08-14"
+
+defaults:
+  host: 0.0.0.0
+  port: 8888
+  # 32K agentic operating point — matches the reference run exactly.
+  max_model_len: 32768
+  # See provenance note 1: 0.85/1 is the only combination that boots.
+  max_batch_size: 1
+  gpu_memory_utilization: 0.85
+  kv_cache_dtype: bf16
+  # See provenance note 2 — correctness pin, do not lower.
+  lm_head_dtype: bf16
+  kv_high_precision_layers: auto
+  scheduling_policy: slai
+  enable_prefix_caching: true
+  # See provenance note 5 — agentic geometry, denser than the BFCL sibling's.
+  ssm_cache_slots: 256
+  ssm_checkpoint_interval: 16
+  speculative: true
+  # See provenance note 3 — explicit K, reproduces the reference run on images
+  # both before and after the --num-drafts precedence fix.
+  num_drafts: 3
+  mtp_quantization: bf16

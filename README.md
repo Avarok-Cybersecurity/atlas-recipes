@@ -44,20 +44,20 @@ The default 27B/35B NVFP4 recipes therefore now track the **`nvidia/*`** checkpo
 whose on-disk format has been stable since 2026-05-29. Those are verified end-to-end on a
 GB10 and are what you should use.
 
-There is deliberately **no `-unsloth` recipe yet**, though the engine now supports those
-checkpoints. Loading the mixed-precision layout took two fixes: atlas#300 (the layer
-weights) and atlas#301 (the FP8 `lm_head`, plus per-row weight scales that were being fed
-to a 128×128 block-scaled kernel — in-bounds, so no crash, just silently wrong logits).
-Both are on `main` and verified on a GB10:
+`-unsloth` recipes now exist, but only where a gate is actually measured on one — they
+are deliberately not the defaults. Loading the mixed-precision layout took two fixes:
+atlas#300 (the layer weights) and atlas#301 (the FP8 `lm_head`, plus per-row weight scales
+that were being fed to a 128×128 block-scaled kernel — in-bounds, so no crash, just
+silently wrong logits). Both are on `main` and verified on a GB10:
 
 | checkpoint | throughput | correctness |
 |---|---|---|
 | `unsloth/Qwen3.6-27B-NVFP4` | 14.0 tok/s | pass |
 | `unsloth/Qwen3.6-35B-A3B-NVFP4` | 123.4 tok/s | pass |
 
-The recipes land once an `avarok/atlas-gb10:dev` image **carrying atlas#301** is published.
-Until then a recipe pointing at those checkpoints would still fail on the image you'd
-actually pull, and shipping a recipe that does not serve is worse than shipping none.
+The two shipped so far are `qwen3.6-27b-nvfp4-unsloth` (the BFCL gate config) and
+`qwen3.8-27b-nvfp4-unsloth` (the agentic gate config). Both pin an image that can load the
+layout; on anything older they fail with `weight_global_scale not found`.
 
 If a model suddenly fails to build with a missing `weight_global_scale` or a
 `weight_scale` dtype error, you are almost certainly on a newer checkpoint than your Atlas
@@ -69,6 +69,7 @@ image — pull a newer `avarok/atlas-gb10:dev`.
 |---|---|---|---|
 | `qwen3.6-35b-a3b-nvfp4` | nvidia/Qwen3.6-35B-A3B-NVFP4 | single | **DEFAULT 35B** — MTP K=1 (pinned; 116.5 tok/s), calibrated fp8 KV (128K), qwen3_coder agentic stack; requires :dev ≥ 2026-07-10 (atlas#287) |
 | `qwen3.6-27b-nvfp4` | nvidia/Qwen3.6-27B-NVFP4 | single | **DEFAULT 27B** — dense hybrid SSM+Attn, MTP K=1 (pinned), bf16 KV, qwen3_coder agentic stack; requires :dev ≥ 2026-07-10 (atlas#287) |
+| `qwen3.8-27b-nvfp4-unsloth` | unsloth/Qwen3.8-27B-NVFP4 | single | Dense hybrid SSM+Attn — the AGENTIC gate config: thinking ON, bf16 head + bf16 KV, 32K, MTP K=4, slai. Architecturally identical to Qwen3.6-27B (all 1968 tensors match); only the weights differ |
 | `qwen3.6-35b-a3b-fp8-mtp` | Qwen/Qwen3.6-35B-A3B-FP8 | single | Flagship FP8 — native FP8, bf16 head + bf16 KV, 64K ctx, MTP K=2, live tool-call streaming |
 | `qwen3.6-35b-a3b-fp8-bf16head` | Qwen/Qwen3.6-35B-A3B-FP8 | single | 32K safe profile of the FP8 flagship (same bf16 head/KV) |
 | `qwen3.6-35b-a3b-fp8-nvfp4head` | Qwen/Qwen3.6-35B-A3B-FP8 | single | nvfp4 lm-head sibling — near-neutral wall, lower VRAM |
