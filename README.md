@@ -68,6 +68,8 @@ image — pull a newer `avarok/atlas-gb10:dev`.
 | Recipe | Model | Topology | Notes |
 |---|---|---|---|
 | `qwen3.6-35b-a3b-nvfp4` | nvidia/Qwen3.6-35B-A3B-NVFP4 | single | **DEFAULT 35B** — MTP K=1 (pinned; 116.5 tok/s), calibrated fp8 KV (128K), qwen3_coder agentic stack; requires :dev ≥ 2026-07-10 (atlas#287) |
+| `qwen3.6-35b-a3b-nvfp4-diet-8k` | nvidia/Qwen3.6-35B-A3B-NVFP4 | single | **FAST** single-user memory diet (8k / gpu-mem 0.40) — ~112 tok/s no-think, ~40GB MemAvailable; MTP K=1 pinned |
+| `qwen3.6-35b-a3b-nvfp4-intel` | nvidia/Qwen3.6-35B-A3B-NVFP4 | single | **INTEL** — thinking on, tool parser on, 32k / gpu-mem 0.55; maximize explanation+result (25/32), not tok/s |
 | `qwen3.6-27b-nvfp4` | nvidia/Qwen3.6-27B-NVFP4 | single | **DEFAULT 27B** — dense hybrid SSM+Attn, MTP K=1 (pinned), bf16 KV, qwen3_coder agentic stack; requires :dev ≥ 2026-07-10 (atlas#287) |
 | `qwen3.8-27b-nvfp4-unsloth` | unsloth/Qwen3.8-27B-NVFP4 | single | Dense hybrid SSM+Attn — the AGENTIC gate config: thinking ON, bf16 head + bf16 KV, 32K, MTP K=4, slai. Architecturally identical to Qwen3.6-27B (all 1968 tensors match); only the weights differ |
 | `qwen3.6-35b-a3b-fp8-mtp` | Qwen/Qwen3.6-35B-A3B-FP8 | single | Flagship FP8 — native FP8, bf16 head + bf16 KV, 64K ctx, MTP K=2, live tool-call streaming |
@@ -92,6 +94,11 @@ image — pull a newer `avarok/atlas-gb10:dev`.
 
 ```
 recipes/
+├── qwen3.6/
+│   ├── qwen3.6-35b-a3b-nvfp4.yaml
+│   ├── qwen3.6-35b-a3b-nvfp4-diet-8k.yaml
+│   ├── qwen3.6-35b-a3b-nvfp4-intel.yaml
+│   └── …
 ├── qwen3.5/
 │   ├── qwen3.5-27b-dense-nvfp4.yaml
 │   ├── qwen3.5-35b-a3b-nvfp4.yaml

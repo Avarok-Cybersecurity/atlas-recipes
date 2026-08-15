@@ -1,0 +1,51 @@
+recipe_version: "2"
+model: nvidia/Qwen3.6-35B-A3B-NVFP4
+runtime: atlas
+container: avarok/atlas-gb10:dev
+max_nodes: 1
+
+metadata:
+  description: |
+    Qwen3.6-35B-A3B (nvidia modelopt NVFP4) — INTEL single-user profile
+    for one GB10. Maximize explanation quality + answer caliber
+    (superhuman-quality results), not tok/s.
+
+    Measured 2026-08-11/12 on spark-9f9e (thinking-on park). Eval
+    ~/atlas-intel-eval/out/SCORED.md: explanation 13/16, result 12/16,
+    combined 25/32; 5/8 cleared the >=3 pass bar; thinking present on
+    all 8. Needle/tool JSON strong. Failures were length-cap / soft
+    traps, not 32k headroom.
+
+    Sibling FAST recipe is qwen3.6-35b-a3b-nvfp4-diet-8k (disable-thinking
+    memory diet). Keep these as separate stems — do not collapse into
+    one always-disable-thinking doc.
+
+    Locked serve shape: thinking enabled, MTP drafts=1, qwen3_coder
+    tool parser, gpu-mem 0.55, max-seq 32768, fp8 KV. Higher max-seq
+    is optional later for long agent threads, not required by this eval.
+    See NOTES-qwen3.6-35b-a3b-nvfp4-intel.md.
+  maintainer: avarok
+  category: agent
+  model_params: 35B
+  model_dtype: nvfp4
+  quantization: nvfp4
+  kv_dtype: fp8
+
+defaults:
+  port: 8888
+  host: 0.0.0.0
+  # Locked from measured intel park (spark-9f9e, 2026-08-11/12).
+  max_model_len: 32768
+  kv_cache_dtype: fp8
+  gpu_memory_utilization: 0.55
+  scheduling_policy: slai
+  speculative: true
+  # Same MTP pin as FAST: deeper drafts still hurt this MoE decode.
+  num_drafts: 1
+  mtp_quantization: bf16
+  enable_prefix_caching: true
+  fp8_kv_calibration_tokens: 256
+  kv_high_precision_layers: auto
+  tool_call_parser: qwen3_coder
+  # Thinking ON — omit --disable-thinking / leave false.
+  disable_thinking: false

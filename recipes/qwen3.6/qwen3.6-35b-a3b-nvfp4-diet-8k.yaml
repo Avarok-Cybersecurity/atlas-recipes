@@ -1,0 +1,65 @@
+recipe_version: "2"
+model: nvidia/Qwen3.6-35B-A3B-NVFP4
+runtime: atlas
+container: avarok/atlas-gb10:dev
+max_nodes: 1
+
+metadata:
+  description: |
+    Qwen3.6-35B-A3B (nvidia modelopt NVFP4) — FAST single-user
+    memory-diet profile for one GB10 (maximize tok/s + host RAM, not
+    reasoning depth). Same short-decode speed as the high-context
+    default (~112 tok/s no-think) but frees host RAM (~40 GB MemAvailable
+    vs ~7 GB at max-seq 131k / gpu-mem 0.92).
+
+    Sibling INTEL recipe (thinking on, tool parser/grammar on, higher
+    mem/seq) is tracked separately — do not collapse into this stem.
+
+    Winner of the 2026-08-11 spark-9f9e serve-flag matrix (`diet_40_8k`):
+    --gpu-memory-utilization 0.40 --max-seq-len 8192 with MTP K=1,
+    calibrated fp8 KV, slai, prefix caching, qwen3_coder parser,
+    --disable-thinking. 3-run median decode 111.91 tok/s
+    (runs 98.95 / 113.36 / 111.91); TTFT median 141.9 ms;
+    MemAvailable 40.79 GB. See NOTES-qwen3.6-35b-a3b-nvfp4-diet-8k.md
+    for the full leaderboard.
+
+    num_drafts is pinned to 1. Do NOT raise num-drafts on this MoE for
+    single-user decode: the same matrix measured K=2 ~79.9 tok/s and
+    K=3 ~56.9 tok/s (regressions), ngram ~89.5. "ENABLED" in the MTP
+    gate log is not evidence a deeper draft is profitable.
+
+    This is intentionally NOT the default 35B recipe — keep
+    qwen3.6-35b-a3b-nvfp4.yaml for high-context agentic work. Use this
+    diet stem when you want single-user decode headroom on the host.
+
+    Round-2 follow-ups (stubs only, not measured; see NOTES):
+    max-batch/seqs 1, kv nvfp4, ssm-cache-slots 0,
+    disable-tool-grammar, omit tool parser, DFlash alt.
+    Nsight (diet_40_8k short decode): MoE W4A16 expert GEMV-bound
+    (~66% top-3); do not promise KV-dtype as a short-decode win.
+  maintainer: avarok
+  category: agent
+  model_params: 35B
+  model_dtype: nvfp4
+  quantization: nvfp4
+  kv_dtype: fp8
+
+defaults:
+  port: 8888
+  host: 0.0.0.0
+  # Memory diet: 8k ctx + low gpu-mem keeps ~112 tok/s while freeing
+  # ~40 GB host RAM vs the 131k/0.92 baseline (~7 GB available).
+  max_model_len: 8192
+  kv_cache_dtype: fp8
+  gpu_memory_utilization: 0.40
+  scheduling_policy: slai
+  speculative: true
+  # Do not raise on this MoE for single-user decode (K=2/3 regress).
+  num_drafts: 1
+  mtp_quantization: bf16
+  enable_prefix_caching: true
+  # fp8 KV requires online K/V scale calibration on this checkpoint.
+  fp8_kv_calibration_tokens: 256
+  kv_high_precision_layers: auto
+  tool_call_parser: qwen3_coder
+  disable_thinking: true
