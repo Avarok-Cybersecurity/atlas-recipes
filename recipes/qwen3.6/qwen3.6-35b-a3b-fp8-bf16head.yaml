@@ -44,3 +44,7 @@ defaults:
   # largest per-token weight read). Argmax over the vocab is exact — no flips.
   lm_head_dtype: bf16
   kv_high_precision_layers: auto
+  # video-fidelity (non-default subject, runnable on demand): MP4/MOV legs
+  # need the server's ffmpeg subprocess decoder, which is off unless the
+  # recipe pins it. Inert for every gate that sends no video.
+  video_allow_ffmpeg: true

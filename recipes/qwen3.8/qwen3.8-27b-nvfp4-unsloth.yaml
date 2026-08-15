@@ -127,7 +127,7 @@ metadata:
   model_dtype: nvfp4
   quantization: NVFP4 (mixed precision above layer 55, FP8 linear_attn projections)
   kv_dtype: bf16
-  updated: "2026-08-14"
+  updated: "2026-08-15"
 
 defaults:
   host: 0.0.0.0
@@ -156,3 +156,7 @@ defaults:
   # both before and after the --num-drafts precedence fix.
   num_drafts: 3
   mtp_quantization: bf16
+  # video-fidelity (non-default subject, runnable on demand): MP4/MOV legs
+  # need the server's ffmpeg subprocess decoder, which is off unless the
+  # recipe pins it. Inert for the agentic/BFCL gates — they send no video.
+  video_allow_ffmpeg: true
