@@ -21,7 +21,25 @@ metadata:
       needle         61153 prompt tokens -> PASS, prefill 2123 tok/s
                     122242 prompt tokens -> PASS, prefill 2061 tok/s
       prose         no degeneration, max 5-gram repeat <= 0.003 over 8 runs
-    Single-stream decode and a full agentic sweep are still outstanding.
+    A full agentic sweep is still outstanding.
+
+    Independently reproduced 2026-08-16 on a second GB10, atlas
+    ca3891e8 (the #487 branch), serving this `defaults:` block verbatim
+    and deliberately NOT passing --kernel-target, so target resolution
+    was tested rather than forced:
+      target        (sm_121, nemotron-3.5-lightning-30b-a3b, nvfp4)
+      config        52 layers, 6 attn, 23 SSM, 128 experts, rotary_dim=0
+      decode graphs disabled by MODEL.toml [behavior].no_decode_graphs
+      thinking      thinking_default = true (the Lightning policy)
+      KV pool       26.2 GB -> 9164240 tokens at util 0.60
+      needle         61091 prompt tokens -> PASS at 10/50/90% depth
+                    124343 prompt tokens -> PASS at 10/50/90% depth
+      decode        71.8 tok/s single-stream, structured JSON valid
+      prefill       2136 tok/s @ 61k, 1821 tok/s @ 124k
+    The needle rows above sweep DEPTH as well as length: a fact placed
+    at 10% of a 124k context has to survive ~112k tokens of following
+    text, which is where a 23-SSM-layer hybrid would be expected to
+    degrade first. It did not.
 
     ── LONG CONTEXT IS CHEAP ON THIS MODEL ──
     Only 6 of 52 layers are attention, so KV runs ~3072 bytes/token at
@@ -73,14 +91,32 @@ metadata:
     As of 2026-08-13 this recipe cannot work on the published
     `avarok/atlas-gb10:latest`. Neither prerequisite is on atlas `main`:
 
-      atlas#487  Lightning's OWN kernel target. Without it there is no
-                 `nemotron-3.5-lightning-30b-a3b` directory and the
-                 checkpoint silently resolves to the Nano target — same
-                 dimensions, so nothing errors — inheriting Nano's
-                 `thinking_default = false`. You get a working server
-                 running the WRONG policy. Boot MUST log
-                 "Selected kernel target: (sm_121,
+      atlas#487  Lightning's OWN kernel target, and (as of atlas main
+                 fa198bef) the config parser that admits this checkpoint
+                 at all. Boot MUST log "Selected kernel target: (sm_121,
                  nemotron-3.5-lightning-30b-a3b, nvfp4)".
+
+                 VERIFIED on atlas main fa198bef, 2026-08-16: the run
+                 does NOT reach the silent-fallback hazard this note
+                 originally described. It dies first, before any GPU
+                 work:
+
+                   Error: Failed to parse config.json
+                   Caused by: 0: Failed to parse nemotron_h config.json
+                              1: invalid type: null, expected usize
+
+                 The checkpoint ships `"moe_latent_size": null` and
+                 `"sliding_window": null`; main types `moe_latent_size`
+                 as a plain `usize`, and #487 adds the `nullable_usize`
+                 deserializer that reads JSON null as "absent".
+
+                 Kept because it is the hazard if that parse ever
+                 succeeds: without the target directory the checkpoint
+                 resolves to NANO — same dimensions, so nothing errors —
+                 inheriting Nano's `thinking_default = false`, i.e. a
+                 working server running the WRONG policy. A hard parse
+                 error is the friendlier of the two failures; do not
+                 rely on it surviving a parser change.
       atlas#462  Nemotron-H is NoPE, plus the MODEL.toml
                  `[behavior].no_decode_graphs` key. Atlas applied rotary
                  embedding to the whole family, killing long-context
