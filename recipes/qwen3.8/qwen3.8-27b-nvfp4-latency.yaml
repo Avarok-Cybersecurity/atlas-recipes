@@ -69,7 +69,16 @@ metadata:
       decode-floor              PASS
       agentic-webserver         PASS on dgx1 — 692 s / 662 s, 10/10 + 10/10,
                                 faster than the 773 s pre-stack reference
-      bfcl-subset               see the note below.
+      bfcl-subset               PASS — overall 84.22 (bar 83.42) · normalized
+                                84.12 (bar 83.32) · n=995, dense 27B. This is
+                                the gate that matters for the numerics-changing
+                                fixes (f16-pool halves GDN recurrent-state
+                                precision; the drafter small-M tier moves
+                                proposal numerics and therefore acceptance).
+                                Both bars cleared, so the concurrency win costs
+                                nothing in tool-calling accuracy.
+
+    ALL FOUR GATES PASS — certified, not merely measured.
 
     ⚠ Wall verdicts are box-specific: the same gate reads ~1070-1080 s on dgx2
     for BOTH this stack and unmodified `main`, so that box's Σwall says nothing
