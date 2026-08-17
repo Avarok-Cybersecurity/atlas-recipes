@@ -70,15 +70,29 @@ metadata:
     (low-margin argmax flips compound over a trajectory) that this profile
     deliberately trades away for speed.
 
-    QUALITY STATUS — read before publishing any number from this recipe.
-    ssm-state-poisoning: PASS (12/12 replays byte-identical, which is the
-    strongest available evidence that `f16-pool`'s halved recurrent-state
-    precision does not corrupt state). decode-floor: PASS. agentic-webserver
-    on the 35B: correctness 10/10 + 10/10 but Σwall 1084s/1068s against a
-    600-800s band — a REAL wall regression under investigation, attributed by
-    mechanism to the drafter small-M tier at batch 2 (not to this profile's
-    own widths). BFCL on the dense 27B is NOT yet run on this stack. Treat the
-    throughput numbers as measured and the accuracy as not-yet-certified.
+    QUALITY STATUS (gates run on this exact stack, 2026-08-17).
+      ssm-state-poisoning-gate  PASS — 12 of 12 replays byte-identical to the
+                                reference. This is the gate that matters for
+                                `ssm_h_dtype: f16-pool`, which halves the GDN
+                                recurrent-state precision; byte-identical
+                                replays mean the reduced-precision pool did not
+                                perturb the recurrence at all.
+      decode-floor              PASS
+      agentic-webserver         PASS on dgx1 — Σwall 692 s and 662 s across two
+                                tiers, both 10/10 webserver_ok + 10/10
+                                followed_directions, and 10-14% FASTER than the
+                                773 s pre-stack reference on the same box.
+      bfcl-subset               see the note below.
+
+    ⚠ WALL VERDICTS ARE BOX-SPECIFIC. The same agentic gate on dgx2 reads
+    1084/1068 s with this stack AND 1079 s on unmodified `main` — i.e. that box
+    runs the gate ~56% slower for any build, so its Σwall verdict says nothing
+    about the code. Measured under equal load the two boxes are nearly identical
+    (SM 2463-2470 vs 2457-2496 MHz, die 69-74 vs 76-78 C, chassis 87/87/81 vs
+    89/88/82 C, same CPU and storage), so this is NOT thermal; the leading
+    untested hypothesis is that this gate's wall is dominated by the sandboxed
+    `cargo build` in each trajectory rather than by inference. Compare walls
+    like-for-like on one box, never across boxes.
 
   maintainer: Atlas
   category: concurrency
@@ -113,6 +127,11 @@ defaults:
   # FIFO, not slai: at these widths the arbiter's reordering buys nothing and
   # the ladder was measured under fifo.
   scheduling_policy: fifo
+  # The measured serve carried these two. They are inert for the ladder (no
+  # tools in the prompts) but are part of the exact configuration, and the
+  # parser is what a real tool-calling deployment needs.
+  tool_call_parser: qwen3_coder
+  disable_tool_grammar: true
   disable_thinking: true
   # Half the GDN h-state bytes AND cuts the bs=128 reserve 36.7 -> 22.4 GB,
   # which is what frees the KV the top rungs need. Gate-validated by

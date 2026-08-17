@@ -31,13 +31,15 @@ metadata:
         therefore keeps the default rather than the throughput profile's
         `ATLAS_MTP_DCUT_RATIO=1.0`.
 
-      * The MTP drafter small-M tier (a throughput fix) is the prime suspect
-        for a REAL wall regression on the 35B agentic gate: correctness stayed
-        10/10 + 10/10 but Σwall went 773s -> 1084s/1068s against a 600-800s
-        band. That gate serves at batch 2, which is this profile's territory,
-        and the tier is the one change in the stack that is NOT bit-exact (it
-        replaces a pipelined tile GEMM, moving proposal numerics and therefore
-        acceptance). Until the A/B settles it, this profile disables it.
+      * ★ RETRACTED: an earlier draft of this recipe disabled the MTP drafter
+        small-M tier, on the belief that it caused a wall regression on the 35B
+        agentic gate. That was wrong twice over and the toggle is GONE. The
+        kill-switch A/B measured the tier at ~0% of the wall
+        (1078 s with it off vs 1084/1068 s with it on), and the "regression"
+        itself was a cross-box comparison: unmodified `main` runs that gate at
+        1079 s on the same box. On dgx1 the full stack passes at 692 s / 662 s.
+        The tier is measured to HELP at low width (C=4 +3.2%, C=8 +1.8%), so a
+        latency profile keeps it.
 
     ENV STACK — REQUIRED, and the recipe schema cannot express it. `defaults:`
     carries serve FLAGS only; there is no `env:` key in the Atlas recipe struct
@@ -49,7 +51,6 @@ metadata:
       ATLAS_FP8_ROWWISE=1               # native per-row FP8 GDN projections,
                                         #   +21% prefill — TTFT is most of what
                                         #   "latency" means for a single user
-      ATLAS_NO_DRAFTER_SMALL_M_TIER=1   # see the agentic-wall note above
       # DELIBERATELY ABSENT vs the throughput profile:
       #   ATLAS_MTP_DCUT_RATIO=1.0      -> keep the 0.75 default (better at C=4)
       #   ATLAS_MTP_K_LADDER=...        -> keep the engine default ladder; the
@@ -63,10 +64,16 @@ metadata:
     `qwen3.8-27b-nvfp4-unsloth.yaml`: its `lm_head_dtype: bf16` is a
     correctness pin, not a tuning knob, and this profile does not carry it.
 
-    QUALITY STATUS. ssm-state-poisoning PASS (12/12 byte-identical replays),
-    decode-floor PASS on the shared code stack. BFCL on the dense 27B is not
-    yet run against this configuration. Treat latency as measured and accuracy
-    as not-yet-certified.
+    QUALITY STATUS (gates run on the shared code stack, 2026-08-17).
+      ssm-state-poisoning-gate  PASS — 12 of 12 replays byte-identical
+      decode-floor              PASS
+      agentic-webserver         PASS on dgx1 — 692 s / 662 s, 10/10 + 10/10,
+                                faster than the 773 s pre-stack reference
+      bfcl-subset               see the note below.
+
+    ⚠ Wall verdicts are box-specific: the same gate reads ~1070-1080 s on dgx2
+    for BOTH this stack and unmodified `main`, so that box's Σwall says nothing
+    about the code. Compare on one box only.
 
   maintainer: Atlas
   category: interactive
@@ -102,6 +109,8 @@ defaults:
   num_drafts: 3
   mtp_quantization: bf16
   scheduling_policy: fifo
+  tool_call_parser: qwen3_coder
+  disable_tool_grammar: true
   disable_thinking: true
   ssm_h_dtype: f16-pool
   gdn_fused_norm: true
