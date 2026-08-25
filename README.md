@@ -1,36 +1,128 @@
-# Atlas Spark recipe registry
+# Atlas recipes and `atlasctl`
 
-Official sparkrun recipes for [Atlas Spark](https://github.com/Avarok-Cybersecurity/atlas) — the pure-Rust LLM inference server for NVIDIA DGX Spark GB10. Recipes target the public `avarok/atlas-gb10:latest` Docker image and the `atlas` runtime in [sparkrun](https://github.com/spark-arena/sparkrun).
+Recipes for [Atlas](https://github.com/Avarok-Cybersecurity/atlas), the pure-Rust
+LLM inference server for NVIDIA DGX Spark (GB10), plus **`atlasctl`**, the
+launcher that runs them.
 
-## Usage
+A recipe describes one model deployment — the checkpoint, the container image,
+and the serve settings it was validated under. `atlasctl` reads a recipe and
+runs the `docker run` it implies.
 
-The `@atlas` namespace is reserved in sparkrun and pre-registered in default installs, so no manual `sparkrun registry add` is needed:
+## Install
 
-```bash
-sparkrun run @atlas/qwen3.5-35b-a3b-nvfp4
-sparkrun run @atlas/minimax-m2.7-nvfp4-ep2          # 2-node EP=2
-sparkrun run @atlas/qwen3.5-122b-a10b-nvfp4-ep2     # 2-node EP=2
+```sh
+curl -fsSL https://atlasinference.io/install.sh | sh
 ```
 
-If you're on an older sparkrun release that doesn't ship the reservation yet, add it manually:
+Or, if you already have the toolchains:
 
-```bash
-sparkrun registry add https://github.com/Avarok-Cybersecurity/atlas-recipes.git
+```sh
+cargo install atlasctl        # from crates.io
+uvx atlas-ctl list            # from PyPI, no install step
 ```
 
-### Listing the recipes
+The installer downloads a prebuilt binary, verifies its SHA-256 against the
+release, and puts it in `~/.local/bin`. It needs no Python and no Rust
+toolchain. `sh scripts/install.sh --uninstall` reverses it.
 
-The `atlas` registry ships **hidden** in sparkrun's defaults, so a bare `sparkrun list`
-filters its recipes out — even though `sparkrun run @atlas/<recipe>` works, because `run`
-resolves by qualified name and isn't visibility-gated. To see them:
+## Use
 
-```bash
-sparkrun recipe list --registry atlas    # just the Atlas lineup
-sparkrun list -a                         # everything, including hidden registries
-sparkrun recipe show @atlas/qwen3.6-35b-a3b-nvfp4
+```sh
+atlasctl list                              # what is available
+atlasctl show qwen3.6-35b-a3b-fp8-mtp      # what a recipe does
+atlasctl run qwen3.6-35b-a3b-fp8-mtp       # serve it
+atlasctl run <recipe> --print              # print the command instead of running it
+atlasctl logs <recipe> --follow
+atlasctl stop <recipe>
+atlasctl status
+atlasctl doctor                            # check this machine for problems
 ```
 
-`sparkrun search` has the same filter — pass `-a` or `--registry atlas`.
+`--print` is worth knowing about: it shows the exact `docker run` that `run`
+would execute, so you can read it before trusting it, or run it yourself.
+Add `--portable` to keep `$(id -u)` and `$HOME` symbolic for pasting elsewhere.
+
+Multi-node recipes need one invocation per node:
+
+```sh
+# on the head
+atlasctl run <recipe> --rank 0 --world-size 2 --master-addr 10.10.10.1
+# on the worker
+atlasctl run <recipe> --rank 1 --world-size 2 --master-addr 10.10.10.1
+```
+
+A multi-node recipe refuses to launch on a single node rather than quietly
+serving something smaller than the recipe describes.
+
+## Where recipes come from
+
+**Recipes are compiled into `atlasctl`.** A fresh install performs no network
+access to find a recipe, because there is nothing to fetch — the corpus a binary
+ships with is the corpus it was built from. Updating recipes means updating
+`atlasctl`.
+
+You can add your own registry:
+
+```sh
+atlasctl registry add myteam https://github.com/myteam/recipes.git
+atlasctl run @myteam/my-recipe
+```
+
+A remote registry supplies recipe **data** and nothing else. It cannot cause a
+command to run on your machine:
+
+- recipe fields that executed code in the previous launcher — `pre_exec`,
+  `post_exec`, `post_commands`, `mods`, `builder` — are refused wherever they
+  appear, including in recipes we ship ourselves;
+- container isolation comes from one reviewed profile in `atlasctl`, never from
+  a recipe, so `executor_config` is refused too;
+- there is no "trusted registry" concept in `atlasctl` at all. The mechanism
+  does not exist, so no configuration edit can enable it.
+
+A recipe carrying refused keys still appears in `atlasctl list --all`, with the
+reason. A recipe that vanishes is harder to reason about than one that explains
+itself.
+
+Registry names are resolved locally: `atlas` is reserved for the built-in
+corpus, and a bare recipe name always resolves to a built-in recipe first, so a
+remote cannot shadow a shipped recipe by choosing its name.
+
+## Replacing sparkrun
+
+`atlasctl` replaces the `sparkrun` launcher. If you have sparkrun installed,
+run `atlasctl doctor` — and read [SECURITY.md](SECURITY.md), which explains why
+this exists and what to check.
+
+Serve commands are byte-identical to sparkrun's across the whole recipe corpus;
+see [docs/PARITY.md](docs/PARITY.md) for the comparison and for the differences
+that are deliberate.
+
+## Contributing a recipe
+
+Add a YAML file under `recipes/<family>/`. The filename stem is the recipe name.
+
+```yaml
+recipe_version: "2"
+model: org/Model-Name
+runtime: atlas
+container: avarok/atlas-gb10:latest
+max_nodes: 1
+
+metadata:
+  description: |
+    What this deployment is, and what it was measured at.
+  maintainer: you
+
+defaults:
+  port: 8888
+  max_model_len: 8192
+  gpu_memory_utilization: 0.85
+```
+
+CI parses and renders every recipe in this repository, so a malformed recipe
+fails the pull request rather than someone's machine. Please say in the
+description what the settings were validated against — the numbers in these
+files are the reason to trust them.
 
 ### A note on checkpoints
 
@@ -107,7 +199,7 @@ recipes/
 └── minimax-m2.7/minimax-m2.7-nvfp4-ep2.yaml
 ```
 
-sparkrun's recipe lookup is recursive within the `recipes` subtree, so the family-level grouping is purely cosmetic. Recipes are accessed by their file stem regardless of nesting.
+atlasctl's recipe lookup is recursive within the `recipes` subtree, so the family-level grouping is purely cosmetic. Recipes are accessed by their file stem regardless of nesting.
 
 ## Hardware constraints captured in the recipes
 
@@ -120,7 +212,7 @@ Each recipe carries the production-validated KV/seq/MoE settings drawn from Atla
 
 ## Related
 
-- Runtime: [`atlas` runtime in sparkrun](https://github.com/spark-arena/sparkrun) (PR #169)
+- Runtime: [`atlas` runtime in atlasctl](https://github.com/spark-arena/atlasctl) (PR #169)
 - Engine: https://github.com/Avarok-Cybersecurity/atlas
 - Docker image: [`avarok/atlas-gb10`](https://hub.docker.com/r/avarok/atlas-gb10)
 - Discord: [Atlas-Inference](https://atlasinference.io)

@@ -1,0 +1,197 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+name: Release
+
+# Releases are cut by merging the pull request release-please maintains, not by
+# hand-tagging. That keeps "every merge ships" honest without burning an
+# immutable crates.io version on every typo fix: recipe edits land on main
+# immediately and accumulate in the pending release PR, and merging it publishes
+# everything since the last release.
+#
+# The publish jobs live in this file rather than a tag-triggered one on purpose:
+# a tag created with the default GITHUB_TOKEN does not trigger workflows, so a
+# split would simply never fire.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "existing tag to re-publish (recovery only)"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # No cancel-in-progress: interrupting a half-finished publish is worse than
+  # waiting for it.
+  group: release-${{ github.ref }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release-please:
+    name: prepare release
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  preflight:
+    name: preflight at the tag
+    needs: [release-please]
+    if: needs.release-please.outputs.release_created == 'true' || inputs.tag != ''
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Re-verify at the exact commit being published. CI passing on main is
+      # not the same statement as "this tag is good".
+      - run: cargo test --workspace --locked
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          rust-version: "1.93.1"
+          command: check advisories licenses sources bans
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: [preflight]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Native runners, no QEMU and no cross container: aarch64 is the
+          # primary target (GB10 / DGX Spark) and building it natively is both
+          # faster and one less image to trust.
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - target: aarch64-apple-darwin
+            runner: macos-14
+          - target: x86_64-apple-darwin
+            runner: macos-14
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: musl toolchain
+        if: contains(matrix.target, 'linux-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      # Static musl: the binary's only system interaction is shelling out to
+      # docker, so one file per architecture runs on DGX OS, any Ubuntu, or a
+      # container, with no glibc version to match.
+      - run: cargo build --release --locked -p atlasctl --target ${{ matrix.target }}
+      - name: package
+        run: |
+          set -eu
+          out="atlasctl-${{ matrix.target }}"
+          mkdir -p "dist/$out"
+          cp "target/${{ matrix.target }}/release/atlasctl" "dist/$out/"
+          cp LICENSE README.md "dist/$out/" 2>/dev/null || true
+          tar -C "dist/$out" -cJf "dist/${out}.tar.xz" .
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/atlasctl-${{ matrix.target }}.tar.xz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/*.tar.xz
+
+  github-release:
+    name: publish release assets
+    needs: [release-please, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: checksums
+        working-directory: dist
+        run: sha256sum ./*.tar.xz | sed 's| \./| |' > SHA256SUMS
+      # install.sh rides along on every release so a user can diff the script
+      # the website served against the one attached to the release.
+      - run: cp scripts/install.sh dist/install.sh
+      - name: upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
+        run: gh release upload "$TAG" dist/* --clobber
+
+  publish-crates:
+    name: crates.io
+    needs: [release-please, github-release]
+    runs-on: ubuntu-24.04
+    environment: crates-io
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+      # Trusted publishing: a short-lived token minted from this job's OIDC
+      # identity, so no long-lived registry token is stored in the repository.
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - name: publish in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          set -eu
+          for crate in atlas-recipes-data atlasctl-core atlasctl; do
+            version=$(cargo metadata --no-deps --format-version 1 \
+              | python3 -c "import json,sys;print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='$crate'))")
+            # Idempotent: re-running a partially-failed publish must not fail on
+            # the crates that already went out.
+            if curl -fsSL "https://crates.io/api/v1/crates/$crate/$version" >/dev/null 2>&1; then
+              echo "$crate $version already published, skipping"
+              continue
+            fi
+            cargo publish -p "$crate" --locked
+          done
+
+  smoke-install:
+    name: smoke ${{ matrix.runner }}
+    needs: [github-release]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04-arm, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v7
+      # Prove the published artifacts actually install, on both architectures,
+      # before anyone follows the instructions on the website.
+      - env:
+          ATLASCTL_VERSION: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
+        run: |
+          sh scripts/install.sh
+          "$HOME/.local/bin/atlasctl" --version
+          "$HOME/.local/bin/atlasctl" list | head -5

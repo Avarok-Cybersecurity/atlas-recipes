@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+name: File size cap
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: size-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cap:
+    name: no source file over 500 lines
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      # A file that grows past this wants splitting along a seam that already
+      # exists. The allow-list is intentionally empty; adding to it should be a
+      # decision with a reason attached, not a reflex.
+      - name: Check
+        run: |
+          over=$(git ls-files '*.rs' | while read -r f; do
+            n=$(wc -l < "$f")
+            [ "$n" -gt 500 ] && echo "  $f ($n lines)"
+          done)
+          if [ -n "$over" ]; then
+            echo "files over the 500-line cap:"; echo "$over"; exit 1
+          fi
+          echo "all source files within the cap"

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "rust",
+  "packages": {
+    ".": {
+      "package-name": "atlasctl",
+      "changelog-path": "CHANGELOG.md"
+    }
+  },
+  "plugins": ["cargo-workspace"],
+  "separate-pull-requests": false,
+  "include-component-in-tag": false
+}

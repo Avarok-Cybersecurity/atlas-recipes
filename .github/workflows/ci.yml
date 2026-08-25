@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Required checks are deliberately NOT path-filtered on pull_request: a
+# path-filtered required check never reports on a PR that does not touch its
+# paths, and the PR then waits forever for a check that will never run.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --locked
+
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Every vendored recipe is parsed and rendered here, which is what gives
+      # recipe-only pull requests a real check rather than a wasted one.
+      - run: cargo test --workspace --locked
+
+  msrv:
+    name: msrv
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --locked
+
+  license-headers:
+    name: license headers
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Every source file carries an SPDX header
+        run: |
+          missing=$(git ls-files '*.rs' '*.sh' '*.yml' \
+            | while read -r f; do
+                head -3 "$f" | grep -q 'SPDX-License-Identifier: AGPL-3.0-only' || echo "$f"
+              done)
+          if [ -n "$missing" ]; then
+            echo "missing SPDX header:"; echo "$missing"; exit 1
+          fi
+
+  vendor-neutrality:
+    name: vendor neutrality
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      # Atlas targets NVIDIA today and AMD is in bring-up. Accelerator and
+      # fabric specifics belong in a provider implementation; anywhere else they
+      # erode the abstraction one convenience branch at a time. Tests may name
+      # them freely — asserting that AMD emits /dev/kfd is the point.
+      - name: No vendor literals outside provider modules
+        run: |
+          hits=$(grep -rnE -- '--gpus|/dev/kfd|/dev/dri|nvidia-smi|rocm-smi|NCCL_' \
+            crates/*/src --include='*.rs' \
+            | grep -vE '(profile|collective)\.rs' \
+            | grep -vE 'tests\.rs|/tests/' || true)
+          if [ -n "$hits" ]; then
+            echo "vendor-specific literals outside a provider module:"; echo "$hits"; exit 1
+          fi
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: shellcheck scripts/*.sh
