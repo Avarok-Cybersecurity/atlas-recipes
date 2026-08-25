@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[package]
+name = "atlasctl-protocol"
+description = "Wire types shared by the atlasctl agent, the CLI, and the browser client."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true

@@ -12,6 +12,7 @@ pub mod io;
 pub mod recipe;
 pub mod registry;
 pub mod scalar;
+pub mod settings;
 
 pub use docker::{DockerCommand, LaunchProfile};
 pub use recipe::{NotLaunchable, Provenance, Recipe, RecipeError, RuntimeKind, Topology};
