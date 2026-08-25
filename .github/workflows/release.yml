@@ -48,15 +48,52 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+  # Single source of truth for "are we releasing, and what tag?".
+  #
+  # This job exists because release-please only runs on push. A job that `needs`
+  # a skipped job is itself skipped no matter what its own `if` says, so every
+  # downstream job silently skipped when the workflow was dispatched by hand —
+  # the run went green having done nothing. Depending on this job instead means
+  # the manual path and the automatic path resolve identically.
+  resolve:
+    name: resolve the release
+    needs: [release-please]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+      release: ${{ steps.pick.outputs.release }}
+    steps:
+      - id: pick
+        env:
+          RP_RESULT: ${{ needs.release-please.result }}
+          RP_CREATED: ${{ needs.release-please.outputs.release_created }}
+          RP_TAG: ${{ needs.release-please.outputs.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -eu
+          if [ -n "$INPUT_TAG" ]; then
+            echo "manual dispatch for $INPUT_TAG"
+            echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          elif [ "$RP_RESULT" = "success" ] && [ "$RP_CREATED" = "true" ]; then
+            echo "release-please cut $RP_TAG"
+            echo "tag=$RP_TAG" >> "$GITHUB_OUTPUT"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "nothing to release on this run"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
   preflight:
     name: preflight at the tag
-    needs: [release-please]
-    if: needs.release-please.outputs.release_created == 'true' || inputs.tag != ''
+    needs: [resolve]
+    if: needs.resolve.outputs.release == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
+          ref: ${{ needs.resolve.outputs.tag }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # release-please bumps versions in Cargo.toml but does not reliably
@@ -77,7 +114,7 @@ jobs:
 
   build:
     name: build ${{ matrix.target }}
-    needs: [preflight]
+    needs: [resolve, preflight]
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -101,7 +138,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
+          ref: ${{ needs.resolve.outputs.tag }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -131,7 +168,7 @@ jobs:
 
   github-release:
     name: publish release assets
-    needs: [release-please, build]
+    needs: [resolve, build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -150,12 +187,12 @@ jobs:
       - name: upload
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
+          TAG: ${{ needs.resolve.outputs.tag }}
         run: gh release upload "$TAG" dist/* --clobber
 
   publish-crates:
     name: crates.io
-    needs: [release-please, github-release]
+    needs: [resolve, github-release]
     runs-on: ubuntu-24.04
     environment: crates-io
     permissions:
@@ -163,7 +200,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
+          ref: ${{ needs.resolve.outputs.tag }}
       - uses: dtolnay/rust-toolchain@stable
       # Trusted publishing: a short-lived token minted from this job's OIDC
       # identity, so no long-lived registry token is stored in the repository.
@@ -188,7 +225,7 @@ jobs:
 
   wheels:
     name: wheel ${{ matrix.target }}
-    needs: [preflight]
+    needs: [resolve, preflight]
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -205,7 +242,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
+          ref: ${{ needs.resolve.outputs.tag }}
       # A statically-linked musl binary satisfies the manylinux policy trivially,
       # so each Linux target is emitted twice from one build: manylinux for glibc
       # hosts and musllinux for Alpine. The binary is identical; only the tag
@@ -240,12 +277,12 @@ jobs:
 
   sdist:
     name: sdist
-    needs: [preflight]
+    needs: [resolve, preflight]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
+          ref: ${{ needs.resolve.outputs.tag }}
       # Published for source availability under the AGPL, and for platforms the
       # wheel matrix does not cover. Building it needs a Rust toolchain, which
       # the project README says.
@@ -260,7 +297,7 @@ jobs:
 
   publish-pypi:
     name: PyPI
-    needs: [release-please, github-release, wheels, sdist]
+    needs: [resolve, github-release, wheels, sdist]
     runs-on: ubuntu-24.04
     environment: pypi
     permissions:
@@ -281,7 +318,7 @@ jobs:
 
   smoke-install:
     name: smoke ${{ matrix.runner }}
-    needs: [github-release]
+    needs: [resolve, github-release]
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -291,7 +328,7 @@ jobs:
       # Prove the published artifacts actually install, on both architectures,
       # before anyone follows the instructions on the website.
       - env:
-          ATLASCTL_VERSION: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
+          ATLASCTL_VERSION: ${{ needs.resolve.outputs.tag }}
         run: |
           sh scripts/install.sh
           "$HOME/.local/bin/atlasctl" --version
