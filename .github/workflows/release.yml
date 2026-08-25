@@ -314,24 +314,26 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
           set -eu
-          # This job had never executed — every previous release died before
-          # reaching it — and it was wrong twice over: it named three of the
-          # five workspace crates, in an order that could not work. Publishing
-          # atlasctl-core requires atlasctl-protocol to already be on the
-          # registry, and protocol was not in the list at all.
-          order=$(cargo metadata --no-deps --format-version 1 | python3 scripts/publish-order.py)
-          echo "publish order: $(echo "$order" | tr '\n' ' ')"
-          for crate in $order; do
-            version=$(cargo metadata --no-deps --format-version 1 \
-              | python3 -c "import json,sys;print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='$crate'))")
-            # Idempotent: re-running a partially-failed publish must not fail on
-            # the crates that already went out.
-            if curl -fsSL "https://crates.io/api/v1/crates/$crate/$version" >/dev/null 2>&1; then
-              echo "$crate $version already published, skipping"
-              continue
-            fi
-            cargo publish -p "$crate" --locked
-          done
+          # `cargo publish --workspace` walks the dependency graph itself and
+          # waits for the index between crates, so there is no ordering logic
+          # here to get wrong. The previous version hand-listed three of the
+          # five crates, in an order that could not work.
+          #
+          # It deliberately does NOT call a script from scripts/: this job
+          # checks out the TAG while the workflow comes from the dispatch ref,
+          # so anything added to the repo after a tag was cut does not exist in
+          # that checkout. v0.1.2 failed exactly that way — the workflow called
+          # a helper that postdated the tag. Keeping the step self-contained
+          # means re-publishing an older tag stays possible.
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c "import json,sys;print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='atlasctl'))")
+          # atlasctl publishes last, so its presence means the whole workspace
+          # went out. Makes a re-run after a fully successful publish a no-op.
+          if curl -fsSL "https://crates.io/api/v1/crates/atlasctl/$version" >/dev/null 2>&1; then
+            echo "atlasctl $version already published; workspace is already out"
+            exit 0
+          fi
+          cargo publish --workspace --locked
 
   wheels:
     name: wheel ${{ matrix.target }}
