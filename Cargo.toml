@@ -43,7 +43,7 @@ all = "deny"
 [package]
 name = "atlas-recipes-data"
 description = "Vendored Atlas Spark recipe corpus, embedded at compile time."
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
