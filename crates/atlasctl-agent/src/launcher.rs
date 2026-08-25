@@ -27,6 +27,10 @@ pub struct Started {
     pub endpoint: Option<String>,
 }
 
+pub mod docker;
+
+pub use docker::DockerLauncher;
+
 /// Runs launches.
 pub trait Launcher: Send + Sync {
     /// Render the command without running it.

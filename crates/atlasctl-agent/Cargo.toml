@@ -15,8 +15,14 @@ atlasctl-protocol.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json = "1"
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 subtle = "2"
 thiserror.workspace = true
+
+[dev-dependencies]
+# The recording mocks are feature-gated so they never ship in a release build.
+atlasctl-core = { workspace = true, features = ["test-mocks"] }
 
 [features]
 test-mocks = []

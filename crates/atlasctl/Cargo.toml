@@ -15,10 +15,12 @@ name = "atlasctl"
 path = "src/main.rs"
 
 [dependencies]
+atlasctl-agent.workspace = true
 atlasctl-core.workspace = true
 anyhow.workspace = true
 clap = { version = "4", features = ["derive"] }
 rustix = { version = "1", features = ["process"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 serde_yaml_ng.workspace = true
 
 [dev-dependencies]

@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn a_flag_shaped_identifier_is_rejected() {
         // Without this an id could be read as an option by whatever it reaches.
-        for bad in ["-rm", "--gpus", "-"] {
+        for bad in ["-rm", "--force", "-"] {
             assert!(RecipeId::parse(bad).is_err(), "{bad:?} must be rejected");
         }
     }

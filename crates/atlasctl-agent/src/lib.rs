@@ -6,6 +6,7 @@
 
 pub mod guard;
 pub mod launcher;
+pub mod server;
 pub mod session;
 pub mod token;
 
