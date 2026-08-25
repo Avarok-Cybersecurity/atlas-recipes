@@ -88,13 +88,20 @@ jobs:
       # them freely — asserting that AMD emits /dev/kfd is the point.
       - name: No vendor literals outside provider modules
         run: |
-          hits=$(grep -rnE -- '--gpus|/dev/kfd|/dev/dri|nvidia-smi|rocm-smi|NCCL_' \
-            crates/*/src --include='*.rs' \
+          set -eu
+          # File list comes from git, not a shell glob: a glob that fails to
+          # expand would make this check pass without inspecting anything.
+          files=$(git ls-files 'crates/*/src/*.rs' 'crates/*/src/**/*.rs' \
             | grep -vE '(profile|collective)\.rs' \
-            | grep -vE 'tests\.rs|/tests/' || true)
+            | grep -vE 'tests\.rs|/tests/')
+          [ -n "$files" ] || { echo "no files to scan - the lint is not working"; exit 1; }
+          echo "scanning $(echo "$files" | wc -l) files"
+          # shellcheck disable=SC2086
+          hits=$(grep -nE -- '--gpus|/dev/kfd|/dev/dri|nvidia-smi|rocm-smi|NCCL_' $files || true)
           if [ -n "$hits" ]; then
             echo "vendor-specific literals outside a provider module:"; echo "$hits"; exit 1
           fi
+          echo "clean"
 
   shellcheck:
     name: shellcheck
