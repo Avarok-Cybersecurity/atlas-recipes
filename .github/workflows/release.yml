@@ -236,8 +236,13 @@ jobs:
         with:
           ref: ${{ needs.resolve.outputs.tag }}
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      # rust-toolchain.toml pins 1.93.1, and that override governs every cargo
+      # invocation in this job. The action's `targets:` input installed the std
+      # for the toolchain the ACTION picked (stable), which is then never used —
+      # so all three CROSS targets died with "can't find crate for `core`" while
+      # aarch64-apple-darwin, the one native target, passed. Add the target to
+      # the toolchain that actually runs.
+      - run: rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - name: musl toolchain
         if: contains(matrix.target, 'linux-musl')
@@ -309,7 +314,14 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
           set -eu
-          for crate in atlas-recipes-data atlasctl-core atlasctl; do
+          # This job had never executed — every previous release died before
+          # reaching it — and it was wrong twice over: it named three of the
+          # five workspace crates, in an order that could not work. Publishing
+          # atlasctl-core requires atlasctl-protocol to already be on the
+          # registry, and protocol was not in the list at all.
+          order=$(cargo metadata --no-deps --format-version 1 | python3 scripts/publish-order.py)
+          echo "publish order: $(echo "$order" | tr '\n' ' ')"
+          for crate in $order; do
             version=$(cargo metadata --no-deps --format-version 1 \
               | python3 -c "import json,sys;print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='$crate'))")
             # Idempotent: re-running a partially-failed publish must not fail on
