@@ -133,15 +133,12 @@ check_sparkrun() {
 
 do_uninstall() {
     dir="${ATLASCTL_INSTALL_DIR:-$HOME/.local/bin}"
-    removed=""
-    for b in "$BIN_NAME"; do
-        if [ -f "$dir/$b" ]; then
-            rm -f "$dir/$b"
-            removed="yes"
-            info "removed $dir/$b"
-        fi
-    done
-    [ -n "$removed" ] || info "nothing to remove in $dir"
+    if [ -f "$dir/$BIN_NAME" ]; then
+        rm -f "$dir/$BIN_NAME"
+        info "removed $dir/$BIN_NAME"
+    else
+        info "nothing to remove in $dir"
+    fi
     for d in "$HOME/.config/atlasctl" "$HOME/.cache/atlasctl"; do
         [ -d "$d" ] && info "left in place: $d"
     done
@@ -187,14 +184,12 @@ main() {
 
     dir="${ATLASCTL_INSTALL_DIR:-$HOME/.local/bin}"
     mkdir -p "$dir"
-    for b in "$BIN_NAME"; do
-        [ -f "$tmp/$b" ] || continue
-        # Install to a temp name and rename, so an interrupted install cannot
-        # leave a half-written binary on PATH.
-        install -m 0755 "$tmp/$b" "$dir/.$b.new"
-        mv -f "$dir/.$b.new" "$dir/$b"
-        info "installed $dir/$b"
-    done
+    [ -f "$tmp/$BIN_NAME" ] || die "the archive did not contain $BIN_NAME"
+    # Install to a temp name and rename, so an interrupted install cannot leave
+    # a half-written binary on PATH.
+    install -m 0755 "$tmp/$BIN_NAME" "$dir/.$BIN_NAME.new"
+    mv -f "$dir/.$BIN_NAME.new" "$dir/$BIN_NAME"
+    info "installed $dir/$BIN_NAME"
 
     case ":$PATH:" in
         *":$dir:"*) ;;

@@ -24,9 +24,12 @@ jobs:
       # decision with a reason attached, not a reflex.
       - name: Check
         run: |
+          # `if` rather than `[ ] && echo`: the latter returns non-zero when
+          # the file is within the cap, and as the loop's last command that
+          # fails the step precisely when everything is fine.
           over=$(git ls-files '*.rs' | while read -r f; do
             n=$(wc -l < "$f")
-            [ "$n" -gt 500 ] && echo "  $f ($n lines)"
+            if [ "$n" -gt 500 ]; then echo "  $f ($n lines)"; fi
           done)
           if [ -n "$over" ]; then
             echo "files over the 500-line cap:"; echo "$over"; exit 1
