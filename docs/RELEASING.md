@@ -64,6 +64,17 @@ attached to it — and is kept afterwards only as a recovery path. Delete it, an
 revoke `CARGO_REGISTRY_TOKEN`, once `release.yml` has published cleanly at least
 once.
 
+## Version history baseline
+
+`v0.1.0` is tagged at the commit the bootstrap workflow published from
+(`7b86068`). The tag was added afterwards, because that publish predated the
+automated pipeline and did not tag.
+
+This matters: release-please computes the next version from commits **since the
+last tag**. Without it, the first release PR proposed 0.2.0 and swept every
+historical recipe commit into the changelog, because it had no baseline to
+compare against.
+
 ## Verifying a release
 
 ```sh
