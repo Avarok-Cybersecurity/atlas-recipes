@@ -8,17 +8,18 @@ and the serve settings it was validated under. `atlasctl` reads a recipe and
 runs the `docker run` it implies.
 
 ```sh
-uvx atlas-ctl list                              # what is available
-uvx atlas-ctl show qwen3.6-35b-a3b-fp8-mtp      # what a recipe does
-uvx atlas-ctl run qwen3.6-35b-a3b-fp8-mtp       # serve it
-uvx atlas-ctl run <recipe> --print              # print the command instead
+uvx pyatlasctl list                              # what is available
+uvx pyatlasctl show qwen3.6-35b-a3b-fp8-mtp      # what a recipe does
+uvx pyatlasctl run qwen3.6-35b-a3b-fp8-mtp       # serve it
+uvx pyatlasctl run <recipe> --print              # print the command instead
 ```
 
-`uv tool install atlas-ctl` puts `atlasctl` on your PATH under its real name.
+`uv tool install pyatlasctl` puts `atlasctl` on your PATH under its real name.
 
 This wheel contains a self-contained Rust binary and no Python code. The
-distribution is named `atlas-ctl` because `atlasctl` was already taken on PyPI
-by an unrelated project.
+distribution is named `pyatlasctl` because `atlasctl` is taken on PyPI by an
+unrelated project, and PyPI also refuses names that normalize too close to an
+existing one, which ruled out `atlas-ctl`.
 
 **Recipes ship inside the binary.** A fresh install makes no network request to
 resolve a recipe, and there is no "trusted registry" mechanism — a remote

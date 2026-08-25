@@ -201,7 +201,7 @@ jobs:
       # A statically-linked musl binary satisfies the manylinux policy trivially,
       # so each Linux target is emitted twice from one build: manylinux for glibc
       # hosts and musllinux for Alpine. The binary is identical; only the tag
-      # differs, which is what makes `uvx atlas-ctl` resolve on both.
+      # differs, which is what makes `uvx pyatlasctl` resolve on both.
       - name: build wheel (manylinux)
         if: contains(matrix.target, 'linux-musl')
         uses: PyO3/maturin-action@v1

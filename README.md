@@ -18,7 +18,7 @@ Or, if you already have the toolchains:
 
 ```sh
 cargo install atlasctl        # from crates.io
-uvx atlas-ctl list            # from PyPI, no install step
+uvx pyatlasctl list            # from PyPI, no install step
 ```
 
 The installer downloads a prebuilt binary, verifies its SHA-256 against the
