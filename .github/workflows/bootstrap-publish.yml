@@ -1,17 +1,25 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 name: Bootstrap crates.io publish
 
-# A one-off, run by hand.
+# SUPERSEDED — kept as a recovery path, not a normal one.
 #
-# crates.io has no pending-publisher mechanism: a crate must already exist
-# before a Trusted Publisher can be attached to it. So the very first publish
-# of each crate cannot use OIDC and has to present a token. Every release after
-# this one goes through release.yml, which uses Trusted Publishing and stores no
-# token at all.
+# This existed because crates.io has no pending-publisher mechanism: a crate
+# must already exist before a Trusted Publisher can be attached to it, so the
+# very first publish could not use OIDC and had to present a token. That has
+# happened; all five crates were published at 0.1.0 on 2026-08-25 and their
+# Trusted Publishers are configured.
 #
-# Delete this workflow once the five crates exist and their publishers are
-# configured. It is kept deliberately awkward to run — a typed confirmation, and
-# no automatic trigger — because publishing to crates.io is irreversible.
+# Normal releases now go through release.yml, which mints a short-lived token
+# from its own OIDC identity and stores nothing. This file only matters if that
+# path is broken and something has to ship anyway.
+#
+# Delete it, and revoke CARGO_REGISTRY_TOKEN, once you are satisfied release.yml
+# publishes cleanly. Both are being kept deliberately for now: removing the
+# fallback before the primary has been exercised end to end would leave no way
+# to ship a fix.
+#
+# It stays awkward to run on purpose — a typed confirmation, a dry run by
+# default, and no automatic trigger — because publishing is irreversible.
 
 on:
   workflow_dispatch:
