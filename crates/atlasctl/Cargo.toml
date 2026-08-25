@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[package]
+name = "atlasctl"
+description = "Launch Atlas inference recipes on NVIDIA DGX Spark and other local accelerators."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "atlasctl"
+path = "src/main.rs"
+
+[dependencies]
+atlasctl-core.workspace = true
+anyhow.workspace = true
+clap = { version = "4", features = ["derive"] }
+rustix = { version = "1", features = ["process"] }
+serde_yaml_ng.workspace = true
+
+[dev-dependencies]
+# The recording mocks live behind a feature so they never ship in a release
+# binary, but downstream test suites need them.
+atlasctl-core = { workspace = true, features = ["test-mocks"] }
+
+[lints]
+workspace = true

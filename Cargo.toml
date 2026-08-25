@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# The workspace root is ALSO a package (`atlas-recipes-data`). This is
+# deliberate and load-bearing: `cargo package` only includes files beneath the
+# crate root, so a crate under `crates/` could not `include_dir!("../../recipes")`
+# and still work when installed from crates.io. Making the root a package lets
+# `recipes/**` ship inside the `.crate`, so `cargo install atlasctl` gets the
+# same vendored recipe snapshot as the prebuilt tarballs.
+
+[workspace]
+resolver = "3"
+members = ["crates/atlasctl-core", "crates/atlasctl"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "AGPL-3.0-only"
+repository = "https://github.com/Avarok-Cybersecurity/atlas-recipes"
+authors = ["Avarok Cybersecurity"]
+
+[workspace.dependencies]
+atlas-recipes-data = { path = ".", version = "0.1.0" }
+atlasctl-core = { path = "crates/atlasctl-core", version = "0.1.0" }
+anyhow = "1"
+include_dir = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_yaml_ng = "0.10"
+thiserror = "2"
+
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+all = "deny"
+
+[package]
+name = "atlas-recipes-data"
+description = "Vendored Atlas Spark recipe corpus, embedded at compile time."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+include = ["src/**/*.rs", "recipes/**/*.yaml", "LICENSE", "README.md"]
+
+[dependencies]
+include_dir.workspace = true
+
+[lints]
+workspace = true

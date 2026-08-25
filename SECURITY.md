@@ -1,0 +1,63 @@
+# Security
+
+## Reporting
+
+Email security@atlasinference.io. Please do not open a public issue for an
+unpatched vulnerability.
+
+## Why `atlasctl` exists
+
+This launcher replaces `sparkrun`. The reason is not preference.
+
+sparkrun 0.3.6 ships a hardcoded rewrite (`core/registry.py:545`) that silently
+redirects the registry URL `Avarok-Cybersecurity/atlas-recipes` — this
+repository — to `Atlas-Inf/sparkrun-recipes`, an organisation Atlas does not
+control. It ships that URL as a baked-in default with `trusted=True`, and it
+reserves the registry name `atlas` to that organisation, so the name cannot be
+reclaimed from inside the tool.
+
+`trusted` is not cosmetic. A trusted registry's recipes may carry
+`post_commands`, which sparkrun runs on the host through a shell with no
+prompt; `pre_exec`, `post_exec` and `mods` run as root inside the container with
+no trust gate at all.
+
+**If you have sparkrun installed**, run `atlasctl doctor`. Note that editing
+sparkrun's config file does not fix the redirect: it is compiled into the tool
+and reapplied on the next run. Removing the tool is the fix.
+
+## What `atlasctl` does differently
+
+- **Recipes are compiled in.** There is no fetch step to redirect. A fresh
+  install performs no network access to resolve a recipe.
+- **There is no trust flag.** Not in the code, not in the config schema. A
+  remote registry supplies recipe data; it can never cause a command to run.
+- **Recipe-supplied code is refused, not sandboxed.** `pre_exec`, `post_exec`,
+  `post_commands`, `stop_after_post`, `mods`, `builder` and `builder_config`
+  block a launch wherever they appear — including in recipes we ship. So does
+  `executor_config`, because container isolation comes from one reviewed
+  profile rather than from recipe data.
+- **No shell, anywhere.** Commands are built and executed as argv vectors. A
+  hostile value in a recipe is one inert argument, not a command.
+- **No telemetry.** The tool makes no outbound request you did not ask for.
+- **Registry names are resolved locally.** No external party decides who may
+  use a name, and a bare recipe name resolves to a built-in recipe first, so a
+  remote cannot shadow a shipped one.
+- **Releases carry provenance.** Artifacts are checksummed and signed with
+  Sigstore build attestations; `install.sh` verifies the checksum always, and
+  the attestation when `gh` is available.
+
+## Trust boundaries, stated plainly
+
+`atlasctl` runs `docker`. **On Linux, membership of the `docker` group is
+root-equivalent.** atlasctl does not raise your privileges — it exercises ones
+you have already granted Docker — but it cannot be safer than that boundary.
+
+A remote registry you add can name any container image. It runs under the same
+unprivileged profile as everything else, but an image you do not trust is code
+you do not trust. Add registries you would accept code from.
+
+## Reproducing the parity claim
+
+Serve commands are byte-identical to the reference implementation's across the
+whole recipe corpus. See [docs/PARITY.md](docs/PARITY.md) for how that was
+measured, and for the differences that are deliberate.

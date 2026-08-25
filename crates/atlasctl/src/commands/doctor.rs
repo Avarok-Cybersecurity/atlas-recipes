@@ -1,0 +1,115 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+//! `doctor` — check this machine for problems.
+
+use anyhow::Result;
+use atlasctl_core::io::{ProcessRunner, StdProcessRunner};
+
+/// The compromised registry that sparkrun redirects to.
+const COMPROMISED_HOST: &str = "Atlas-Inf/sparkrun-recipes";
+
+/// Run every check and report.
+pub fn run() -> Result<()> {
+    let mut problems = 0;
+
+    problems += check_docker();
+    problems += check_sparkrun();
+
+    println!();
+    if problems == 0 {
+        println!("no problems found");
+    } else {
+        println!("{problems} problem(s) found");
+    }
+    Ok(())
+}
+
+fn check_docker() -> usize {
+    match StdProcessRunner.run(&[
+        "docker".into(),
+        "version".into(),
+        "--format".into(),
+        "{{.Server.Version}}".into(),
+    ]) {
+        Ok(out) if out.success() => {
+            println!("docker:   ok (server {})", out.stdout.trim());
+            0
+        }
+        Ok(_) => {
+            println!(
+                "docker:   PROBLEM — the docker CLI is present but the daemon did not answer.\n\
+                 \x20         `atlasctl run` needs a working daemon; `recipe list` and\n\
+                 \x20         `run --print` work without one."
+            );
+            1
+        }
+        Err(_) => {
+            println!(
+                "docker:   PROBLEM — no docker on PATH. `atlasctl run` needs docker and the\n\
+                 \x20         NVIDIA container runtime; inspection commands work without them."
+            );
+            1
+        }
+    }
+}
+
+/// Look for a sparkrun install whose registry has been redirected.
+///
+/// This is why `doctor` exists. sparkrun 0.3.6 rewrites the Atlas registry URL
+/// to a repository under an organisation Atlas does not control, and marks it
+/// trusted — which lets recipe-supplied shell commands run on the host. We
+/// report it and print the exact removal commands. We never delete a user's
+/// files: that behaviour is precisely what makes a tool untrustworthy.
+fn check_sparkrun() -> usize {
+    let Ok(home) = std::env::var("HOME") else {
+        return 0;
+    };
+    let config = std::path::Path::new(&home).join(".config/sparkrun/registries.yaml");
+    let installed = which("sparkrun").is_some();
+    let redirected = std::fs::read_to_string(&config)
+        .map(|s| s.contains(COMPROMISED_HOST))
+        .unwrap_or(false);
+
+    if !installed && !redirected {
+        println!("sparkrun: not installed");
+        return 0;
+    }
+
+    println!("sparkrun: PROBLEM — a sparkrun install was found.");
+    if redirected {
+        println!(
+            "\x20         Its config at {} points the `atlas` registry at",
+            config.display()
+        );
+        println!("\x20         {COMPROMISED_HOST}, which Atlas does not control.");
+        println!(
+            "\x20         Editing the file is not enough: the redirect is compiled into\n\
+             \x20         sparkrun, so it is reapplied the next time the tool runs."
+        );
+    }
+    println!("\x20         A trusted registry's recipes can run shell commands on this host.");
+    println!("\x20         To remove it:");
+    println!("\x20           pipx uninstall sparkrun     # or: uv tool uninstall sparkrun");
+    println!("\x20           rm -rf ~/.config/sparkrun ~/.cache/sparkrun");
+    println!("\x20         Review those directories first; atlasctl will not delete them for you.");
+    1
+}
+
+/// Find a binary on PATH.
+fn which(name: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|d| d.join(name))
+        .find(|p| p.is_file())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn which_finds_a_binary_that_exists_and_not_one_that_does_not() {
+        assert!(which("sh").is_some());
+        assert!(which("definitely-not-a-real-binary-xyz").is_none());
+    }
+}

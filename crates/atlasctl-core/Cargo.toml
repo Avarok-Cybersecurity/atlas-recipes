@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[package]
+name = "atlasctl-core"
+description = "Recipe model and deterministic recipe-to-docker translation for atlasctl."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+atlas-recipes-data.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_yaml_ng.workspace = true
+thiserror.workspace = true
+
+[features]
+# Exposes the recording mocks to downstream test suites (the agent crate).
+test-mocks = []
+
+[lints]
+workspace = true
