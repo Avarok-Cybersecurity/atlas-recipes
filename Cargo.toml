@@ -24,10 +24,10 @@ repository = "https://github.com/Avarok-Cybersecurity/atlas-recipes"
 authors = ["Avarok Cybersecurity"]
 
 [workspace.dependencies]
-atlas-recipes-data = { path = ".", version = "0.1.0" }
-atlasctl-core = { path = "crates/atlasctl-core", version = "0.1.0" }
-atlasctl-protocol = { path = "crates/atlasctl-protocol", version = "0.1.0" }
-atlasctl-agent = { path = "crates/atlasctl-agent", version = "0.1.0" }
+atlas-recipes-data = { path = ".", version = "0.1.1" }
+atlasctl-core = { path = "crates/atlasctl-core", version = "0.1.1" }
+atlasctl-protocol = { path = "crates/atlasctl-protocol", version = "0.1.1" }
+atlasctl-agent = { path = "crates/atlasctl-agent", version = "0.1.1" }
 anyhow = "1"
 include_dir = "0.7"
 serde = { version = "1", features = ["derive"] }
