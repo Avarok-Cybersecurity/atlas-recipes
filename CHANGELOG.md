@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.2](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.1.1...v0.1.2) (2026-08-25)
+
+
+### Bug Fixes
+
+* a skipped job skips its whole needs chain, not one hop ([#34](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/34)) ([acb281e](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/acb281e519a965f84e721241d2f6e948ad387427))
+* enforce the release PR's lock on the artifact, not on release-please ([#36](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/36)) ([0432d85](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/0432d85b4dc7857c0398728d66e2be940a36ed75))
+* keep Cargo.lock in step with the versions release-please writes ([#31](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/31)) ([7d4af1b](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/7d4af1b6c1c1503057e79a99f8334d58e6dc7e2a))
+* make the manual release path actually run ([#33](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/33)) ([95e6922](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/95e6922d0ef95957eb8d22c2d8ecd2a18d04185d))
+* the release PR gets no CI, so it kept cutting tags that cannot build ([#35](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/35)) ([e452a5e](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/e452a5eeb07a43f4fd863e5855bf15d8a35a0429))
+
 ## [0.1.1](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.1.0...v0.1.1) (2026-08-25)
 
 
