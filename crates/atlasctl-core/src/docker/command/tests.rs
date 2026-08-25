@@ -167,3 +167,38 @@ fn omitted_options_emit_nothing() {
         assert!(!line.contains(absent), "{absent} should not appear: {line}");
     }
 }
+
+#[test]
+fn portable_substitutions_are_emitted_unquoted_so_the_shell_expands_them() {
+    // Quoting these would make the pasted command run as the literal string
+    // "$(id -u)", which fails with an unusable uid — the exact bug this guards.
+    let portable = sample().display_portable(Some("/home/spark"));
+    assert!(
+        portable.contains("--user $(id -u):$(id -g)"),
+        "got: {portable}"
+    );
+    assert!(
+        portable.contains("-v $HOME/.cache/huggingface:/cache/huggingface"),
+        "got: {portable}"
+    );
+    assert!(
+        !portable.contains("'$(id -u)"),
+        "the substitution must not be quoted"
+    );
+    assert!(
+        !portable.contains("'$HOME"),
+        "the home substitution must not be quoted"
+    );
+}
+
+#[test]
+fn a_dollar_sign_from_recipe_data_is_still_quoted_in_the_portable_form() {
+    // Only the substitutions this renderer produces are exempt from quoting.
+    let mut c = sample();
+    c.env.insert("EVIL".into(), "$(touch /tmp/pwned)".into());
+    let portable = c.display_portable(Some("/home/spark"));
+    assert!(
+        portable.contains(r"'EVIL=$(touch /tmp/pwned)'"),
+        "recipe-supplied substitutions must stay inert: {portable}"
+    );
+}

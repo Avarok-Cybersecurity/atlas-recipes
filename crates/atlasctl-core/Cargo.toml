@@ -16,5 +16,9 @@ serde.workspace = true
 serde_yaml_ng.workspace = true
 thiserror.workspace = true
 
+[features]
+# Exposes the recording mocks to downstream test suites (the agent crate).
+test-mocks = []
+
 [lints]
 workspace = true

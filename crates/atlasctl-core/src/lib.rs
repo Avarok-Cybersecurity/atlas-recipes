@@ -8,7 +8,9 @@ pub mod chain;
 pub mod docker;
 pub mod flags;
 pub mod host;
+pub mod io;
 pub mod recipe;
+pub mod registry;
 pub mod scalar;
 
 pub use docker::{DockerCommand, LaunchProfile};

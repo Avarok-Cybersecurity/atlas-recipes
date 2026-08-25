@@ -2,7 +2,7 @@
 
 //! The structured `docker run` invocation.
 
-use super::quote::shell_join;
+use super::quote::{shell_join, shell_quote};
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -68,6 +68,14 @@ pub struct DockerCommand {
     pub command: Vec<String>,
 }
 
+/// Whether an argument contains a substitution we intend the shell to perform.
+///
+/// Deliberately narrow: only the two forms this renderer itself produces. Any
+/// other `$` came from recipe data and must still be quoted.
+fn is_symbolic(arg: &str) -> bool {
+    arg.contains("$(id -u)") || arg.starts_with("$HOME/") || arg.contains(":$HOME/")
+}
+
 /// Which rendering of the user block to emit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UserRender {
@@ -87,8 +95,17 @@ impl DockerCommand {
     ///
     /// `home` replaces the literal home directory in volume sources with
     /// `$HOME`, so the command the website prints is not tied to one account.
+    ///
+    /// Arguments carrying a deliberate shell substitution are emitted
+    /// **unquoted** — quoting `$(id -u)` would turn the whole point of this
+    /// rendering into a literal string, and the pasted command would fail with
+    /// an unusable uid.
     pub fn display_portable(&self, home: Option<&str>) -> String {
-        shell_join(self.render(UserRender::Portable, home))
+        self.render(UserRender::Portable, home)
+            .into_iter()
+            .map(|a| if is_symbolic(&a) { a } else { shell_quote(&a) })
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     fn render(&self, user_render: UserRender, home: Option<&str>) -> Vec<String> {
