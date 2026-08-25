@@ -45,6 +45,10 @@ pub enum Command {
     #[command(subcommand)]
     Registry(RegistryCmd),
 
+    /// Run and manage the local agent that the website talks to.
+    #[command(subcommand)]
+    Agent(AgentCmd),
+
     /// Check this machine for problems, including a compromised sparkrun install.
     Doctor,
 }
@@ -58,6 +62,37 @@ pub enum RecipeCmd {
     Show(ShowArgs),
     /// Search recipes.
     Search(SearchArgs),
+}
+
+/// Agent subcommands.
+#[derive(Subcommand, Debug)]
+pub enum AgentCmd {
+    /// Run the agent in the foreground.
+    Run(AgentRunArgs),
+    /// Print the pairing token to paste into the website.
+    Token(AgentTokenArgs),
+    /// Report whether an agent is reachable.
+    Status,
+}
+
+/// `agent run` arguments.
+#[derive(Args, Debug)]
+pub struct AgentRunArgs {
+    /// Port to listen on.
+    #[arg(long, default_value_t = atlasctl_agent::DEFAULT_PORT)]
+    pub port: u16,
+
+    /// Also accept connections from a local development server.
+    #[arg(long)]
+    pub dev_origins: bool,
+}
+
+/// `agent token` arguments.
+#[derive(Args, Debug)]
+pub struct AgentTokenArgs {
+    /// Replace the token, invalidating any browser already paired.
+    #[arg(long)]
+    pub rotate: bool,
 }
 
 /// Registry subcommands.

@@ -11,7 +11,7 @@ mod validate;
 
 use anyhow::Result;
 use clap::Parser;
-use cli::{Cli, Command, RecipeCmd, RegistryCmd};
+use cli::{AgentCmd, Cli, Command, RecipeCmd, RegistryCmd};
 
 fn main() -> std::process::ExitCode {
     match run() {
@@ -42,6 +42,9 @@ fn run() -> Result<()> {
         Command::Registry(RegistryCmd::Add(a)) => commands::registry::add(&a),
         Command::Registry(RegistryCmd::Remove(a)) => commands::registry::remove(&a),
         Command::Registry(RegistryCmd::Update(a)) => commands::registry::update(&a),
+        Command::Agent(AgentCmd::Run(a)) => commands::agent::run(&a),
+        Command::Agent(AgentCmd::Token(a)) => commands::agent::token(&a),
+        Command::Agent(AgentCmd::Status) => commands::agent::status(),
         Command::Doctor => commands::doctor::run(),
     }
 }

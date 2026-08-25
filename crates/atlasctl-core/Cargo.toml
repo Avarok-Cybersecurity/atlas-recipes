@@ -11,6 +11,7 @@ authors.workspace = true
 
 [dependencies]
 atlas-recipes-data.workspace = true
+atlasctl-protocol.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_yaml_ng.workspace = true

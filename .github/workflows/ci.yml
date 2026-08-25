@@ -91,13 +91,26 @@ jobs:
           set -eu
           # File list comes from git, not a shell glob: a glob that fails to
           # expand would make this check pass without inspecting anything.
-          files=$(git ls-files 'crates/*/src/*.rs' 'crates/*/src/**/*.rs' \
+          # `git ls-files` skips untracked files, which is fine in CI (the tree
+          # is committed) but silently under-scans when run locally. `find` does
+          # not, so the local and CI runs agree.
+          #
+          # Provider modules are where vendor specifics belong: profile.rs
+          # (device flags), collective.rs (fabric env), telemetry/nvidia.rs and
+          # telemetry/rocm.rs (per-vendor readings).
+          files=$(find crates/*/src -name '*.rs' \
             | grep -vE '(profile|collective)\.rs' \
+            | grep -vE 'telemetry/(nvidia|rocm)\.rs' \
             | grep -vE 'tests\.rs|/tests/')
           [ -n "$files" ] || { echo "no files to scan - the lint is not working"; exit 1; }
           echo "scanning $(echo "$files" | wc -l) files"
+          # Comments are excluded: the point is to keep vendor *behaviour* out
+          # of neutral modules, not to ban the word from prose explaining why
+          # the abstraction exists. A doc comment saying nvidia-smi reports N/A
+          # on unified-memory parts is exactly the note a reader wants.
           # shellcheck disable=SC2086
-          hits=$(grep -nE -- '--gpus|/dev/kfd|/dev/dri|nvidia-smi|rocm-smi|NCCL_' $files || true)
+          hits=$(grep -nE -- '--gpus|/dev/kfd|/dev/dri|nvidia-smi|rocm-smi|NCCL_' $files \
+            | grep -vE ':[0-9]+: *(//|/\*|\*)' || true)
           if [ -n "$hits" ]; then
             echo "vendor-specific literals outside a provider module:"; echo "$hits"; exit 1
           fi
