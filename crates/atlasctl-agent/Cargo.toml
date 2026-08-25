@@ -2,7 +2,7 @@
 [package]
 name = "atlasctl-agent"
 description = "Local agent that lets the Atlas website launch recipes on this machine."
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

@@ -12,7 +12,11 @@ resolver = "3"
 members = ["crates/atlasctl-core", "crates/atlasctl", "crates/atlasctl-protocol", "crates/atlasctl-agent"]
 
 [workspace.package]
-version = "0.1.0"
+# NOTE: version is deliberately NOT inherited. release-please's cargo-workspace
+# plugin parses each Cargo.toml directly and cannot resolve workspace
+# inheritance — it fails with "invalid [package.version]" — so every crate
+# carries a literal version, and the plugin keeps them in lockstep on release.
+# Everything else here is still shared.
 edition = "2024"
 rust-version = "1.85"
 license = "AGPL-3.0-only"
@@ -39,7 +43,7 @@ all = "deny"
 [package]
 name = "atlas-recipes-data"
 description = "Vendored Atlas Spark recipe corpus, embedded at compile time."
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
