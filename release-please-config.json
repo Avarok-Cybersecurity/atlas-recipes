@@ -7,7 +7,20 @@
       "changelog-path": "CHANGELOG.md"
     }
   },
-  "plugins": ["cargo-workspace"],
+  "plugins": [
+    "cargo-workspace",
+    {
+      "type": "linked-versions",
+      "groupName": "atlasctl",
+      "components": [
+        "atlas-recipes-data",
+        "atlasctl-protocol",
+        "atlasctl-core",
+        "atlasctl-agent",
+        "atlasctl"
+      ]
+    }
+  ],
   "separate-pull-requests": false,
   "include-component-in-tag": false
 }
