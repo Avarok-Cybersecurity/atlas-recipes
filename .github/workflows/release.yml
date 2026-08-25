@@ -59,6 +59,14 @@ jobs:
           ref: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # release-please bumps versions in Cargo.toml but does not reliably
+      # update every matching entry in Cargo.lock — v0.1.1 shipped with
+      # atlasctl-protocol still at 0.1.0 in the lock, which made `--locked`
+      # refuse and killed the release before it built anything. This resolves
+      # workspace members only, so external dependencies stay pinned and
+      # `--locked` below still means what it says.
+      - run: cargo update --workspace
+
       # Re-verify at the exact commit being published. CI passing on main is
       # not the same statement as "this tag is good".
       - run: cargo test --workspace --locked
