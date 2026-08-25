@@ -2,7 +2,7 @@
 [package]
 name = "atlasctl"
 description = "Launch Atlas inference recipes on NVIDIA DGX Spark and other local accelerators."
-version = "0.1.1"
+version = "0.1.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
