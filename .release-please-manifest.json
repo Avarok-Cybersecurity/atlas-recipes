@@ -1,3 +1,6 @@
 {
-  ".": "0.1.0"
+  ".": "0.1.1",
+  "crates/atlasctl": "0.1.1",
+  "crates/atlasctl-agent": "0.1.1",
+  "crates/atlasctl-core": "0.1.1"
 }
