@@ -8,6 +8,7 @@ pub mod guard;
 pub mod launcher;
 pub mod server;
 pub mod session;
+pub mod telemetry;
 pub mod token;
 
 /// Port the browser control channel listens on.

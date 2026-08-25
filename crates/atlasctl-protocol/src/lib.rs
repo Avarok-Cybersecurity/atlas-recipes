@@ -10,10 +10,12 @@
 pub mod id;
 pub mod msg;
 pub mod settings;
+pub mod telemetry;
 
 pub use id::{RecipeId, RecipeIdError};
 pub use msg::{AgentError, ClientMsg, RecipeInfo, RunningLaunch, ServerMsg};
 pub use settings::{Bound, Group, SettingError, SettingSpec, SettingValue};
+pub use telemetry::{DeviceStats, EngineStats, LaunchPhase, Stats, TelemetryCaps};
 
 /// Protocol version this build speaks.
 ///
