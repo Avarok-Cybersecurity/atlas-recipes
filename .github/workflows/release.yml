@@ -88,7 +88,7 @@ jobs:
   preflight:
     name: preflight at the tag
     needs: [resolve]
-    if: needs.resolve.outputs.release == 'true'
+    if: ${{ !cancelled() && needs.resolve.outputs.release == 'true' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -115,6 +115,7 @@ jobs:
   build:
     name: build ${{ matrix.target }}
     needs: [resolve, preflight]
+    if: ${{ !cancelled() && needs.resolve.outputs.release == 'true' && needs.preflight.result == 'success' }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -169,6 +170,7 @@ jobs:
   github-release:
     name: publish release assets
     needs: [resolve, build]
+    if: ${{ !cancelled() && needs.resolve.outputs.release == 'true' && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -193,6 +195,7 @@ jobs:
   publish-crates:
     name: crates.io
     needs: [resolve, github-release]
+    if: ${{ !cancelled() && needs.resolve.outputs.release == 'true' && needs['github-release'].result == 'success' }}
     runs-on: ubuntu-24.04
     environment: crates-io
     permissions:
@@ -226,6 +229,7 @@ jobs:
   wheels:
     name: wheel ${{ matrix.target }}
     needs: [resolve, preflight]
+    if: ${{ !cancelled() && needs.resolve.outputs.release == 'true' && needs.preflight.result == 'success' }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -278,6 +282,7 @@ jobs:
   sdist:
     name: sdist
     needs: [resolve, preflight]
+    if: ${{ !cancelled() && needs.resolve.outputs.release == 'true' && needs.preflight.result == 'success' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -298,6 +303,7 @@ jobs:
   publish-pypi:
     name: PyPI
     needs: [resolve, github-release, wheels, sdist]
+    if: ${{ !cancelled() && needs.resolve.outputs.release == 'true' && needs['github-release'].result == 'success' && needs.wheels.result == 'success' && needs.sdist.result == 'success' }}
     runs-on: ubuntu-24.04
     environment: pypi
     permissions:
@@ -319,6 +325,7 @@ jobs:
   smoke-install:
     name: smoke ${{ matrix.runner }}
     needs: [resolve, github-release]
+    if: ${{ !cancelled() && needs.resolve.outputs.release == 'true' && needs['github-release'].result == 'success' }}
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -333,3 +340,34 @@ jobs:
           sh scripts/install.sh
           "$HOME/.local/bin/atlasctl" --version
           "$HOME/.local/bin/atlasctl" list | head -5
+
+  # Twice now a release run reported success while every publish job was
+  # skipped. A green run that shipped nothing is the failure, so it is asserted
+  # here rather than left to be noticed by a 404 on the install path.
+  verify-published:
+    name: assert the release actually shipped
+    needs: [resolve, github-release, publish-crates, publish-pypi, smoke-install]
+    if: ${{ !cancelled() && needs.resolve.outputs.release == 'true' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: every publish job must have succeeded
+        env:
+          GH_RELEASE: ${{ needs['github-release'].result }}
+          CRATES: ${{ needs['publish-crates'].result }}
+          PYPI: ${{ needs['publish-pypi'].result }}
+          SMOKE: ${{ needs['smoke-install'].result }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -eu
+          fail=0
+          for pair in "github-release:$GH_RELEASE" "crates.io:$CRATES" \
+                      "PyPI:$PYPI" "smoke-install:$SMOKE"; do
+            name=${pair%%:*}; result=${pair#*:}
+            printf '%-16s %s\n' "$name" "$result"
+            [ "$result" = success ] || fail=1
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::release $TAG did not ship: at least one publish job did not succeed"
+            exit 1
+          fi
+          echo "release $TAG shipped on every channel"
