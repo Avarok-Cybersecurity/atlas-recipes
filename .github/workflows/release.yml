@@ -178,6 +178,99 @@ jobs:
             cargo publish -p "$crate" --locked
           done
 
+  wheels:
+    name: wheel ${{ matrix.target }}
+    needs: [preflight]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: aarch64-unknown-linux-musl, runner: ubuntu-24.04-arm }
+          - { target: x86_64-unknown-linux-musl,  runner: ubuntu-24.04 }
+          - { target: aarch64-apple-darwin,       runner: macos-14 }
+          - { target: x86_64-apple-darwin,        runner: macos-14 }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
+      # A statically-linked musl binary satisfies the manylinux policy trivially,
+      # so each Linux target is emitted twice from one build: manylinux for glibc
+      # hosts and musllinux for Alpine. The binary is identical; only the tag
+      # differs, which is what makes `uvx atlas-ctl` resolve on both.
+      - name: build wheel (manylinux)
+        if: contains(matrix.target, 'linux-musl')
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --manifest-path crates/atlasctl/Cargo.toml
+          manylinux: "2_17"
+      - name: build wheel (musllinux)
+        if: contains(matrix.target, 'linux-musl')
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --manifest-path crates/atlasctl/Cargo.toml
+          manylinux: musllinux_1_2
+      - name: build wheel (macos)
+        if: contains(matrix.target, 'apple-darwin')
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --manifest-path crates/atlasctl/Cargo.toml
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.target }}
+          path: dist/*.whl
+
+  sdist:
+    name: sdist
+    needs: [preflight]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
+      # Published for source availability under the AGPL, and for platforms the
+      # wheel matrix does not cover. Building it needs a Rust toolchain, which
+      # the project README says.
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist --manifest-path crates/atlasctl/Cargo.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: dist/*.tar.gz
+
+  publish-pypi:
+    name: PyPI
+    needs: [release-please, github-release, wheels, sdist]
+    runs-on: ubuntu-24.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      # Trusted publishing, so no PyPI API token is stored in this repository.
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          # Re-running a partially-failed release must not fail on files that
+          # already went out.
+          skip-existing: true
+
   smoke-install:
     name: smoke ${{ matrix.runner }}
     needs: [github-release]

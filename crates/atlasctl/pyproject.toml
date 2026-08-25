@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# Packages the Rust binary as a Python wheel so `uvx atlas-ctl` works with no
+# install step. There is no Python code here: maturin's `bin` bindings put the
+# compiled executable straight into the wheel's scripts directory.
+#
+# The distribution is named `atlas-ctl` rather than `atlasctl` because the
+# latter is already taken on PyPI by an unrelated project. The console script
+# keeps the real name, so `uv tool install atlas-ctl` still gives you
+# `atlasctl` on PATH.
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "atlas-ctl"
+description = "Launch Atlas inference recipes on NVIDIA DGX Spark and other local accelerators."
+readme = "README.md"
+license = "AGPL-3.0-only"
+requires-python = ">=3.9"
+keywords = ["llm", "inference", "dgx-spark", "gb10", "atlas"]
+classifiers = [
+  "Environment :: GPU :: NVIDIA CUDA",
+  "Intended Audience :: Developers",
+  "Programming Language :: Rust",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://atlasinference.io"
+Repository = "https://github.com/Avarok-Cybersecurity/atlas-recipes"
+
+[tool.maturin]
+bindings = "bin"
+manifest-path = "Cargo.toml"
+# The binary is self-contained, so the wheel carries no Python ABI tag.
+strip = true
