@@ -85,15 +85,70 @@ jobs:
             echo "release=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # release-please rewrites the version in every workspace manifest but updates
+  # Cargo.lock only for the members its own discovery finds — its log reports
+  # "updating atlasctl / atlasctl-agent / atlasctl-core" and never
+  # atlasctl-protocol, whose lock entry therefore drifts one version behind on
+  # every release. That is what made v0.1.1 unbuildable, and adding protocol to
+  # .release-please-manifest.json did not change the set it updates.
+  #
+  # Rather than keep guessing at that discovery logic, the invariant is enforced
+  # on the artifact: after release-please writes the branch, the lock must match
+  # the manifests, and if it does not it is repaired in place. The tag is cut
+  # from this branch, so the tag then carries a lock that builds. The repair is
+  # idempotent (release-please rebuilds the branch each run, so this re-applies)
+  # and loud, so a silent recurrence is not possible.
+  sync-release-lock:
+    name: sync the release PR's Cargo.lock
+    needs: [release-please]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        id: co
+        continue-on-error: true
+        with:
+          ref: release-please--branches--main
+          fetch-depth: 1
+      - if: steps.co.outcome == 'success'
+        uses: dtolnay/rust-toolchain@stable
+      - if: steps.co.outcome == 'success'
+        name: repair the lock if release-please left it behind
+        run: |
+          set -eu
+          if cargo metadata --locked --format-version 1 >/dev/null 2>&1; then
+            echo "release PR lock already matches its manifests"
+            exit 0
+          fi
+          echo "::warning::release-please left Cargo.lock behind its manifests; repairing"
+          # --workspace resolves workspace members only, so external
+          # dependencies stay exactly as pinned and --locked keeps its meaning.
+          cargo update --workspace
+          # If the lock check failed but resolving workspace members changed
+          # nothing, the cause is something other than version drift and this
+          # job must not paper over it.
+          if git diff --quiet -- Cargo.lock; then
+            echo "::error::Cargo.lock failed --locked but resolving the workspace changed nothing."
+            echo "::error::Something other than release-please version drift is wrong here."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "chore: sync Cargo.lock with the versions release-please wrote"
+          git push origin HEAD:release-please--branches--main
+
   # A pull request opened by the default GITHUB_TOKEN does not trigger
   # workflows, so the standing release PR gets no CI — which is how three
   # separate releases were cut from a tree that could not build. Push events do
-  # run, so the pending release branch is verified from here instead. Advisory
-  # (continue-on-error): this must surface a bad release PR, never block an
-  # unrelated push to main.
+  # run, so the pending release branch is verified from here instead, after the
+  # repair above. Advisory (continue-on-error): this must surface a bad release
+  # PR, never block an unrelated push to main.
   check-release-pr:
     name: verify the pending release PR
-    needs: [release-please]
+    needs: [release-please, sync-release-lock]
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     continue-on-error: true
