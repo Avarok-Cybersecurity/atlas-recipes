@@ -85,6 +85,38 @@ jobs:
             echo "release=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # A pull request opened by the default GITHUB_TOKEN does not trigger
+  # workflows, so the standing release PR gets no CI — which is how three
+  # separate releases were cut from a tree that could not build. Push events do
+  # run, so the pending release branch is verified from here instead. Advisory
+  # (continue-on-error): this must surface a bad release PR, never block an
+  # unrelated push to main.
+  check-release-pr:
+    name: verify the pending release PR
+    needs: [release-please]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: release-please--branches--main
+          fetch-depth: 1
+        continue-on-error: true
+        id: co
+      - if: steps.co.outcome == 'success'
+        uses: dtolnay/rust-toolchain@stable
+      - if: steps.co.outcome == 'success'
+        name: the release PR's lock must match its manifests
+        run: |
+          set -eu
+          if ! cargo metadata --locked --format-version 1 >/dev/null; then
+            echo "::error::The pending release PR has a stale Cargo.lock."
+            echo "::error::Merging it would cut a tag that cannot build."
+            exit 1
+          fi
+          echo "pending release PR is publishable"
+
   preflight:
     name: preflight at the tag
     needs: [resolve]
@@ -96,13 +128,21 @@ jobs:
           ref: ${{ needs.resolve.outputs.tag }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # release-please bumps versions in Cargo.toml but does not reliably
-      # update every matching entry in Cargo.lock — v0.1.1 shipped with
-      # atlasctl-protocol still at 0.1.0 in the lock, which made `--locked`
-      # refuse and killed the release before it built anything. This resolves
-      # workspace members only, so external dependencies stay pinned and
-      # `--locked` below still means what it says.
-      - run: cargo update --workspace
+      # This step used to run `cargo update --workspace`, which REPAIRED a
+      # stale lock — so preflight passed while every job in the build matrix,
+      # which uses --locked without the repair, failed at the same tag. A
+      # preflight that hides the condition it exists to catch is worse than
+      # none. Assert instead: a tag whose lock does not already match its
+      # manifests is not publishable, and says so in eight seconds rather than
+      # after four runners have each rediscovered it.
+      - name: the lock must already match the manifests
+        run: |
+          set -eu
+          if ! cargo metadata --locked --format-version 1 >/dev/null; then
+            echo "::error::Cargo.lock at this tag does not match the manifests."
+            echo "::error::Run 'cargo update --workspace' on main and commit the result."
+            exit 1
+          fi
 
       # Re-verify at the exact commit being published. CI passing on main is
       # not the same statement as "this tag is good".
