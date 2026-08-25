@@ -4,9 +4,13 @@
 
 //! Recipe model and deterministic recipe-to-docker translation.
 
+pub mod chain;
+pub mod docker;
 pub mod flags;
+pub mod host;
 pub mod recipe;
 pub mod scalar;
 
+pub use docker::{DockerCommand, LaunchProfile};
 pub use recipe::{NotLaunchable, Provenance, Recipe, RecipeError, RuntimeKind, Topology};
 pub use scalar::ScalarValue;
