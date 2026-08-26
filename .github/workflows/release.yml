@@ -385,13 +385,12 @@ jobs:
       # so each Linux target is emitted twice from one build: manylinux for glibc
       # hosts and musllinux for Alpine. The binary is identical; only the tag
       # differs, which is what makes `uvx pyatlasctl` resolve on both.
-      - name: build wheel (manylinux)
-        if: contains(matrix.target, 'linux-musl')
-        uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.target }}
-          args: --release --out dist --manifest-path crates/atlasctl/Cargo.toml
-          manylinux: "2_17"
+      # Built ONCE, in the musllinux container, because that is the only one
+      # of the two that has a musl cross-compiler. Building the same musl
+      # target again under manylinux_2_17 — which is glibc-based — failed in
+      # `ring`'s build script with `failed to find tool
+      # "x86_64-linux-musl-gcc"`, and took the whole PyPI leg of the v0.2.0
+      # release with it.
       - name: build wheel (musllinux)
         if: contains(matrix.target, 'linux-musl')
         uses: PyO3/maturin-action@v1
@@ -399,6 +398,52 @@ jobs:
           target: ${{ matrix.target }}
           args: --release --out dist --manifest-path crates/atlasctl/Cargo.toml
           manylinux: musllinux_1_2
+      # The goal was always two TAGS on one artifact, not two builds. The
+      # binary is statically linked against musl and carries no interpreter
+      # dependency, so it runs on a glibc host as well — which is exactly what
+      # manylinux_2_17 asserts. Retagging a copy states that; rebuilding it in
+      # a glibc container never did.
+      - name: also publish it under the manylinux tag
+        if: contains(matrix.target, 'linux-musl')
+        run: |
+          set -eu
+          # Runner images are PEP 668 "externally managed", so a bare
+          # `pip install` refuses. A venv is the sanctioned way and costs a
+          # second.
+          python3 -m venv /tmp/whl
+          /tmp/whl/bin/pip install --quiet --upgrade wheel
+          arch="${{ matrix.target }}"; arch="${arch%%-*}"
+          shopt -s nullglob
+
+          built=(dist/*musllinux*.whl)
+          if [ ${#built[@]} -eq 0 ]; then
+            echo "::error::the musllinux build produced no wheel"; exit 1
+          fi
+          for w in "${built[@]}"; do
+            work=$(mktemp -d); cp "$w" "$work/"
+            # --remove leaves exactly the retagged copy behind in $work.
+            /tmp/whl/bin/wheel tags --platform-tag "manylinux_2_17_${arch}" \
+              --remove "$work/$(basename "$w")"
+            out=("$work"/*manylinux*.whl)
+            if [ ${#out[@]} -eq 0 ]; then
+              echo "::error::retagging $w produced no manylinux wheel"; exit 1
+            fi
+            mv "${out[@]}" dist/
+            rm -rf "$work"
+          done
+
+          # Counted, never `ls`-tested: with nullglob an unmatched glob expands
+          # to NOTHING, so `ls dist/*manylinux*.whl` degrades to a bare `ls` of
+          # the working directory and succeeds. That guard would have passed
+          # while publishing no manylinux wheel at all.
+          musl=(dist/*musllinux*.whl); many=(dist/*manylinux*.whl)
+          echo "wheels to publish: ${#musl[@]} musllinux, ${#many[@]} manylinux"
+          printf '  %s\n' "${musl[@]}" "${many[@]}"
+          if [ ${#musl[@]} -eq 0 ] || [ ${#many[@]} -eq 0 ]; then
+            echo "::error::both tags are required; pip picks by platform tag, so a"
+            echo "::error::missing one silently serves no wheel to that class of host."
+            exit 1
+          fi
       - name: build wheel (macos)
         if: contains(matrix.target, 'apple-darwin')
         uses: PyO3/maturin-action@v1
