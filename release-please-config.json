@@ -6,7 +6,8 @@
       "package-name": "atlasctl",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
-        "Cargo.toml"
+        "Cargo.toml",
+        "crates/atlasctl/Cargo.toml"
       ]
     }
   },
