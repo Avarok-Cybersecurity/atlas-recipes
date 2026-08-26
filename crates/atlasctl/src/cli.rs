@@ -84,6 +84,38 @@ pub enum AgentCmd {
     /// web page cannot know a code it did not cause a human to walk over and
     /// read.
     Pair(AgentPairArgs),
+    /// Install the agent so it starts on login and survives a reboot.
+    ///
+    /// A `systemd --user` unit on Linux, a LaunchAgent on macOS. Both run as
+    /// you, never as root: the agent already has docker access, and on Linux
+    /// that is root-equivalent, so a root-owned service on top would widen a
+    /// surface that is wide enough already.
+    Install(AgentInstallArgs),
+    /// Remove the background service. Leaves the binary and your pairings.
+    Uninstall,
+}
+
+/// `agent install` arguments.
+///
+/// These are written into the unit, so they are what the service uses on every
+/// future start — not just this one.
+#[derive(Args, Debug)]
+pub struct AgentInstallArgs {
+    /// Port the browser channel should listen on.
+    #[arg(long, default_value_t = atlasctl_agent::DEFAULT_PORT)]
+    pub port: u16,
+
+    /// Install as a control node: discover, pair and monitor, but never launch.
+    ///
+    /// For a laptop driving headless machines. Recorded in the unit, so the
+    /// machine stays control-only across a reboot rather than quietly becoming
+    /// something that runs models.
+    #[arg(long)]
+    pub client: bool,
+
+    /// Do not advertise on the network, and do not listen for other agents.
+    #[arg(long)]
+    pub no_discovery: bool,
 }
 
 /// `agent pair` arguments.

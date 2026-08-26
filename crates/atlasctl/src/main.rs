@@ -11,6 +11,7 @@ mod httpscrape;
 mod launchtelemetry;
 mod peertransport;
 mod rankservice;
+mod service;
 mod validate;
 
 use anyhow::Result;
@@ -50,6 +51,8 @@ fn run() -> Result<()> {
         Command::Agent(AgentCmd::Token(a)) => commands::agent::token(&a),
         Command::Agent(AgentCmd::Status) => commands::agent::status(),
         Command::Agent(AgentCmd::Pair(a)) => commands::agent::pair(&a),
+        Command::Agent(AgentCmd::Install(a)) => commands::service::install(&a),
+        Command::Agent(AgentCmd::Uninstall) => commands::service::uninstall(),
         Command::Peer(PeerCmd::List) => commands::peer::list(),
         Command::Peer(PeerCmd::Add(a)) => commands::peer::add(&a),
         Command::Peer(PeerCmd::Remove(a)) => commands::peer::remove(&a),

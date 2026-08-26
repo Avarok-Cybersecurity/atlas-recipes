@@ -25,6 +25,13 @@ pub trait FileSystem: Send + Sync {
 
     /// List files directly under `dir` with the given extension, sorted.
     fn list_files(&self, dir: &Path, extension: &str) -> Result<Vec<PathBuf>>;
+
+    /// Delete a file. Removing something already absent is success.
+    ///
+    /// Idempotent on purpose: uninstalling twice, or uninstalling something a
+    /// half-finished install never wrote, must not fail. An error here would
+    /// leave the caller unable to tell "nothing to do" from "could not do it".
+    fn remove_file(&self, path: &Path) -> Result<()>;
 }
 
 /// The real implementation.
@@ -75,6 +82,14 @@ impl FileSystem for StdFileSystem {
         }
         out.sort();
         Ok(out)
+    }
+
+    fn remove_file(&self, path: &Path) -> Result<()> {
+        match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e).with_context(|| format!("could not remove {}", path.display())),
+        }
     }
 }
 
@@ -153,6 +168,11 @@ mod mock {
                 .collect();
             out.sort();
             Ok(out)
+        }
+
+        fn remove_file(&self, path: &Path) -> Result<()> {
+            self.files.lock().expect("lock").remove(path);
+            Ok(())
         }
     }
 }

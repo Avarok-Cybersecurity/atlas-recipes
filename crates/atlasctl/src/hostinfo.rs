@@ -39,6 +39,20 @@ pub fn config_dir() -> Result<std::path::PathBuf> {
     Ok(std::path::PathBuf::from(base).join("atlasctl"))
 }
 
+/// This user's home directory.
+///
+/// Required, not defaulted: every path the service installer writes hangs off
+/// it, and guessing would put a unit file somewhere the supervisor does not
+/// look — which fails as "installed successfully, never starts".
+///
+/// # Errors
+/// If `HOME` is not set.
+pub fn home_dir() -> Result<std::path::PathBuf> {
+    std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .context("HOME is not set, so there is nowhere to install a user service")
+}
+
 /// Where atlasctl caches registry clones.
 pub fn cache_dir() -> Result<std::path::PathBuf> {
     let base = std::env::var("XDG_CACHE_HOME")

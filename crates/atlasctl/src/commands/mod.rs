@@ -9,6 +9,7 @@ pub mod peer;
 pub mod recipe;
 pub mod registry;
 pub mod run;
+pub mod service;
 
 use anyhow::Result;
 use atlasctl_core::io::StdFileSystem;
