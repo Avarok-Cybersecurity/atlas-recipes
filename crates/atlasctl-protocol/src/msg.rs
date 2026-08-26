@@ -13,6 +13,7 @@
 //! to it.
 
 use crate::id::RecipeId;
+use crate::msg::fleet::{FleetEvent, RankPrepare, RankPreview};
 use crate::settings::{SettingError, SettingSpec, SettingValue};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -63,6 +64,94 @@ pub enum ClientMsg {
         id: u32,
         /// Which recipe to stop.
         recipe: RecipeId,
+    },
+
+    /// Ask for the current fleet: this node and every peer it knows about.
+    ListNodes {
+        /// Correlates the reply.
+        id: u32,
+    },
+
+    /// Subscribe to fleet changes — node arrivals, vitals, alerts, run phases.
+    ///
+    /// Subscription rather than polling so the page can be quiet when nothing
+    /// is happening, which is most of the time.
+    WatchFleet {
+        /// Correlates the reply.
+        id: u32,
+        /// Whether to receive vitals samples, or only structural changes. A
+        /// background tab keeps structure and drops the 1 Hz telemetry.
+        vitals: bool,
+    },
+
+    /// Begin pairing with a discovered peer, using a code read off that machine.
+    ///
+    /// The code is never generated here. It originates on the target, which is
+    /// what stops a web page from pairing anything on its own.
+    PairPeer {
+        /// Correlates the reply.
+        id: u32,
+        /// Which discovered peer.
+        node: crate::fleet::NodeId,
+        /// The digits the user read off the other machine.
+        code: String,
+    },
+
+    /// Drop trust in a peer. Takes effect on its next connection attempt.
+    UnpairPeer {
+        /// Correlates the reply.
+        id: u32,
+        /// Which peer.
+        node: crate::fleet::NodeId,
+    },
+
+    /// Render the per-rank commands a cluster launch would run, without running
+    /// them. Each rank's command is rendered by that rank's own agent, so the
+    /// preview cannot drift from what executes.
+    PreviewCluster {
+        /// Correlates the reply.
+        id: u32,
+        /// Recipe to launch.
+        recipe: RecipeId,
+        /// Nodes to use, in no particular order.
+        nodes: Vec<crate::fleet::NodeId>,
+        /// Which node serves rank 0.
+        head: crate::fleet::NodeId,
+        /// Bounded overrides.
+        settings: BTreeMap<String, SettingValue>,
+    },
+
+    /// Ask every selected node to validate and reserve. Nothing starts.
+    PrepareCluster {
+        /// Correlates the reply.
+        id: u32,
+        /// Recipe to launch.
+        recipe: RecipeId,
+        /// Nodes to use.
+        nodes: Vec<crate::fleet::NodeId>,
+        /// Which node serves rank 0.
+        head: crate::fleet::NodeId,
+        /// Bounded overrides.
+        settings: BTreeMap<String, SettingValue>,
+    },
+
+    /// Start every rank of a prepared cluster.
+    ///
+    /// The epoch pins this to one prepare, so a stale prepare cannot be
+    /// committed against a plan that has since changed.
+    CommitCluster {
+        /// Correlates the reply.
+        id: u32,
+        /// Epoch from the prepare reply.
+        epoch: String,
+    },
+
+    /// Abandon a prepare, releasing every reservation.
+    AbortCluster {
+        /// Correlates the reply.
+        id: u32,
+        /// Epoch from the prepare reply.
+        epoch: String,
     },
 
     /// Ask what is running.
@@ -149,6 +238,60 @@ pub enum ServerMsg {
         id: u32,
         /// Which recipe.
         recipe: RecipeId,
+    },
+
+    /// The fleet, in full. Sent in reply to `ListNodes` and once on `WatchFleet`.
+    Nodes {
+        /// Correlates the request.
+        id: u32,
+        /// This node first, then peers.
+        nodes: Vec<crate::fleet::NodeDescriptor>,
+    },
+
+    /// One thing changed about the fleet.
+    ///
+    /// Sent unsolicited to a watcher. Vitals are coalesced newest-wins by the
+    /// agent — losing a 1 Hz sample costs nothing — while structural changes
+    /// and alerts are never dropped.
+    FleetEvent {
+        /// What happened.
+        event: FleetEvent,
+    },
+
+    /// A pairing finished, one way or the other.
+    PairResult {
+        /// Correlates the request.
+        id: u32,
+        /// The peer.
+        node: crate::fleet::NodeId,
+        /// Whether trust was established.
+        paired: bool,
+        /// Short words both humans can compare, when it succeeded.
+        verification: Option<String>,
+        /// Why not, when it failed.
+        detail: String,
+    },
+
+    /// A cluster preview: the exact command each rank would run.
+    ClusterPreview {
+        /// Correlates the request.
+        id: u32,
+        /// One entry per rank, rank 0 first.
+        ranks: Vec<RankPreview>,
+        /// Warning about the fabric, when the plan would not run on RDMA.
+        link_warning: Option<String>,
+    },
+
+    /// The outcome of a prepare across every rank.
+    ClusterPrepared {
+        /// Correlates the request.
+        id: u32,
+        /// Pins a later commit to this prepare.
+        epoch: String,
+        /// Per-rank outcome, rank 0 first.
+        ranks: Vec<RankPrepare>,
+        /// Whether every rank accepted, and a commit may therefore proceed.
+        may_commit: bool,
     },
 
     /// Something failed.
@@ -263,6 +406,8 @@ pub enum AgentError {
         detail: String,
     },
 }
+
+pub mod fleet;
 
 #[cfg(test)]
 mod tests;
