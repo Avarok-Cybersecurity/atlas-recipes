@@ -13,6 +13,11 @@ spark dump-serve-options > vendor/serve-options.v1.json
 cargo test -p atlasctl-core        # coverage check
 ```
 
+`dump-serve-options` is a hidden subcommand added in Avarok-Cybersecurity/atlas#759.
+A `spark` older than that will answer `unrecognized subcommand`, which is the
+honest failure: there is no way to produce this file from a build that cannot
+describe itself, and hand-editing it would defeat the entire point.
+
 **This is not a public format.** The engine deliberately refuses to derive
 `Serialize` on `ServeArgs`, because a cross-repo wire format makes every rename
 a compatibility break. A committed snapshot is the opposite of that promise: a
