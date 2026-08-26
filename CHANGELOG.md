@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.2.0](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.1.3...v0.2.0) (2026-08-26)
+
+
+### Features
+
+* fleet control plane — discovery, pairing, and multi-node agents ([#40](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/40)) ([d181b56](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/d181b56e53859285820cb0ed73680334f8ab77df))
+* two-phase cluster launch across paired machines ([#42](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/42)) ([a94088a](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/a94088a435a337e782b03f51f1e6e9c056964084))
+
+
+### Bug Fixes
+
+* **agent:** a control-only node must not tell peers it can launch ([#51](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/51)) ([71ae1e9](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/71ae1e99954da3330c44e558e647d19ce50cd095))
+* **cluster:** choose, verify and pin the link the collective runs on ([#45](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/45)) ([99d78bb](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/99d78bb63a0e078e660da6ca818fec0bafbed6de))
+* **release:** linked-versions was grouping nothing ([#48](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/48)) ([774f8f7](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/774f8f72b612f2e75a07838dce1726e24cd151e6))
+* **release:** my own check blocked the repair it was meant to protect ([#50](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/50)) ([816419e](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/816419e7a83bcf8610a7b900f15125a6aa99e41a))
+* **release:** repair a manifest entry release-please left behind ([#52](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/52)) ([e0172ba](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/e0172ba02df90c3104b386e8dedb763fa0d88023))
+* **release:** repair the requirements where the lock is already repaired ([#49](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/49)) ([7387328](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/738732890a3da6599882cf7b90d1296edac5d05f))
+* **release:** stale manifest split the versions; bump never reached the requirements ([#47](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/47)) ([7c116f2](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/7c116f21b57912271b398a5267b41115a9c9b59a))
+* **release:** the repair step threw away the manifest fix it had just made ([#53](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/53)) ([d690a6b](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/d690a6b7c424a4dd1571747af6fe47c9bfe1e111))
+* **release:** workspace dep version drift blocks every release ([#46](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/46)) ([2472171](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/2472171c1b6f29b9eb49f1ed4eeadba48d3d63c6))
+* **security:** parse the rendezvous address before it reaches argv ([#44](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/44)) ([3d48fe6](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/3d48fe60bb1e6b8e845f8db20946d8189b0841c4))
+
 ## [0.1.3](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.1.2...v0.1.3) (2026-08-26)
 
 
