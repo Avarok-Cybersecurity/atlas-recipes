@@ -66,5 +66,36 @@ pub async fn dial_and_pair(
         (id, crate::pairing::binding_from_client(conn)?)
     };
 
-    run(&mut tls, Role::Initiator, identity, peer_id, code, binding).await
+    run(&mut tls, Role::Initiator, identity, peer_id, code, binding)
+        .await
+        .map_err(explain)
+}
+
+/// Turn a refusal into something the operator can act on.
+///
+/// The interesting failure is the one that arrives as a TLS alert. The other
+/// machine only admits an unpinned peer while a join window is open, so it
+/// hangs up during the handshake — before the code is ever offered — when the
+/// invitation has expired, has already been used, or was never minted. What
+/// reaches the operator without this is `received fatal alert: HandshakeFailure`
+/// or a bare broken pipe, on the machine being added, from someone who just
+/// pasted a command they did not write.
+///
+/// A *wrong* code fails later and differently, at key confirmation, and is left
+/// to say so itself.
+fn explain(e: anyhow::Error) -> anyhow::Error {
+    let text = format!("{e:#}");
+    let refused_at_handshake = text.contains("HandshakeFailure")
+        || text.contains("Broken pipe")
+        || text.contains("CertificateUnknown")
+        || text.contains("certificate")
+        || text.contains("connection closed");
+    if !refused_at_handshake {
+        return e;
+    }
+    e.context(concat!(
+        "that machine is not accepting a new member right now.\n",
+        "An invitation is good for one machine, once, and it expires. ",
+        "Mint a fresh one and run this again."
+    ))
 }
