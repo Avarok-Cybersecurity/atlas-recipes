@@ -194,7 +194,9 @@ impl RankService for LocalRankService {
             if let Some(r) = held.as_ref()
                 && r.epoch != epoch
             {
-                return refuse(RefusalReason::AlreadyRunning(r.recipe.clone()));
+                return refuse(RefusalReason::Reserved {
+                    recipe: r.recipe.clone(),
+                });
             }
         }
 

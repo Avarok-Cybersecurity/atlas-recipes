@@ -122,7 +122,10 @@ fn a_second_clusters_prepare_is_refused_while_one_is_held() {
     let PrepareReply::Refused { reason } = svc.prepare("second", &a) else {
         panic!("a held reservation must block another cluster");
     };
-    assert!(reason.contains("already running"), "{reason}");
+    // "already running" would send an operator looking for a container that
+    // does not exist; what they need to do is abandon the other launch.
+    assert!(reason.contains("already reserved"), "{reason}");
+    assert!(reason.contains("abort that launch"), "{reason}");
 }
 
 /// A retried prepare after a dropped connection is ordinary, not a second

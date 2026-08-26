@@ -268,6 +268,19 @@ pub enum RefusalReason {
     /// Something is already running here.
     #[error("{0} is already running on this node")]
     AlreadyRunning(String),
+    /// This node has already agreed to be a rank of a different launch.
+    ///
+    /// Distinct from `AlreadyRunning` because nothing has started: an operator
+    /// told "already running" goes looking for a container that is not there.
+    /// What they actually need to do is abandon the other launch.
+    #[error(
+        "this node is already reserved for a launch of {recipe}; \
+         abort that launch, or wait for it to finish, before starting another"
+    )]
+    Reserved {
+        /// Which recipe the outstanding reservation is for.
+        recipe: String,
+    },
     /// The container runtime is unavailable.
     #[error("the container runtime is not answering on this node")]
     DockerUnavailable,
