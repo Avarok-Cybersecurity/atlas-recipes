@@ -19,6 +19,9 @@ use atlasctl_core::docker::profile::{NvidiaDevices, ROOTLESS_V1};
 use atlasctl_core::docker::translate::{DEFAULT_MASTER_PORT, LaunchContext, Placement, translate};
 use atlasctl_core::host::HostSnapshot;
 use atlasctl_core::recipe::{Provenance, Recipe};
+use atlasctl_core::scalar::ScalarValue;
+use atlasctl_core::settings::{self, Disposition};
+use atlasctl_protocol::settings::SettingValue;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -183,5 +186,60 @@ fn no_golden_is_orphaned() {
     assert!(
         orphans.is_empty(),
         "goldens with no matching recipe: {orphans:?}"
+    );
+}
+
+/// Every value a shipping recipe sets must satisfy the bound this project
+/// invented for it.
+///
+/// The engine's clap definition carries value sets but no ranges at all, so
+/// every `Int`/`Float` bound in the disposition table is atlasctl's own
+/// judgement — and judgement drifts from the corpus silently. It did: the first
+/// bound written for `request_timeout` was `1..=86400`, while
+/// `qwen3.8-27b-nvfp4-throughput` ships `request_timeout: 0`, which the engine
+/// documents as "disables the deadline entirely". Nothing would have failed
+/// until an operator opened that recipe in the web form and was told its own
+/// value was out of range.
+#[test]
+fn every_shipped_recipe_value_satisfies_its_own_bound() {
+    let mut bad = Vec::new();
+
+    for e in atlas_recipes_data::all() {
+        let prov = Provenance::Builtin {
+            path: e.path.to_string(),
+        };
+        let Ok(recipe) = Recipe::parse(e.name, e.yaml, prov) else {
+            continue;
+        };
+        if !recipe.is_launchable() {
+            continue;
+        }
+
+        for (key, value) in &recipe.defaults {
+            // Only exposed keys have a bound to satisfy. A denied key is
+            // recipe-only by design, and an unclaimed one is the coverage
+            // check's problem, not this one's.
+            let Some(Disposition::Expose(spec)) = settings::dispositions()
+                .find(|(k, _)| k == key)
+                .map(|(_, d)| d)
+            else {
+                continue;
+            };
+            let wire = match value {
+                ScalarValue::Bool(b) => SettingValue::Bool(*b),
+                ScalarValue::Int(i) => SettingValue::Int(*i),
+                ScalarValue::Float(f) => SettingValue::Float(*f),
+                ScalarValue::Str(s) => SettingValue::Str(s.clone()),
+            };
+            if let Err(err) = spec.bound.to_bound().check(key, &wire) {
+                bad.push(format!("  {}: {key} = {value:?} — {err:?}", recipe.name));
+            }
+        }
+    }
+
+    assert!(
+        bad.is_empty(),
+        "a shipping recipe sets a value the web form would reject:\n{}",
+        bad.join("\n")
     );
 }

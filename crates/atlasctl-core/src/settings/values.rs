@@ -43,3 +43,17 @@ pub(super) const KV_DTYPES: &[&str] = &[
 
 /// Precisions for weights-adjacent settings, which are not the KV set.
 pub(super) const DTYPES: &[&str] = &["bf16", "fp8", "nvfp4"];
+
+/// Precisions the output projection accepts.
+///
+/// Transcribed from the engine's clap value set for `--lm-head-dtype`, which
+/// carries a `default` variant the weights-adjacent set does not.
+pub(super) const LM_HEAD_DTYPES: &[&str] = &["default", "bf16", "nvfp4", "fp8"];
+
+/// Precisions for the recurrent state carried between chunks.
+///
+/// `f16-pool` is the odd spelling in the engine's set: hyphen, not underscore.
+pub(super) const SSM_H_DTYPES: &[&str] = &["f32", "f16", "f16-pool"];
+
+/// When multi-token prediction runs.
+pub(super) const MTP_GATES: &[&str] = &["auto", "force"];

@@ -2,11 +2,16 @@
 
 //! The `spark serve` flag table.
 //!
-//! Generated from the reference implementation's `_ATLAS_FLAG_MAP` and
-//! `_ATLAS_BOOL_FLAGS` (sparkrun `runtimes/atlas.py`, lines 43-126) and kept in
-//! that exact declaration order, because emission order is part of the output
-//! contract: the website prints the same command string this table renders, and
-//! the golden corpus asserts it byte-for-byte.
+//! The first 48 entries came from the reference implementation's
+//! `_ATLAS_FLAG_MAP` and `_ATLAS_BOOL_FLAGS` (sparkrun `runtimes/atlas.py`,
+//! lines 43-126), in that exact declaration order, because emission order is
+//! part of the output contract: the website prints the same command string this
+//! table renders, and the golden corpus asserts it byte-for-byte. Later entries
+//! are appended rather than sorted in, for the same reason.
+//!
+//! What the table covers is no longer a matter of belief. `vendor/serve-options.v1.json`
+//! is reflected out of the engine's own clap definition, and `flags/coverage.rs`
+//! fails when a flag in it is neither claimed here nor excluded on the record.
 //!
 //! Two keys deliberately map to the same flag (`max_num_batched_tokens` and
 //! `max_prefill_tokens` both render `--max-prefill-tokens`). The reference
@@ -15,10 +20,10 @@
 
 use super::{FlagKind, FlagSpec};
 
-/// Every serve flag the `atlas` runtime understands: 48 keys, 8 of them bare toggles.
+/// Every serve flag the `atlas` runtime understands: 57 keys, 9 of them bare toggles.
 #[rustfmt::skip] // One line per flag: this is a lookup table, and reading it
 // against the reference implementation is the point.
-pub static ATLAS_FLAGS: [FlagSpec; 48] = [
+pub static ATLAS_FLAGS: [FlagSpec; 57] = [
     FlagSpec { key: "port", flag: "--port", kind: FlagKind::Value },
     FlagSpec { key: "host", flag: "--host", kind: FlagKind::Value },
     FlagSpec { key: "tensor_parallel", flag: "--tp-size", kind: FlagKind::Value },
@@ -67,4 +72,18 @@ pub static ATLAS_FLAGS: [FlagSpec; 48] = [
     FlagSpec { key: "high_speed_swap", flag: "--high-speed-swap", kind: FlagKind::BoolToggle },
     FlagSpec { key: "require_auth", flag: "--require-auth", kind: FlagKind::BoolToggle },
     FlagSpec { key: "api_key", flag: "--auth-token", kind: FlagKind::Value },
+    // Set by shipping recipes and silently dropped until 2026-08-26, when the
+    // engine snapshot made the omission visible. `video_allow_ffmpeg` is the
+    // one bare toggle among them: every one of these is written `key: true` in
+    // a recipe, and only the snapshot says which of those means `--flag` and
+    // which means `--flag true`.
+    FlagSpec { key: "lm_head_dtype", flag: "--lm-head-dtype", kind: FlagKind::Value },
+    FlagSpec { key: "ssm_h_dtype", flag: "--ssm-h-dtype", kind: FlagKind::Value },
+    FlagSpec { key: "gdn_fused_norm", flag: "--gdn-fused-norm", kind: FlagKind::Value },
+    FlagSpec { key: "ssm_batched_recurrent", flag: "--ssm-batched-recurrent", kind: FlagKind::Value },
+    FlagSpec { key: "ssm_tail_midchunk", flag: "--ssm-tail-midchunk", kind: FlagKind::Value },
+    FlagSpec { key: "mtp_gate", flag: "--mtp-gate", kind: FlagKind::Value },
+    FlagSpec { key: "prefill_varlen_batch", flag: "--prefill-varlen-batch", kind: FlagKind::Value },
+    FlagSpec { key: "request_timeout", flag: "--request-timeout", kind: FlagKind::Value },
+    FlagSpec { key: "video_allow_ffmpeg", flag: "--video-allow-ffmpeg", kind: FlagKind::BoolToggle },
 ];

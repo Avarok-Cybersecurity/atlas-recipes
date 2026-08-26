@@ -12,18 +12,18 @@ fn cfg(pairs: &[(&str, ScalarValue)]) -> BTreeMap<String, ScalarValue> {
 
 #[test]
 fn table_matches_the_reference_shape() {
-    assert_eq!(
-        ATLAS_FLAGS.len(),
-        48,
-        "flag count drifted from the reference"
-    );
+    // 48 from the reference implementation, plus the 9 it dropped. The counts
+    // are here to make a change deliberate, not to police it: what the table
+    // must *cover* is checked against the engine snapshot in `flags::coverage`,
+    // which is an authority this number is not.
+    assert_eq!(ATLAS_FLAGS.len(), 57, "flag count changed");
     assert_eq!(
         ATLAS_FLAGS
             .iter()
             .filter(|s| s.kind == FlagKind::BoolToggle)
             .count(),
-        8,
-        "bool-toggle count drifted from the reference"
+        9,
+        "bool-toggle count changed"
     );
 }
 
@@ -79,21 +79,71 @@ fn skip_suppresses_a_key_the_caller_supplies_itself() {
 
 #[test]
 fn unmapped_keys_are_reported_rather_than_dropped_in_silence() {
-    // `lm_head_dtype` is real: it is in four shipping recipes and the reference
-    // implementation drops it without a word. Regression-guard the reporting.
     let resolved = cfg(&[
         ("port", ScalarValue::Int(8888)),
-        ("lm_head_dtype", ScalarValue::Str("bf16".into())),
+        ("lm_hed_dtype", ScalarValue::Str("bf16".into())),
     ]);
     let (argv, unmapped) = render(&resolved, &[]);
     assert_eq!(argv, ["--port", "8888"]);
     assert_eq!(
         unmapped,
         [UnmappedKey {
-            key: "lm_head_dtype".into(),
+            key: "lm_hed_dtype".into(),
             rendered: "bf16".into()
         }]
     );
+}
+
+#[test]
+fn lm_head_dtype_reaches_the_command_line() {
+    // It is in four shipping recipes, one of which calls it a correctness pin,
+    // and both the reference implementation and this table dropped it without a
+    // word until the engine snapshot showed it was a real flag. Nothing about
+    // that failure was visible from a recipe, a log, or a running server.
+    let resolved = cfg(&[
+        ("port", ScalarValue::Int(8888)),
+        ("lm_head_dtype", ScalarValue::Str("bf16".into())),
+    ]);
+    let (argv, unmapped) = render(&resolved, &[]);
+    assert_eq!(argv, ["--port", "8888", "--lm-head-dtype", "bf16"]);
+    assert!(unmapped.is_empty());
+}
+
+#[test]
+fn a_toggle_claimed_from_the_snapshot_emits_bare() {
+    // `video_allow_ffmpeg: true` and `gdn_fused_norm: true` are written the
+    // same way and must not render the same way.
+    let resolved = cfg(&[
+        ("video_allow_ffmpeg", ScalarValue::Bool(true)),
+        ("gdn_fused_norm", ScalarValue::Bool(true)),
+    ]);
+    let (argv, unmapped) = render(&resolved, &[]);
+    assert!(unmapped.is_empty());
+    assert!(
+        argv.contains(&"--video-allow-ffmpeg".to_string())
+            && !argv.contains(&"--video-allow-ffmpeg=true".to_string()),
+        "a bare toggle takes no value: {argv:?}"
+    );
+    let i = argv
+        .iter()
+        .position(|a| a == "--gdn-fused-norm")
+        .expect("emitted");
+    assert_eq!(
+        argv[i + 1],
+        "true",
+        "a value flag takes its value: {argv:?}"
+    );
+}
+
+#[test]
+fn an_excluded_flag_can_say_why_rather_than_only_that() {
+    assert_eq!(
+        crate::flags::excluded_reason("master_addr"),
+        Some("derived from the placement, not the recipe")
+    );
+    // Claimed, so not excluded; and a typo is neither.
+    assert_eq!(crate::flags::excluded_reason("lm_head_dtype"), None);
+    assert_eq!(crate::flags::excluded_reason("lm_hed_dtype"), None);
 }
 
 #[test]

@@ -2,12 +2,27 @@
 
 //! What a remote client may set on a launch, and the check that enforces it.
 
+mod denied;
+mod memory;
 mod spec;
 mod table;
 mod values;
 
 pub use spec::{BoundSpec, Disposition, Spec};
-pub use table::DISPOSITIONS;
+
+/// Every flag and its disposition, in declaration order.
+///
+/// Three statics rather than one because the exposed half is a UI description
+/// and the denied half is a list of refusals, and because one file holding all
+/// of it would be over this project's per-file limit. Order is preserved across
+/// the join: it is what a form renders, and `denied` contributes nothing to
+/// `schema()`, so appending it last changes no output.
+pub fn dispositions() -> impl Iterator<Item = &'static (&'static str, Disposition)> {
+    table::EXPOSED
+        .iter()
+        .chain(memory::EXPOSED_MEMORY)
+        .chain(denied::DENIED)
+}
 
 // `flags` is used by the exhaustiveness tests, which are the reason this
 // module and the flag table must stay in step.
@@ -24,8 +39,7 @@ use std::collections::BTreeMap;
 /// ships independently, and a client rendering bounds the validator does not
 /// share is how "it looked fine and then the launch was rejected" happens.
 pub fn schema() -> Vec<SettingSpec> {
-    DISPOSITIONS
-        .iter()
+    dispositions()
         .filter_map(|(key, d)| match d {
             Disposition::Expose(s) => Some(SettingSpec {
                 key: (*key).to_string(),
@@ -44,7 +58,7 @@ pub fn schema() -> Vec<SettingSpec> {
 
 /// Look up a key's disposition.
 fn disposition(key: &str) -> Option<&'static Disposition> {
-    DISPOSITIONS.iter().find(|(k, _)| *k == key).map(|(_, d)| d)
+    dispositions().find(|(k, _)| *k == key).map(|(_, d)| d)
 }
 
 /// Validate a client's requested overrides.
