@@ -18,6 +18,11 @@ serde_yaml_ng.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+# Only to read the vendored engine snapshot in the coverage check; the crate
+# itself speaks YAML, not JSON.
+serde_json = "1"
+
 [features]
 # Exposes the recording mocks to downstream test suites (the agent crate).
 test-mocks = []

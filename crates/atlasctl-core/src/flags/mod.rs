@@ -2,8 +2,10 @@
 
 //! Serve-flag rendering: the config chain's resolved values become an argv.
 
+mod coverage;
 mod table;
 
+pub use coverage::{EXCLUDED, excluded_reason};
 pub use table::ATLAS_FLAGS;
 
 use crate::scalar::ScalarValue;

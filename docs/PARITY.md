@@ -71,11 +71,29 @@ Both implementations emit only the flags in their table, so unclaimed recipe
 settings do not reach `spark serve`. sparkrun drops them in silence; atlasctl
 reports every one.
 
-This is not hypothetical. Nine settings in this repository are affected today,
+This was not hypothetical. Nine settings in this repository were affected,
 including `lm_head_dtype`, which appears in four recipes and is described in one
-of them as a correctness pin. It has never reached the engine. Reconciling these
-against real `spark serve` flags is tracked separately — this change only makes
-the loss visible.
+of them as a correctness pin. None had ever reached the engine.
+
+All nine are now claimed, and the reconciliation that made that safe is
+`vendor/serve-options.v1.json` — the engine's own clap definition, reflected out
+of `spark dump-serve-options`. `flags::coverage` fails the build when a flag in
+it is neither claimed by the table nor listed in `EXCLUDED` with a reason, so a
+new engine flag can no longer join the dropped set by simply appearing.
+
+The snapshot settled a question a transcription could not. `video_allow_ffmpeg:
+true` and `gdn_fused_norm: true` are written identically in YAML and emit
+differently — `--video-allow-ffmpeg` bare, `--gdn-fused-norm true` — and only
+the engine knows which is which. It also caught two bounds this project had
+invented that its own recipes violated: `request_timeout` was `1..=86400` while
+a shipping recipe sets `0` (which the engine documents as disabling the
+deadline), and `max_batch_size` was `1..=64` while a shipping recipe sets `128`.
+Both would have shown up as the web form rejecting a value from the recipe it
+was displaying.
+
+46 engine flags remain unclaimed, each with a recorded reason — multi-node
+bootstrap values atlasctl derives itself, host paths, outbound-fetch switches,
+diagnostic modes that do not serve, and flags no recipe has asked for.
 
 ### Aliased settings collide instead of double-emitting
 

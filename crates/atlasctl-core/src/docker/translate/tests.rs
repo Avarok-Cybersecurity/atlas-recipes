@@ -218,12 +218,27 @@ fn overrides_flow_through_the_chain_into_the_command() {
 
 #[test]
 fn unmapped_recipe_settings_are_reported_on_the_plan() {
-    let p = plan(&recipe("  lm_head_dtype: bf16\n"), &Placement::Solo);
+    // `swap_space_gb` is a real engine flag this project does not pass through
+    // — see `flags::coverage::EXCLUDED`. It still has to be reported rather
+    // than dropped, because from the recipe author's side an excluded flag and
+    // a misspelt one look identical until someone says so.
+    let p = plan(&recipe("  swap_space_gb: 32\n"), &Placement::Solo);
     assert_eq!(p.unmapped.len(), 1);
-    assert_eq!(p.unmapped[0].key, "lm_head_dtype");
+    assert_eq!(p.unmapped[0].key, "swap_space_gb");
     assert!(
-        !p.docker.command.join(" ").contains("lm_head"),
+        !p.docker.command.join(" ").contains("swap-space"),
         "an unclaimed setting must not reach the command"
+    );
+}
+
+#[test]
+fn a_claimed_correctness_pin_reaches_the_command() {
+    let p = plan(&recipe("  lm_head_dtype: bf16\n"), &Placement::Solo);
+    assert!(p.unmapped.is_empty(), "{:?}", p.unmapped);
+    assert!(
+        p.docker.command.join(" ").contains("--lm-head-dtype bf16"),
+        "{:?}",
+        p.docker.command
     );
 }
 

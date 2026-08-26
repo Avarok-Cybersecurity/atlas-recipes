@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The allow/deny partition of every serve flag.
+//! The flags a client may set, and how — the shape of the machine.
 //!
-//! This table is the security boundary for remote launches: a key that is not
-//! here cannot be set, and a key marked `Deny` cannot be set by a client no
-//! matter what it sends. It must stay exhaustive over the flag table, which a
-//! test enforces.
+//! Three files hold the partition, and the split is not filing.
+//! `denied.rs` contributes nothing to `schema()`, so it is read by a different
+//! audience: this is a UI description, that is a list of refusals with reasons.
+//! `memory.rs` continues this one, and the two are concatenated in declaration
+//! order because that order is what a form renders. Together the three must
+//! stay exhaustive over the flag table, which a test enforces.
 
 use super::spec::{BoundSpec, Disposition, Spec};
-use super::values::{DTYPES, KV_DTYPES};
+
 use atlasctl_protocol::settings::Group;
 
-use BoundSpec::{BoolValue, Enum, Float, Int, IntOrAuto, Toggle};
-use Disposition::{Deny, Expose};
-use Group::{MemoryKv, Performance, Server, Speculative, ToolsChat, Topology};
+use BoundSpec::{Enum, Int, Toggle};
+use Disposition::Expose;
+use Group::{Performance, Server, Topology};
 
 /// Terse constructor, so the table reads as a table.
 const fn e(
@@ -34,17 +36,18 @@ const fn e(
     })
 }
 
-/// Every flag, and whether a client may set it.
+/// Server, topology and performance flags, in the order a form should show them.
 ///
-/// This must stay exhaustive over the flag table: a test asserts the two are in
-/// bijection, so adding flag 49 without deciding whether a webpage may set it
-/// fails the build rather than defaulting to either answer.
+/// This, `memory::EXPOSED_MEMORY` and `denied::DENIED` must together stay
+/// exhaustive over the flag table: a test asserts they are in bijection with
+/// it, so adding a flag without deciding whether a webpage may set it fails the
+/// build rather than defaulting to either answer.
 ///
 /// Formatting is frozen at one line per flag: reading this against the flag
 /// table is how the partition gets checked by eye, and a formatter that
 /// explodes each entry across six lines makes that impossible.
 #[rustfmt::skip]
-pub static DISPOSITIONS: &[(&str, Disposition)] = &[
+pub static EXPOSED: &[(&str, Disposition)] = &[
     // --- Server -------------------------------------------------------------
     (
         "port",
@@ -56,14 +59,6 @@ pub static DISPOSITIONS: &[(&str, Disposition)] = &[
             Server,
             false,
         ),
-    ),
-    (
-        "host",
-        Deny("the bind address is a network-exposure decision the agent owns, not a client"),
-    ),
-    (
-        "served_model_name",
-        Deny("an unbounded name with no operational value; the only free string in the table"),
     ),
     // --- Topology (recipe-owned) --------------------------------------------
     (
@@ -92,7 +87,10 @@ pub static DISPOSITIONS: &[(&str, Disposition)] = &[
     (
         "max_batch_size",
         e(
-            Int(1, 64),
+            // Matches `max_num_seqs`, which bounds the same concurrency
+            // dimension. It was 1..=64 until 2026-08-26, which rejected the
+            // 128 that `qwen3.8-27b-nvfp4-throughput` ships.
+            Int(1, 256),
             "Max batch size",
             "Concurrent sequences decoded together.",
             None,
@@ -170,306 +168,5 @@ pub static DISPOSITIONS: &[(&str, Disposition)] = &[
             Performance,
             false,
         ),
-    ),
-    // --- Memory & KV --------------------------------------------------------
-    (
-        "gpu_memory_utilization",
-        e(
-            Float(0.10, 0.95),
-            "Memory fraction",
-            "Share of the memory pool the engine may use.",
-            None,
-            MemoryKv,
-            false,
-        ),
-    ),
-    (
-        "max_model_len",
-        e(
-            Int(256, 262144),
-            "Context length",
-            "Longest sequence the server will accept.",
-            Some("tokens"),
-            MemoryKv,
-            false,
-        ),
-    ),
-    (
-        "kv_cache_dtype",
-        e(
-            Enum(KV_DTYPES),
-            "KV cache dtype",
-            "Precision of the key/value cache.",
-            None,
-            MemoryKv,
-            false,
-        ),
-    ),
-    (
-        "kv_high_precision_layers",
-        e(
-            IntOrAuto(0, 256),
-            "High-precision KV layers",
-            "Layers kept at higher KV precision.",
-            None,
-            MemoryKv,
-            true,
-        ),
-    ),
-    (
-        "block_size",
-        e(
-            Enum(&["8", "16", "32", "64"]),
-            "KV block size",
-            "Paged-attention block size.",
-            Some("tokens"),
-            MemoryKv,
-            true,
-        ),
-    ),
-    (
-        "oom_guard_mb",
-        e(
-            Int(0, 16384),
-            "OOM guard",
-            "Memory held back as headroom.",
-            Some("MB"),
-            MemoryKv,
-            true,
-        ),
-    ),
-    (
-        "fp8_kv_calibration_tokens",
-        e(
-            Int(0, 65536),
-            "FP8 KV calibration",
-            "Tokens used to calibrate an FP8 KV cache.",
-            Some("tokens"),
-            MemoryKv,
-            true,
-        ),
-    ),
-    (
-        "ssm_cache_slots",
-        e(
-            Int(0, 4096),
-            "SSM cache slots",
-            "State-space cache slots preallocated.",
-            None,
-            MemoryKv,
-            true,
-        ),
-    ),
-    (
-        "ssm_checkpoint_interval",
-        e(
-            Int(1, 8192),
-            "SSM checkpoint interval",
-            "How often SSM state is checkpointed.",
-            None,
-            MemoryKv,
-            true,
-        ),
-    ),
-    // --- Speculative decoding -----------------------------------------------
-    (
-        "speculative",
-        e(
-            Toggle,
-            "Speculative decoding",
-            "Draft tokens ahead and verify them.",
-            None,
-            Speculative,
-            false,
-        ),
-    ),
-    (
-        "self_speculative",
-        e(
-            Toggle,
-            "Self-speculative",
-            "Draft with the model's own early layers.",
-            None,
-            Speculative,
-            true,
-        ),
-    ),
-    (
-        "ngram_speculative",
-        e(
-            Toggle,
-            "N-gram speculative",
-            "Draft from prompt n-grams.",
-            None,
-            Speculative,
-            true,
-        ),
-    ),
-    (
-        "dflash",
-        e(
-            Toggle,
-            "DFlash",
-            "Enable the DFlash draft path.",
-            None,
-            Speculative,
-            true,
-        ),
-    ),
-    (
-        "num_drafts",
-        e(
-            Int(1, 8),
-            "Draft tokens",
-            "Tokens drafted per verification step.",
-            None,
-            Speculative,
-            false,
-        ),
-    ),
-    (
-        "mtp_quantization",
-        e(
-            Enum(DTYPES),
-            "MTP precision",
-            "Precision of the draft head.",
-            None,
-            Speculative,
-            false,
-        ),
-    ),
-    (
-        "dflash_gamma",
-        e(
-            Int(1, 16),
-            "DFlash gamma",
-            "DFlash draft depth.",
-            None,
-            Speculative,
-            true,
-        ),
-    ),
-    (
-        "dflash_window_size",
-        e(
-            Int(1, 8192),
-            "DFlash window",
-            "DFlash lookahead window.",
-            None,
-            Speculative,
-            true,
-        ),
-    ),
-    (
-        "mtp_vocab",
-        Deny("couples to the checkpoint's draft-head artifact; changing it changes what loads"),
-    ),
-    (
-        "draft_model",
-        Deny("loads a second set of weights of the sender's choosing"),
-    ),
-    // --- Tools & chat -------------------------------------------------------
-    (
-        "tool_call_parser",
-        Deny(
-            "model-coupled correctness pin; changing it away from the recipe can only break tool calls",
-        ),
-    ),
-    (
-        "tool_max_tokens",
-        e(
-            Int(64, 65536),
-            "Tool call budget",
-            "Token budget for a tool call.",
-            Some("tokens"),
-            ToolsChat,
-            true,
-        ),
-    ),
-    (
-        "disable_tool_grammar",
-        e(
-            BoolValue,
-            "Disable tool grammar",
-            "Turn off grammar-constrained tool calls.",
-            None,
-            ToolsChat,
-            true,
-        ),
-    ),
-    (
-        "disable_thinking",
-        e(
-            Toggle,
-            "Disable thinking",
-            "Suppress reasoning output.",
-            None,
-            ToolsChat,
-            false,
-        ),
-    ),
-    (
-        "max_thinking_budget",
-        e(
-            Int(0, 262144),
-            "Thinking budget",
-            "Cap on reasoning tokens.",
-            Some("tokens"),
-            ToolsChat,
-            true,
-        ),
-    ),
-    // --- Denied: paths, credentials, and host hardware ----------------------
-    (
-        "model_from_path",
-        Deny(
-            "a filesystem path that changes which weights load — the exact vector this project exists to close",
-        ),
-    ),
-    (
-        "cache_dir",
-        Deny("a host path controlling where weights are read and written"),
-    ),
-    (
-        "gpu_ordinal",
-        Deny("host hardware selection, not a property of the deployment"),
-    ),
-    (
-        "api_key",
-        Deny(
-            "a credential must not travel from a page into a command line, where `docker inspect` can read it",
-        ),
-    ),
-    (
-        "require_auth",
-        Deny("letting a client turn authentication off is a downgrade attack"),
-    ),
-    (
-        "high_speed_swap",
-        Deny("unusable without a swap directory, which is a host path"),
-    ),
-    (
-        "high_speed_swap_dir",
-        Deny("a host path the engine writes to"),
-    ),
-    (
-        "high_speed_swap_gb",
-        Deny("part of the swap family, which is denied as a group"),
-    ),
-    (
-        "high_speed_swap_resident_blocks",
-        Deny("part of the swap family, which is denied as a group"),
-    ),
-    (
-        "high_speed_swap_rank",
-        Deny("part of the swap family, which is denied as a group"),
-    ),
-    (
-        "high_speed_swap_qd",
-        Deny("part of the swap family, which is denied as a group"),
-    ),
-    (
-        "high_speed_swap_cache_blocks_per_seq",
-        Deny("part of the swap family, which is denied as a group"),
     ),
 ];

@@ -22,26 +22,26 @@ fn the_partition_is_exhaustive_over_the_flag_table() {
             spec.key
         );
     }
-    for (key, _) in DISPOSITIONS.iter() {
+    for (key, _) in dispositions() {
         assert!(
             flags::lookup(key).is_some(),
             "`{key}` has a disposition but is not a flag"
         );
     }
-    assert_eq!(DISPOSITIONS.len(), flags::ATLAS_FLAGS.len());
+    assert_eq!(dispositions().count(), flags::ATLAS_FLAGS.len());
 }
 
 #[test]
 fn no_key_appears_twice() {
     let mut seen = std::collections::BTreeSet::new();
-    for (key, _) in DISPOSITIONS.iter() {
+    for (key, _) in dispositions() {
         assert!(seen.insert(*key), "duplicate disposition for `{key}`");
     }
 }
 
 #[test]
 fn bare_toggles_are_toggles_and_value_flags_are_not() {
-    for (key, d) in DISPOSITIONS.iter() {
+    for (key, d) in dispositions() {
         let Disposition::Expose(spec) = d else {
             continue;
         };
@@ -79,7 +79,7 @@ fn every_path_credential_and_weight_selector_is_denied() {
 #[test]
 fn denied_keys_never_reach_the_schema_a_client_sees() {
     let schema = schema();
-    for (key, d) in DISPOSITIONS.iter() {
+    for (key, d) in dispositions() {
         if matches!(d, Disposition::Deny(_)) {
             assert!(
                 !schema.iter().any(|s| s.key == *key),
@@ -149,7 +149,7 @@ fn nothing_a_client_sends_can_become_a_flag_shaped_argv_element() {
         SettingValue::Int(i64::MAX),
         SettingValue::Float(f64::NAN),
     ];
-    for (key, d) in DISPOSITIONS.iter() {
+    for (key, d) in dispositions() {
         if !matches!(d, Disposition::Expose(_)) {
             continue;
         }
@@ -178,8 +178,7 @@ fn nothing_a_client_sends_can_become_a_flag_shaped_argv_element() {
 /// `spark_runtime::kv_cache::KvCacheDtype::ALL`, then update the table.
 #[test]
 fn the_enumerated_values_still_match_the_engine() {
-    let kv = super::table::DISPOSITIONS
-        .iter()
+    let kv = super::dispositions()
         .find(|(k, _)| *k == "kv_cache_dtype")
         .and_then(|(_, d)| match d {
             super::spec::Disposition::Expose(sp) => Some(sp),
@@ -196,8 +195,7 @@ fn the_enumerated_values_still_match_the_engine() {
         kvs.len()
     );
 
-    let sp = super::table::DISPOSITIONS
-        .iter()
+    let sp = super::dispositions()
         .find(|(k, _)| *k == "scheduling_policy")
         .and_then(|(_, d)| match d {
             super::spec::Disposition::Expose(sp) => Some(sp),
@@ -209,7 +207,7 @@ fn the_enumerated_values_still_match_the_engine() {
     };
     assert_eq!(
         *policies,
-        &["fifo", "slai"],
+        ["fifo", "slai"].as_slice(),
         "the engine accepts fifo and slai; \"fcfs\" was offered for four releases \
          and killed every launch that chose it"
     );
