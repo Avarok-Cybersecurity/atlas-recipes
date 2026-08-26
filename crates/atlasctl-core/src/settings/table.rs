@@ -8,6 +8,7 @@
 //! test enforces.
 
 use super::spec::{BoundSpec, Disposition, Spec};
+use super::values::{DTYPES, KV_DTYPES};
 use atlasctl_protocol::settings::Group;
 
 use BoundSpec::{BoolValue, Enum, Float, Int, IntOrAuto, Toggle};
@@ -32,8 +33,6 @@ const fn e(
         advanced,
     })
 }
-
-const DTYPES: &[&str] = &["bf16", "fp8", "nvfp4"];
 
 /// Every flag, and whether a client may set it.
 ///
@@ -137,7 +136,12 @@ pub static DISPOSITIONS: &[(&str, Disposition)] = &[
     (
         "scheduling_policy",
         e(
-            Enum(&["fcfs", "slai"]),
+            // "fifo", not "fcfs". The engine validates against
+            // `cli::flag_values::SCHEDULING_POLICIES`, which has never
+            // contained "fcfs" — offering it produced a launch that died in
+            // validate_serve_args, on the machine, after the operator had
+            // already reviewed the command.
+            Enum(&["fifo", "slai"]),
             "Scheduling policy",
             "How queued requests are ordered.",
             None,
@@ -193,7 +197,7 @@ pub static DISPOSITIONS: &[(&str, Disposition)] = &[
     (
         "kv_cache_dtype",
         e(
-            Enum(DTYPES),
+            Enum(KV_DTYPES),
             "KV cache dtype",
             "Precision of the key/value cache.",
             None,

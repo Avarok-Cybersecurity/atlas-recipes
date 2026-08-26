@@ -168,3 +168,49 @@ fn nothing_a_client_sends_can_become_a_flag_shaped_argv_element() {
         }
     }
 }
+
+/// These two lists are transcribed from the engine, which is a different repo
+/// and cannot be renamed atomically with this one. The counts are recorded so
+/// a drift fails here — cheaply, in CI — rather than as a launch that dies
+/// inside the container after the operator has reviewed the command.
+///
+/// If one of these fails, check the engine's `cli::flag_values` and
+/// `spark_runtime::kv_cache::KvCacheDtype::ALL`, then update the table.
+#[test]
+fn the_enumerated_values_still_match_the_engine() {
+    let kv = super::table::DISPOSITIONS
+        .iter()
+        .find(|(k, _)| *k == "kv_cache_dtype")
+        .and_then(|(_, d)| match d {
+            super::spec::Disposition::Expose(sp) => Some(sp),
+            super::spec::Disposition::Deny(_) => None,
+        })
+        .expect("kv_cache_dtype is exposed");
+    let super::spec::BoundSpec::Enum(kvs) = &kv.bound else {
+        panic!("kv_cache_dtype must be an enum");
+    };
+    assert_eq!(
+        kvs.len(),
+        16,
+        "KvCacheDtype::ALL has 16 variants; this offered {}",
+        kvs.len()
+    );
+
+    let sp = super::table::DISPOSITIONS
+        .iter()
+        .find(|(k, _)| *k == "scheduling_policy")
+        .and_then(|(_, d)| match d {
+            super::spec::Disposition::Expose(sp) => Some(sp),
+            super::spec::Disposition::Deny(_) => None,
+        })
+        .expect("scheduling_policy is exposed");
+    let super::spec::BoundSpec::Enum(policies) = &sp.bound else {
+        panic!("scheduling_policy must be an enum");
+    };
+    assert_eq!(
+        *policies,
+        &["fifo", "slai"],
+        "the engine accepts fifo and slai; \"fcfs\" was offered for four releases \
+         and killed every launch that chose it"
+    );
+}

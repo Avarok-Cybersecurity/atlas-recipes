@@ -4,6 +4,7 @@
 
 mod spec;
 mod table;
+mod values;
 
 pub use spec::{BoundSpec, Disposition, Spec};
 pub use table::DISPOSITIONS;
