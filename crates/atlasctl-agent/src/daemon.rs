@@ -1,0 +1,287 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+//! The background work an agent does whether or not anyone is looking.
+//!
+//! Three loops, deliberately independent so one failing does not take the
+//! others with it:
+//!
+//! * **Discovery** advertises this node and records what it hears. A network
+//!   that filters multicast is a normal condition, not a fault — the loop says
+//!   so once and stops, and `atlasctl peer add` remains a first-class path.
+//! * **Vitals** samples this machine and pushes the result to anyone watching.
+//!   It is what makes an idle node's clamped clock or full disk visible before
+//!   someone launches on it.
+//! * **Pruning** ages out sightings so a node that left the network stops being
+//!   listed as present, while a *paired* node stays listed as unreachable —
+//!   because it is still part of your fleet when it is switched off.
+//!
+//! Every loop is cancellation-safe and holds only an `Arc`, so shutting the
+//! agent down does not need any of them to cooperate.
+
+use crate::discovery::{Advertiser, Beacon, DiscoveryBrowser, DiscoveryEvent};
+use crate::fleet::{FleetView, LocalFleet};
+use atlasctl_protocol::msg::ServerMsg;
+use atlasctl_protocol::msg::fleet::FleetEvent;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::broadcast;
+
+/// How often vitals are sampled and pushed.
+///
+/// One second is what a live dashboard wants. Sampling costs a process spawn,
+/// so this is deliberately not faster.
+pub const VITALS_INTERVAL: Duration = Duration::from_secs(1);
+
+/// How often stale sightings are aged out.
+pub const PRUNE_INTERVAL: Duration = Duration::from_secs(10);
+
+/// How often paired peers are asked how they are.
+///
+/// Slower than local vitals on purpose: this opens a TLS connection per peer,
+/// and a fleet of idle machines should cost almost nothing to watch.
+pub const PEER_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Start every background loop.
+///
+/// Returns immediately; the loops run until the process ends.
+pub fn spawn_all(
+    fleet: Arc<LocalFleet>,
+    events: broadcast::Sender<ServerMsg>,
+    discovery: Option<Arc<dyn DiscoveryPair>>,
+    beacon: Beacon,
+) {
+    if let Some(d) = discovery {
+        spawn_discovery(Arc::clone(&fleet), events.clone(), d, beacon);
+    }
+    spawn_vitals(Arc::clone(&fleet), events.clone());
+    spawn_prune(Arc::clone(&fleet), events);
+}
+
+/// Serve the peer channel, and keep paired peers fresh.
+///
+/// Separate from [`spawn_all`] because it needs this agent's identity, which
+/// the fleet view owns privately.
+pub fn spawn_peer_work(
+    fleet: Arc<crate::fleet::LocalFleet>,
+    identity: Arc<crate::identity::Identity>,
+    pins: crate::identity::PinStore,
+    events: broadcast::Sender<ServerMsg>,
+    peer_port: u16,
+) {
+    spawn_peer_listener(
+        Arc::clone(&fleet),
+        Arc::clone(&identity),
+        pins.clone(),
+        peer_port,
+    );
+    spawn_peer_poll(fleet, identity, pins, events, peer_port);
+}
+
+/// Accept connections from paired peers.
+fn spawn_peer_listener(
+    fleet: Arc<crate::fleet::LocalFleet>,
+    identity: Arc<crate::identity::Identity>,
+    pins: crate::identity::PinStore,
+    port: u16,
+) {
+    tokio::spawn(async move {
+        // Pinned-only: an unpaired agent is refused during the handshake, so
+        // nothing past this point has an authorization decision to make.
+        let cfg = match crate::peer::tls::server_config(
+            &identity,
+            crate::peer::tls::PinnedPeerVerifier::pinned(pins, None),
+        ) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("peer channel disabled: {e}");
+                return;
+            }
+        };
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(cfg));
+        let listener = match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!(
+                    "peer channel disabled: could not bind {port}: {e}\n                       other machines will not be able to reach this one"
+                );
+                return;
+            }
+        };
+        eprintln!("peer channel on 0.0.0.0:{port}");
+
+        loop {
+            let Ok((tcp, _)) = listener.accept().await else {
+                continue;
+            };
+            let acceptor = acceptor.clone();
+            let fleet = Arc::clone(&fleet);
+            tokio::spawn(async move {
+                let Ok(mut tls) = acceptor.accept(tcp).await else {
+                    // An unpaired caller failing the handshake is the system
+                    // working, not an incident worth logging.
+                    return;
+                };
+                let vitals = fleet.local_vitals_and_id().map(|(_, v)| v);
+                let _ = crate::peer::link::serve_query(
+                    &mut tls,
+                    crate::discovery::local_display_name().as_str(),
+                    fleet.can_launch(),
+                    "",
+                    vitals,
+                )
+                .await;
+            });
+        }
+    });
+}
+
+/// Ask each paired peer how it is.
+fn spawn_peer_poll(
+    fleet: Arc<crate::fleet::LocalFleet>,
+    identity: Arc<crate::identity::Identity>,
+    pins: crate::identity::PinStore,
+    events: broadcast::Sender<ServerMsg>,
+    port: u16,
+) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(PEER_POLL_INTERVAL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            let Ok(peers) = fleet.dialable_peers() else {
+                continue;
+            };
+            for (id, addr) in peers {
+                let Ok(sock) = format!("{addr}:{port}").parse() else {
+                    continue;
+                };
+                let link = fleet.classify_peer_address(&addr);
+                match crate::peer::link::query(&identity, pins.clone(), sock, id, link).await {
+                    Ok(report) => {
+                        fleet.record_report(report);
+                        if let Some(node) = fleet.nodes().into_iter().find(|n| n.id == id) {
+                            let _ = events.send(ServerMsg::FleetEvent {
+                                event: FleetEvent::NodeChanged {
+                                    node: Box::new(node),
+                                },
+                            });
+                        }
+                    }
+                    // A peer that is switched off is the normal state of a
+                    // fleet, not an error. Forget what it last said so the
+                    // interface stops presenting stale vitals as current.
+                    Err(_) => fleet.clear_report(id),
+                }
+            }
+        }
+    });
+}
+
+/// Something that can both advertise and browse.
+///
+/// One trait so the caller passes a single object; the two halves are separate
+/// traits because a hardened deployment may want to browse without advertising.
+pub trait DiscoveryPair: Advertiser + DiscoveryBrowser {}
+
+impl<T: Advertiser + DiscoveryBrowser> DiscoveryPair for T {}
+
+/// Advertise this node, and record what we hear.
+fn spawn_discovery(
+    fleet: Arc<LocalFleet>,
+    events: broadcast::Sender<ServerMsg>,
+    discovery: Arc<dyn DiscoveryPair>,
+    beacon: Beacon,
+) {
+    tokio::task::spawn_blocking(move || {
+        // Browse before advertising, so our own record does not race the
+        // subscription and get missed.
+        let rx = match discovery.browse() {
+            Ok(rx) => rx,
+            Err(e) => {
+                // Multicast is filtered on plenty of networks. Say so once and
+                // stop, rather than retrying forever against a switch that is
+                // never going to answer.
+                eprintln!(
+                    "discovery unavailable: {e}\n  peers will not appear on their own; \
+                     use `atlasctl peer add <host>` instead"
+                );
+                return;
+            }
+        };
+        if let Err(e) = discovery.advertise(&beacon) {
+            eprintln!("could not advertise on this network: {e}");
+        }
+
+        while let Ok(event) = rx.recv() {
+            match event {
+                DiscoveryEvent::Found(b) => {
+                    let id = b.id;
+                    let known = fleet.nodes().iter().any(|n| n.id == id);
+                    fleet.observe(*b);
+                    // Only announce genuinely new machines. A beacon refreshes
+                    // every few seconds, and re-announcing an unchanged node
+                    // would make the interface flicker for no reason.
+                    if !known && let Some(node) = fleet.nodes().into_iter().find(|n| n.id == id) {
+                        let _ = events.send(ServerMsg::FleetEvent {
+                            event: FleetEvent::NodeChanged {
+                                node: Box::new(node),
+                            },
+                        });
+                    }
+                }
+                DiscoveryEvent::Lost(id) => {
+                    let _ = events.send(ServerMsg::FleetEvent {
+                        event: FleetEvent::NodeGone { node: id },
+                    });
+                }
+            }
+        }
+    });
+}
+
+/// Sample this machine and push the result.
+fn spawn_vitals(fleet: Arc<LocalFleet>, events: broadcast::Sender<ServerMsg>) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(VITALS_INTERVAL);
+        // If a sample takes longer than the interval, skip rather than queue:
+        // catching up on stale samples is worse than missing them.
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            // Nobody is watching, so do not spawn a process to find out.
+            if events.receiver_count() == 0 {
+                continue;
+            }
+            let fleet = Arc::clone(&fleet);
+            // Sampling shells out, so it must not run on the async runtime.
+            let sampled = tokio::task::spawn_blocking(move || fleet.local_vitals_and_id()).await;
+            if let Ok(Some((id, vitals))) = sampled {
+                let _ = events.send(ServerMsg::FleetEvent {
+                    event: FleetEvent::Vitals {
+                        node: id,
+                        vitals: Box::new(vitals),
+                    },
+                });
+            }
+        }
+    });
+}
+
+/// Age out sightings of machines that have gone away.
+fn spawn_prune(fleet: Arc<LocalFleet>, events: broadcast::Sender<ServerMsg>) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(PRUNE_INTERVAL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            let before: Vec<_> = fleet.nodes().into_iter().map(|n| n.id).collect();
+            fleet.prune();
+            let after: Vec<_> = fleet.nodes().into_iter().map(|n| n.id).collect();
+            for gone in before.iter().filter(|id| !after.contains(id)) {
+                let _ = events.send(ServerMsg::FleetEvent {
+                    event: FleetEvent::NodeGone { node: *gone },
+                });
+            }
+        }
+    });
+}

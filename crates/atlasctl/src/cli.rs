@@ -49,6 +49,10 @@ pub enum Command {
     #[command(subcommand)]
     Agent(AgentCmd),
 
+    /// Manage the machines this one trusts.
+    #[command(subcommand)]
+    Peer(PeerCmd),
+
     /// Check this machine for problems, including a compromised sparkrun install.
     Doctor,
 }
@@ -73,6 +77,55 @@ pub enum AgentCmd {
     Token(AgentTokenArgs),
     /// Report whether an agent is reachable.
     Status,
+    /// Print a code for joining this machine to a fleet.
+    ///
+    /// The code is shown HERE, on the machine being added, and typed on the
+    /// machine doing the adding. That direction is the whole security story: a
+    /// web page cannot know a code it did not cause a human to walk over and
+    /// read.
+    Pair(AgentPairArgs),
+}
+
+/// `agent pair` arguments.
+#[derive(Args, Debug)]
+pub struct AgentPairArgs {
+    /// Port the peer channel listens on.
+    #[arg(long, default_value_t = atlasctl_agent::peer::DEFAULT_PEER_PORT)]
+    pub port: u16,
+}
+
+/// Peer subcommands.
+///
+/// `peer add` is a first-class path, not a fallback for when discovery fails.
+/// Enterprise wireless does client isolation, plenty of switches filter
+/// multicast, and the RoCE links between two Sparks are point-to-point /30s
+/// where multicast reaches exactly one machine anyway.
+#[derive(Subcommand, Debug)]
+pub enum PeerCmd {
+    /// List machines this one trusts, and those it can see.
+    List,
+    /// Pair with a machine by address, using a code read off that machine.
+    Add(PeerAddArgs),
+    /// Drop trust in a machine. Takes effect on its next connection.
+    Remove(PeerRemoveArgs),
+}
+
+/// `peer add` arguments.
+#[derive(Args, Debug)]
+pub struct PeerAddArgs {
+    /// Host or host:port of the machine to pair with.
+    pub target: String,
+
+    /// The eight digits shown by `atlasctl agent pair` on that machine.
+    #[arg(long)]
+    pub code: String,
+}
+
+/// `peer remove` arguments.
+#[derive(Args, Debug)]
+pub struct PeerRemoveArgs {
+    /// Fingerprint, or a unique prefix of one.
+    pub node: String,
 }
 
 /// `agent run` arguments.
@@ -85,6 +138,18 @@ pub struct AgentRunArgs {
     /// Also accept connections from a local development server.
     #[arg(long)]
     pub dev_origins: bool,
+
+    /// Run as a control node: discover, pair and monitor, but never launch.
+    ///
+    /// For a laptop driving headless GPU boxes. The refusal is structural — a
+    /// client-mode agent reports `can_launch = false` and has no launcher at
+    /// all, rather than being trusted to decline.
+    #[arg(long)]
+    pub client: bool,
+
+    /// Do not advertise on the network, and do not listen for other agents.
+    #[arg(long)]
+    pub no_discovery: bool,
 }
 
 /// `agent token` arguments.

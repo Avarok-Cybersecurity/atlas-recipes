@@ -14,6 +14,8 @@ fn state(port: u16) -> Arc<AgentState> {
         launcher: Box::new(RecordingLauncher::new()),
         token: TOKEN.to_string(),
         can_launch: Ok(()),
+        fleet: None,
+        events: tokio::sync::broadcast::channel(8).0,
         port,
         allow_dev_origins: false,
     })

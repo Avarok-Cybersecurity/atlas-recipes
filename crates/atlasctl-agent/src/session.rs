@@ -38,6 +38,12 @@ pub struct SessionDeps<'a> {
     pub token: &'a str,
     /// Whether this machine can run a recipe at all.
     pub can_launch: Result<(), String>,
+    /// What this agent knows about other machines.
+    ///
+    /// `None` is a single-node agent: the fleet verbs answer with this machine
+    /// alone rather than erroring, because "no fleet" is a normal state and a
+    /// page that got an error would show a fault where there is none.
+    pub fleet: Option<&'a dyn crate::fleet::FleetView>,
 }
 
 /// A single client connection.
@@ -82,6 +88,16 @@ impl<'a> Session<'a> {
             id: None,
             error: AgentError::InvalidMessage { detail },
         }
+    }
+
+    /// Whether the handshake has completed.
+    ///
+    /// The transport asks before forwarding a pushed frame: fleet events name
+    /// machines on someone's network, and an unauthenticated socket must not
+    /// receive them just because it stayed open.
+    #[must_use]
+    pub const fn is_ready(&self) -> bool {
+        matches!(self.phase, Phase::Ready)
     }
 
     /// Handle one decoded message.
@@ -138,7 +154,93 @@ impl<'a> Session<'a> {
             ) => self.launch(id, &recipe, &settings),
             (Phase::Ready, ClientMsg::Stop { id, recipe }) => self.stop(id, &recipe),
             (Phase::Ready, ClientMsg::Status { id }) => self.status(id),
+
+            (Phase::Ready, ClientMsg::ListNodes { id }) => self.nodes(id),
+            // A watch is answered with the current fleet; the transport pushes
+            // subsequent changes. Accepting the subscription here rather than in
+            // the socket layer keeps the authorization decision in one place.
+            (Phase::Ready, ClientMsg::WatchFleet { id, vitals: _ }) => self.nodes(id),
+            (Phase::Ready, ClientMsg::PairPeer { id, node, code }) => self.pair(id, node, &code),
+            (Phase::Ready, ClientMsg::UnpairPeer { id, node }) => self.unpair(id, node),
+
+            // Cluster verbs need the peer channel, which is not connected yet.
+            // Refusing plainly is the honest answer: a preview rendered without
+            // asking the other ranks would be a guess presented as a fact, and a
+            // prepare that pretended to reserve would be worse.
+            (
+                Phase::Ready,
+                ClientMsg::PreviewCluster { id, .. }
+                | ClientMsg::PrepareCluster { id, .. }
+                | ClientMsg::CommitCluster { id, .. }
+                | ClientMsg::AbortCluster { id, .. },
+            ) => vec![err(Some(id), AgentError::NotReady)],
+
             (Phase::Closed, _) => Vec::new(),
+        }
+    }
+
+    /// The fleet, local node first.
+    fn nodes(&self, id: u32) -> Vec<ServerMsg> {
+        let nodes = self
+            .deps
+            .fleet
+            .map(crate::fleet::FleetView::nodes)
+            .unwrap_or_default();
+        vec![ServerMsg::Nodes { id, nodes }]
+    }
+
+    fn pair(
+        &mut self,
+        id: u32,
+        node: atlasctl_protocol::fleet::NodeId,
+        code: &str,
+    ) -> Vec<ServerMsg> {
+        let Some(fleet) = self.deps.fleet else {
+            return vec![err(Some(id), AgentError::NotReady)];
+        };
+        match fleet.pair(node, code) {
+            Ok(outcome) => vec![ServerMsg::PairResult {
+                id,
+                node,
+                paired: true,
+                verification: Some(outcome.verification),
+                detail: String::new(),
+            }],
+            // A failed pairing is reported as a result rather than an error:
+            // the page has a designed state for "that did not work", and the
+            // reason is the useful part.
+            Err(e) => vec![ServerMsg::PairResult {
+                id,
+                node,
+                paired: false,
+                verification: None,
+                detail: e.to_string(),
+            }],
+        }
+    }
+
+    fn unpair(&mut self, id: u32, node: atlasctl_protocol::fleet::NodeId) -> Vec<ServerMsg> {
+        let Some(fleet) = self.deps.fleet else {
+            return vec![err(Some(id), AgentError::NotReady)];
+        };
+        match fleet.unpair(node) {
+            Ok(was_pinned) => vec![ServerMsg::PairResult {
+                id,
+                node,
+                paired: false,
+                verification: None,
+                detail: if was_pinned {
+                    String::new()
+                } else {
+                    "that node was not paired".to_owned()
+                },
+            }],
+            Err(e) => vec![err(
+                Some(id),
+                AgentError::InvalidMessage {
+                    detail: e.to_string(),
+                },
+            )],
         }
     }
 

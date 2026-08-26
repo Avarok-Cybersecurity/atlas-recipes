@@ -5,6 +5,7 @@
 pub mod agent;
 pub mod doctor;
 pub mod lifecycle;
+pub mod peer;
 pub mod recipe;
 pub mod registry;
 pub mod run;

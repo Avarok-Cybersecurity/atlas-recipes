@@ -150,3 +150,107 @@ fn server_messages_round_trip() {
         assert_eq!(serde_json::from_str::<ServerMsg>(&s).unwrap(), m, "{s}");
     }
 }
+
+// ---- fleet verbs ---------------------------------------------------------
+
+#[test]
+fn the_fleet_verbs_did_not_open_a_relay() {
+    // The capability claim, re-asserted now that the surface has grown. The
+    // fleet verbs let a page name a peer it has already paired and ask for a
+    // launch; they must not let it forward arbitrary content to that peer.
+    let must_not_parse = [
+        r#"{"type":"forward","to":"peer","payload":{}}"#,
+        r#"{"type":"relay","node":"aa","frame":{}}"#,
+        r#"{"type":"peer_exec","node":"aa","command":"sh"}"#,
+        r#"{"type":"peer_raw","node":"aa","argv":["docker","run"]}"#,
+        r#"{"type":"proxy","url":"http://evil"}"#,
+    ];
+    for v in must_not_parse {
+        assert!(
+            serde_json::from_str::<ClientMsg>(v).is_err(),
+            "{v} deserialized — the fleet verbs grew a relay"
+        );
+    }
+}
+
+#[test]
+fn a_cluster_launch_names_nodes_and_a_recipe_and_nothing_executable() {
+    // A page may say "run this recipe on these two paired nodes". It may not
+    // say what command to run, which image to pull, or what environment to set.
+    let msg = ClientMsg::PrepareCluster {
+        id: 7,
+        recipe: id("qwen3.5-122b-a10b-nvfp4-ep2"),
+        nodes: vec![
+            crate::fleet::NodeId::from_bytes([1; 32]),
+            crate::fleet::NodeId::from_bytes([2; 32]),
+        ],
+        head: crate::fleet::NodeId::from_bytes([1; 32]),
+        settings: BTreeMap::new(),
+    };
+    let json = serde_json::to_string(&msg).expect("serialises");
+    for forbidden in ["image", "argv", "command", "entrypoint", "env", "volume"] {
+        assert!(
+            !json.contains(forbidden),
+            "cluster launch carries `{forbidden}`"
+        );
+    }
+    assert_eq!(
+        serde_json::from_str::<ClientMsg>(&json).expect("round trips"),
+        msg
+    );
+}
+
+#[test]
+fn a_commit_is_pinned_to_the_prepare_that_produced_it() {
+    // Without the epoch, a commit could be replayed against a plan that has
+    // since changed — a different recipe, or a different set of nodes.
+    let m = ClientMsg::CommitCluster {
+        id: 1,
+        epoch: "e-123".to_owned(),
+    };
+    let json = serde_json::to_string(&m).expect("serialises");
+    assert!(json.contains("e-123"));
+    // A commit with no epoch must not parse.
+    assert!(serde_json::from_str::<ClientMsg>(r#"{"type":"commit_cluster","id":1}"#).is_err());
+}
+
+#[test]
+fn a_pairing_request_carries_a_code_but_never_produces_one() {
+    // The browser transcribes a code read off the target machine. There is no
+    // verb that asks this agent to mint a code for a page, because that would
+    // let a page pair a machine on its own.
+    assert!(
+        serde_json::from_str::<ClientMsg>(r#"{"type":"issue_pair_code","id":1}"#).is_err(),
+        "a page must never be able to mint a pairing code"
+    );
+    let m = ClientMsg::PairPeer {
+        id: 2,
+        node: crate::fleet::NodeId::from_bytes([9; 32]),
+        code: "13572468".to_owned(),
+    };
+    assert_eq!(
+        serde_json::from_str::<ClientMsg>(&serde_json::to_string(&m).expect("ser")).expect("de"),
+        m
+    );
+}
+
+#[test]
+fn fleet_events_round_trip_including_the_absent_metric_state() {
+    use crate::fleet::{Metric, NodeVitals};
+    use crate::msg::fleet::FleetEvent;
+
+    let ev = FleetEvent::Vitals {
+        node: crate::fleet::NodeId::from_bytes([3; 32]),
+        vitals: Box::new(NodeVitals {
+            accelerator_util: Metric::reading(96.0),
+            // The GB10 case has to survive the wire as "cannot answer", not 0.
+            memory_total_bytes: Metric::Unsupported,
+            ..NodeVitals::default()
+        }),
+    };
+    let json = serde_json::to_string(&ev).expect("serialises");
+    assert!(json.contains(r#""change":"vitals""#));
+    assert!(json.contains("unsupported"));
+    let back: FleetEvent = serde_json::from_str(&json).expect("round trips");
+    assert_eq!(back, ev);
+}
