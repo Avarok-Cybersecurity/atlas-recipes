@@ -9,6 +9,7 @@ mod commands;
 mod configdir;
 mod hostinfo;
 mod httpscrape;
+mod joinarg;
 mod launchtelemetry;
 mod peerpairing;
 mod peertransport;

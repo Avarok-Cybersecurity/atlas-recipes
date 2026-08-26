@@ -133,6 +133,15 @@ pub struct AgentInstallArgs {
     /// node and starting at all.
     #[arg(long)]
     pub no_browser: bool,
+
+    /// Join an existing fleet: `--join <code>@<host>`.
+    ///
+    /// The whole value is shown by the machine doing the inviting. Installing
+    /// and joining are one command because they are one intention, and because
+    /// the operator is standing at a machine they may have reached only to run
+    /// this.
+    #[arg(long, value_name = "CODE@HOST")]
+    pub join: Option<String>,
 }
 
 /// `agent pair` arguments.

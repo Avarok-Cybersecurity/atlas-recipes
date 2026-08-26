@@ -103,6 +103,17 @@ install_agent() {
         return
     fi
     info "installing the background agent"
+    # The join is NOT silenced: it is the step the operator is watching, and
+    # its output carries the verification words they are meant to compare.
+    if [ -n "${2:-}" ]; then
+        if "$exe" agent install --join "$2"; then
+            return
+        fi
+        warn "installed, but joining the fleet did not succeed."
+        warn "The code is single-use and expires; mint a fresh one and run:"
+        warn "    $BIN_NAME agent install --join <code>@<host>"
+        return
+    fi
     if "$exe" agent install >/dev/null 2>&1; then
         info "the agent is running and will start on login."
         info "pair your browser with: $BIN_NAME agent token"
@@ -178,6 +189,25 @@ do_uninstall() {
 main() {
     [ "${1:-}" = "--uninstall" ] && do_uninstall
 
+    # `--join <code>@<host>` is forwarded verbatim to `agent install`, which is
+    # the only thing that understands it. Parsed here only far enough to notice
+    # it was given without a value, because the alternative is installing and
+    # then failing on the step the operator actually came for.
+    join=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --join)
+                shift
+                [ $# -gt 0 ] || die "--join needs a value, e.g. --join 12345678@10.10.10.1"
+                join="$1"
+                ;;
+            --join=*) join="${1#--join=}" ;;
+            *) ;;
+        esac
+        shift
+    done
+    [ -z "$join" ] || info "will join the fleet at ${join#*@} once installed"
+
     need uname
     need tar
     if command -v curl >/dev/null 2>&1; then
@@ -231,7 +261,7 @@ main() {
 
     check_docker
     check_sparkrun
-    install_agent "$dir/$BIN_NAME"
+    install_agent "$dir/$BIN_NAME" "$join"
 
     info "done. Try:"
     info "    $BIN_NAME list"

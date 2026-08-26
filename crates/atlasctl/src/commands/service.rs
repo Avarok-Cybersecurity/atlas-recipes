@@ -14,6 +14,14 @@ use anyhow::{Context, Result};
 /// # Errors
 /// If the platform has no supported supervisor, or a required step fails.
 pub fn install(args: &crate::cli::AgentInstallArgs) -> Result<()> {
+    // Parsed before anything is installed. A malformed invitation should cost
+    // the operator a retyped argument, not a service they now have to remove.
+    let join = args
+        .join
+        .as_deref()
+        .map(crate::joinarg::parse)
+        .transpose()?;
+
     let exe = std::env::current_exe().context("could not find this binary's own path")?;
     let home = crate::hostinfo::home_dir()?;
     let invocation = crate::service::plan::AgentInvocation {
@@ -49,7 +57,72 @@ pub fn install(args: &crate::cli::AgentInstallArgs) -> Result<()> {
              \x20       `sudo loginctl enable-linger $USER` to keep it up on a headless machine."
         );
     }
-    println!("\nPair your browser with: atlasctl agent token");
+    if let Some(join) = join {
+        join_fleet(&join)?;
+    } else {
+        println!("\nPair your browser with: atlasctl agent token");
+    }
+    Ok(())
+}
+
+/// Dial the machine that invited us and complete the ceremony.
+///
+/// Runs as the initiator against a code the *other* side minted, which is the
+/// inverse of `atlasctl peer add`. Everything about what a pairing means is
+/// still [`atlasctl_agent::peer::join::dial_and_pair`]; only the direction
+/// differs.
+fn join_fleet(join: &crate::joinarg::Join) -> Result<()> {
+    use atlasctl_agent::identity::{Identity, PinStore};
+
+    let dir = crate::hostinfo::config_dir()?;
+    crate::configdir::ensure_usable(&dir)?;
+    let identity = Identity::load_or_create(&dir)?;
+    let pins = PinStore::new(&dir);
+
+    let addrs = atlasctl_agent::discovery::resolve_manual(
+        &join.host,
+        atlasctl_agent::peer::DEFAULT_PEER_PORT,
+    )?;
+    let addr = *addrs
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("{} resolved to no addresses", join.host))?;
+
+    println!("\njoining the fleet at {addr}…");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("starting a runtime")?;
+    let paired = rt
+        .block_on(atlasctl_agent::peer::join::dial_and_pair(
+            &identity,
+            pins.clone(),
+            addr,
+            &join.code,
+        ))
+        .with_context(|| {
+            format!(
+                "could not join {addr}. The code expires, and is good for one                  machine only — mint a fresh one if this is not the first try."
+            )
+        })?;
+
+    atlasctl_agent::fleet::record_pairing(
+        &pins,
+        paired.node,
+        &paired.public_key,
+        atlasctl_protocol::fleet::DisplayName::new(&paired.name),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs()),
+        Some(addr.ip().to_string()),
+    )?;
+
+    println!("joined {} ({})", paired.name, paired.node.short());
+    println!("  verification words: {}", paired.verification);
+    println!("  the browser that invited this machine is showing the same words.");
+    println!(
+        "  If it is showing something else, run `atlasctl peer remove {}`.",
+        paired.node.short()
+    );
     Ok(())
 }
 
