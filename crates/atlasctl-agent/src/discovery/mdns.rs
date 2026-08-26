@@ -135,10 +135,10 @@ impl DiscoveryBrowser for MdnsDiscovery {
                         // nodes do not blink out of the interface.
                         _ => None,
                     };
-                    if let Some(ev) = out {
-                        if tx.send(ev).is_err() {
-                            break;
-                        }
+                    if let Some(ev) = out
+                        && tx.send(ev).is_err()
+                    {
+                        break;
                     }
                 }
             })
