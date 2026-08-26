@@ -18,9 +18,9 @@
 //! Every loop is cancellation-safe and holds only an `Arc`, so shutting the
 //! agent down does not need any of them to cooperate.
 
-use crate::rank::RankService;
 use crate::discovery::{Advertiser, Beacon, DiscoveryBrowser, DiscoveryEvent};
 use crate::fleet::{FleetView, LocalFleet};
+use crate::rank::RankService;
 use atlasctl_protocol::msg::ServerMsg;
 use atlasctl_protocol::msg::fleet::FleetEvent;
 use std::sync::Arc;
@@ -360,4 +360,3 @@ where
         }
     }
 }
-

@@ -162,7 +162,8 @@ pub async fn query(
 
     // Vitals are optional: an agent may be up and simply have nothing to say
     // about its hardware, which is not a failure.
-    let vitals = match tokio::time::timeout(Duration::from_millis(500), read_frame(&mut tls)).await {
+    let vitals = match tokio::time::timeout(Duration::from_millis(500), read_frame(&mut tls)).await
+    {
         Ok(Ok(PeerFrame::Vitals { vitals })) => Some(*vitals),
         _ => None,
     };

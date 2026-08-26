@@ -5,9 +5,9 @@
 //! `atlasctl` — launch Atlas inference recipes.
 
 mod cli;
-mod peertransport;
 mod commands;
 mod hostinfo;
+mod peertransport;
 mod rankservice;
 mod validate;
 

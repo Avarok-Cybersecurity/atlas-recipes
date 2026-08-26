@@ -55,7 +55,8 @@ fn agreeing(svc: &LocalRankService, rank: u16) -> RankAssignment {
 
 fn docker_run(runner: &RecordingRunner) -> Option<Vec<String>> {
     runner.calls().into_iter().find(|c| {
-        c.first().map(String::as_str) == Some("docker") && c.get(1).map(String::as_str) == Some("run")
+        c.first().map(String::as_str) == Some("docker")
+            && c.get(1).map(String::as_str) == Some("run")
     })
 }
 
@@ -73,7 +74,10 @@ fn a_prepared_rank_commits_the_command_it_rendered() {
 
     let ran = docker_run(&runner).expect("docker run was called");
     for token in ["--ipc=host", "--network=host"] {
-        assert!(ran.contains(&token.to_owned()), "{token} missing from {ran:?}");
+        assert!(
+            ran.contains(&token.to_owned()),
+            "{token} missing from {ran:?}"
+        );
         assert!(rendered.contains(token), "{token} missing from the preview");
     }
 }
@@ -92,7 +96,10 @@ fn a_recipe_the_head_hashes_differently_is_refused() {
         panic!("a revision mismatch must be refused");
     };
     assert!(reason.contains("differs between nodes"), "{reason}");
-    assert!(svc.commit("e1").is_err(), "a refused prepare reserves nothing");
+    assert!(
+        svc.commit("e1").is_err(),
+        "a refused prepare reserves nothing"
+    );
 }
 
 /// An empty hash is not agreement: a head that stated nothing must not be
@@ -192,7 +199,10 @@ fn a_stale_abort_does_not_release_a_newer_reservation() {
     svc.prepare("new", &a);
     svc.abort("old");
 
-    assert!(svc.commit("new").is_ok(), "the newer reservation must survive");
+    assert!(
+        svc.commit("new").is_ok(),
+        "the newer reservation must survive"
+    );
 }
 
 /// Rollback asking about a container that never started is an ordinary race,
@@ -206,7 +216,8 @@ fn stopping_a_container_that_is_already_gone_succeeds() {
         stderr: "Error response from daemon: No such container: atlas-x".to_owned(),
     });
     let svc = service(&runner, Ok(()));
-    svc.stop("atlas-x").expect("already gone is the wanted outcome");
+    svc.stop("atlas-x")
+        .expect("already gone is the wanted outcome");
 }
 
 #[test]
@@ -218,7 +229,9 @@ fn a_container_runtime_failure_on_stop_is_reported() {
         stderr: "permission denied while trying to connect to the Docker daemon".to_owned(),
     });
     let svc = service(&runner, Ok(()));
-    let err = svc.stop("atlas-x").expect_err("a real failure must surface");
+    let err = svc
+        .stop("atlas-x")
+        .expect_err("a real failure must surface");
     assert!(err.to_string().contains("permission denied"), "{err}");
 }
 
@@ -289,5 +302,8 @@ fn a_container_removed_after_dying_reports_not_alive() {
         stderr: "Error: No such object: atlas-x".to_owned(),
     });
     let svc = service(&runner, Ok(()));
-    assert!(!svc.alive("atlas-x").expect("a missing container is an answer"));
+    assert!(
+        !svc.alive("atlas-x")
+            .expect("a missing container is an answer")
+    );
 }

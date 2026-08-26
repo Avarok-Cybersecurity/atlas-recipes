@@ -250,15 +250,10 @@ pub(super) fn driver(rank: FixtureRank, transport: FixtureTransport) -> (Cluster
         descriptor(3, false),
     ]);
     (
-        ClusterDriver::new(
-            Arc::new(fleet),
-            Arc::new(rank),
-            Arc::new(transport),
-            34334,
-        )
-        // The fixtures answer liveness from a table rather than from a real
-        // container, so there is nothing for a settling window to observe.
-        .with_settle(std::time::Duration::ZERO),
+        ClusterDriver::new(Arc::new(fleet), Arc::new(rank), Arc::new(transport), 34334)
+            // The fixtures answer liveness from a table rather than from a real
+            // container, so there is nothing for a settling window to observe.
+            .with_settle(std::time::Duration::ZERO),
         log,
     )
 }

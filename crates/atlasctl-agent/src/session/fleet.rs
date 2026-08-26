@@ -26,12 +26,7 @@ impl Session<'_> {
         vec![ServerMsg::Nodes { id, nodes }]
     }
 
-    pub(super) fn pair(
-        &mut self,
-        id: u32,
-        node: NodeId,
-        code: &str,
-    ) -> Vec<ServerMsg> {
+    pub(super) fn pair(&mut self, id: u32, node: NodeId, code: &str) -> Vec<ServerMsg> {
         let Some(fleet) = self.deps.fleet else {
             return vec![err(Some(id), AgentError::NotReady)];
         };

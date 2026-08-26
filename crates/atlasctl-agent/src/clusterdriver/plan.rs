@@ -124,7 +124,6 @@ impl ClusterDriver {
             .map(Some)
             .map_err(|_| format!("{} has an address we cannot dial", node.name))
     }
-
 }
 
 /// The port rank 0 will serve on, for the endpoint shown to the operator.

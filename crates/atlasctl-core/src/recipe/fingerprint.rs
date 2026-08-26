@@ -143,10 +143,22 @@ mod tests {
     fn prose_layout_and_identity_do_not_change_the_hash() {
         let base = hash_of("r", BASE);
         for (what, yaml) in [
-            ("a comment", "# a note\nmodel: org/m\ncontainer: img:tag\nruntime: atlas\n"),
-            ("key order", "runtime: atlas\ncontainer: img:tag\nmodel: org/m\n"),
-            ("blank lines", "model: org/m\n\n\ncontainer: img:tag\nruntime: atlas\n"),
-            ("a description", "model: org/m\ncontainer: img:tag\nruntime: atlas\ndescription: hello\n"),
+            (
+                "a comment",
+                "# a note\nmodel: org/m\ncontainer: img:tag\nruntime: atlas\n",
+            ),
+            (
+                "key order",
+                "runtime: atlas\ncontainer: img:tag\nmodel: org/m\n",
+            ),
+            (
+                "blank lines",
+                "model: org/m\n\n\ncontainer: img:tag\nruntime: atlas\n",
+            ),
+            (
+                "a description",
+                "model: org/m\ncontainer: img:tag\nruntime: atlas\ndescription: hello\n",
+            ),
         ] {
             assert_eq!(base, hash_of("r", yaml), "{what} must not change the hash");
         }
@@ -158,14 +170,38 @@ mod tests {
     fn every_field_that_reaches_the_command_line_changes_the_hash() {
         let base = hash_of("r", BASE);
         for (what, yaml) in [
-            ("model", "model: org/other\ncontainer: img:tag\nruntime: atlas\n"),
-            ("container", "model: org/m\ncontainer: img:other\nruntime: atlas\n"),
-            ("runtime", "model: org/m\ncontainer: img:tag\nruntime: vllm-distributed\n"),
-            ("revision", "model: org/m\ncontainer: img:tag\nruntime: atlas\nmodel_revision: abc\n"),
-            ("recipe_version", "recipe_version: '1'\nmodel: org/m\ncontainer: img:tag\nruntime: atlas\n"),
-            ("a default", "model: org/m\ncontainer: img:tag\nruntime: atlas\ndefaults:\n  port: 8888\n"),
-            ("env", "model: org/m\ncontainer: img:tag\nruntime: atlas\nenv:\n  FOO: bar\n"),
-            ("topology", "model: org/m\ncontainer: img:tag\nruntime: atlas\nmin_nodes: 2\n"),
+            (
+                "model",
+                "model: org/other\ncontainer: img:tag\nruntime: atlas\n",
+            ),
+            (
+                "container",
+                "model: org/m\ncontainer: img:other\nruntime: atlas\n",
+            ),
+            (
+                "runtime",
+                "model: org/m\ncontainer: img:tag\nruntime: vllm-distributed\n",
+            ),
+            (
+                "revision",
+                "model: org/m\ncontainer: img:tag\nruntime: atlas\nmodel_revision: abc\n",
+            ),
+            (
+                "recipe_version",
+                "recipe_version: '1'\nmodel: org/m\ncontainer: img:tag\nruntime: atlas\n",
+            ),
+            (
+                "a default",
+                "model: org/m\ncontainer: img:tag\nruntime: atlas\ndefaults:\n  port: 8888\n",
+            ),
+            (
+                "env",
+                "model: org/m\ncontainer: img:tag\nruntime: atlas\nenv:\n  FOO: bar\n",
+            ),
+            (
+                "topology",
+                "model: org/m\ncontainer: img:tag\nruntime: atlas\nmin_nodes: 2\n",
+            ),
         ] {
             assert_ne!(base, hash_of("r", yaml), "{what} must change the hash");
         }
@@ -175,9 +211,18 @@ mod tests {
     /// line, so they must not hash alike.
     #[test]
     fn a_scalars_type_is_part_of_its_identity() {
-        let as_int = hash_of("r", "model: org/m\ncontainer: img:tag\nruntime: atlas\ndefaults:\n  x: 1\n");
-        let as_str = hash_of("r", "model: org/m\ncontainer: img:tag\nruntime: atlas\ndefaults:\n  x: '1'\n");
-        let as_bool = hash_of("r", "model: org/m\ncontainer: img:tag\nruntime: atlas\ndefaults:\n  x: true\n");
+        let as_int = hash_of(
+            "r",
+            "model: org/m\ncontainer: img:tag\nruntime: atlas\ndefaults:\n  x: 1\n",
+        );
+        let as_str = hash_of(
+            "r",
+            "model: org/m\ncontainer: img:tag\nruntime: atlas\ndefaults:\n  x: '1'\n",
+        );
+        let as_bool = hash_of(
+            "r",
+            "model: org/m\ncontainer: img:tag\nruntime: atlas\ndefaults:\n  x: true\n",
+        );
         assert_ne!(as_int, as_str);
         assert_ne!(as_int, as_bool);
         assert_ne!(as_str, as_bool);
@@ -196,7 +241,10 @@ mod tests {
     #[test]
     fn an_absent_revision_differs_from_an_empty_one() {
         let absent = hash_of("r", BASE);
-        let empty = hash_of("r", "model: org/m\ncontainer: img:tag\nruntime: atlas\nmodel_revision: ''\n");
+        let empty = hash_of(
+            "r",
+            "model: org/m\ncontainer: img:tag\nruntime: atlas\nmodel_revision: ''\n",
+        );
         assert_ne!(absent, empty);
     }
 
@@ -204,6 +252,9 @@ mod tests {
     fn the_hash_is_a_full_sha256_in_hex() {
         let h = hash_of("r", BASE);
         assert_eq!(h.len(), 64);
-        assert!(h.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(
+            h.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
     }
 }

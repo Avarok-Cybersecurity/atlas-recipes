@@ -67,7 +67,13 @@ pub trait ClusterControl: Send + Sync {
         nodes: &[atlasctl_protocol::fleet::NodeId],
         head: atlasctl_protocol::fleet::NodeId,
         settings: &BTreeMap<String, SettingValue>,
-    ) -> Result<(Vec<atlasctl_protocol::msg::fleet::RankPreview>, Option<String>), String>;
+    ) -> Result<
+        (
+            Vec<atlasctl_protocol::msg::fleet::RankPreview>,
+            Option<String>,
+        ),
+        String,
+    >;
 
     /// Ask every rank to validate and reserve. Nothing starts.
     ///
@@ -83,7 +89,14 @@ pub trait ClusterControl: Send + Sync {
         nodes: &[atlasctl_protocol::fleet::NodeId],
         head: atlasctl_protocol::fleet::NodeId,
         settings: &BTreeMap<String, SettingValue>,
-    ) -> Result<(String, Vec<atlasctl_protocol::msg::fleet::RankPrepare>, bool), String>;
+    ) -> Result<
+        (
+            String,
+            Vec<atlasctl_protocol::msg::fleet::RankPrepare>,
+            bool,
+        ),
+        String,
+    >;
 
     /// Start what every rank prepared under this epoch.
     ///
@@ -255,9 +268,7 @@ impl<'a> Session<'a> {
                 self.commit_cluster(id, &epoch)
             }
 
-            (Phase::Ready, ClientMsg::AbortCluster { id, epoch }) => {
-                self.abort_cluster(id, &epoch)
-            }
+            (Phase::Ready, ClientMsg::AbortCluster { id, epoch }) => self.abort_cluster(id, &epoch),
 
             (Phase::Ready, ClientMsg::StopCluster { id }) => self.stop_cluster(id),
 

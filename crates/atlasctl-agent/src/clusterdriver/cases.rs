@@ -47,7 +47,10 @@ fn one_refusal_releases_every_reservation_already_taken() {
     let c = calls(&log);
     // The two that accepted were released; the one that refused was not asked
     // to release something it never took.
-    assert!(c.contains(&"local.abort".to_owned()), "head must release: {c:?}");
+    assert!(
+        c.contains(&"local.abort".to_owned()),
+        "head must release: {c:?}"
+    );
     assert!(
         c.contains(&format!("{}.abort", node_id(2).short())),
         "the peer that accepted must release: {c:?}"
@@ -114,7 +117,10 @@ fn a_failed_commit_stops_the_ranks_that_already_started() {
         .expect("prepares");
 
     let err = d.commit(&epoch).expect_err("rank 2 cannot start");
-    assert!(err.contains("image missing"), "the reason must survive: {err}");
+    assert!(
+        err.contains("image missing"),
+        "the reason must survive: {err}"
+    );
 
     let c = calls(&log);
     assert!(
@@ -122,7 +128,8 @@ fn a_failed_commit_stops_the_ranks_that_already_started() {
         "rank 0 must be stopped: {c:?}"
     );
     assert!(
-        c.iter().any(|x| x.starts_with(&format!("{}.stop(", node_id(2).short()))),
+        c.iter()
+            .any(|x| x.starts_with(&format!("{}.stop(", node_id(2).short()))),
         "the started peer must be stopped: {c:?}"
     );
 }
@@ -217,7 +224,11 @@ fn a_machine_outside_the_fleet_fails_before_any_rank_is_asked() {
         )
         .expect_err("node 9 is not in this fleet");
     assert!(err.contains("not in this fleet"), "{err}");
-    assert!(calls(&log).is_empty(), "nothing may be asked: {:?}", calls(&log));
+    assert!(
+        calls(&log).is_empty(),
+        "nothing may be asked: {:?}",
+        calls(&log)
+    );
 }
 
 /// The head is a rank like any other. A head that skipped its own prepare would
@@ -249,7 +260,10 @@ fn a_started_cluster_can_be_stopped_on_every_machine() {
     assert_eq!(stopped.len(), started.len());
 
     let c = calls(&log);
-    assert!(c.contains(&"local.stop(head-container)".to_owned()), "{c:?}");
+    assert!(
+        c.contains(&"local.stop(head-container)".to_owned()),
+        "{c:?}"
+    );
     for seed in [2u8, 3] {
         let id = node_id(seed).short();
         assert!(
@@ -284,7 +298,11 @@ fn a_cluster_is_stopped_once() {
 
     let before = calls(&log).len();
     assert!(d.stop_cluster().is_err(), "the cluster is already stopped");
-    assert_eq!(calls(&log).len(), before, "no machine may be contacted again");
+    assert_eq!(
+        calls(&log).len(),
+        before,
+        "no machine may be contacted again"
+    );
 }
 
 /// A rank left running holds a whole GPU, so giving up on the first failure
@@ -325,7 +343,10 @@ fn a_rank_that_dies_on_startup_fails_the_commit_and_stops_the_rest() {
 
     let err = d.commit(&epoch).expect_err("rank 0 did not survive");
     assert!(err.contains("stopped within"), "{err}");
-    assert!(err.contains("spark-1"), "the dead machine must be named: {err}");
+    assert!(
+        err.contains("spark-1"),
+        "the dead machine must be named: {err}"
+    );
 
     // The peers that did start must not be left holding a GPU.
     let c = calls(&log);
@@ -366,7 +387,10 @@ fn every_rank_is_asked_whether_it_survived() {
     d.commit(&epoch).expect("commits");
 
     let c = calls(&log);
-    assert!(c.contains(&"local.alive(head-container)".to_owned()), "{c:?}");
+    assert!(
+        c.contains(&"local.alive(head-container)".to_owned()),
+        "{c:?}"
+    );
     for seed in [2u8, 3] {
         let id = node_id(seed).short();
         assert!(

@@ -25,12 +25,12 @@
 //! failed commit stops every rank already started, including rank 0. The
 //! invariant is that a cluster is either whole or absent, never partial.
 
-use anyhow::Result;
 use crate::cluster::{PrepareReply, new_epoch};
 use crate::fleet::FleetView;
 use crate::rank::RankService;
 use crate::session::ClusterControl;
 use crate::transport::RankTransport;
+use anyhow::Result;
 use atlasctl_protocol::RecipeId;
 use atlasctl_protocol::fleet::{DisplayName, NodeId};
 use atlasctl_protocol::msg::fleet::{RankPrepare, RankPreview, RankStarted};
@@ -265,9 +265,8 @@ impl ClusterControl for ClusterDriver {
                     container,
                     // Only rank 0 serves the API. A worker's URL would not
                     // answer, and offering one would cost the operator time.
-                    endpoint: (t.assignment.rank == 0).then(|| {
-                        format!("http://{}:{}", t.assignment.master_addr, pending.port)
-                    }),
+                    endpoint: (t.assignment.rank == 0)
+                        .then(|| format!("http://{}:{}", t.assignment.master_addr, pending.port)),
                 }),
                 Err(reason) => {
                     // A half-started cluster waits forever on a rendezvous that
@@ -392,8 +391,6 @@ impl ClusterDriver {
         }
     }
 }
-
-
 
 #[cfg(test)]
 mod cases;
