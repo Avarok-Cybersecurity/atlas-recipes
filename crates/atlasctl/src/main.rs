@@ -10,6 +10,7 @@ mod configdir;
 mod hostinfo;
 mod httpscrape;
 mod launchtelemetry;
+mod peerpairing;
 mod peertransport;
 mod rankservice;
 mod service;

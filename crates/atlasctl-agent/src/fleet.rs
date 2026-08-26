@@ -27,6 +27,10 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+#[path = "fleet/pairing_tests.rs"]
+mod pairing_tests;
+
 /// A node absent for longer than this is reported as unreachable.
 ///
 /// Generous on purpose. mDNS records re-resolve on their own schedule rather
@@ -52,6 +56,22 @@ pub trait FleetView: Send + Sync {
     /// # Errors
     /// If the pin store cannot be written.
     fn unpair(&self, node: NodeId) -> Result<bool>;
+}
+
+/// Dialling a peer and completing the pairing ceremony against it.
+///
+/// A port, for the same reason [`crate::transport::RankTransport`] is one: the
+/// fleet decides *who* to pair with and *what it means*, and something else
+/// owns the socket and the runtime. It also makes the refusals below testable
+/// without a second machine.
+pub trait PeerPairing: Send + Sync {
+    /// Pair with the machine at `addr` using `code`, as the initiator.
+    ///
+    /// Must not record trust; the caller decides that.
+    ///
+    /// # Errors
+    /// If the machine cannot be reached or the ceremony fails.
+    fn pair(&self, addr: std::net::SocketAddr, code: &str) -> Result<crate::peer::pair::Paired>;
 }
 
 /// The result of a successful pairing.
@@ -97,6 +117,8 @@ pub struct LocalFleet {
     /// machine claims to be, while this is what a machine holding the key we
     /// pinned actually said. Only the second is evidence.
     reports: Mutex<BTreeMap<NodeId, crate::peer::link::PeerReport>>,
+    /// How to run the ceremony, when this agent can.
+    pairing: Option<Box<dyn PeerPairing>>,
 }
 
 impl std::fmt::Debug for LocalFleet {
@@ -131,7 +153,19 @@ impl LocalFleet {
             alerts: Mutex::new(BTreeMap::new()),
             running: Mutex::new(None),
             reports: Mutex::new(BTreeMap::new()),
+            pairing: None,
         }
+    }
+
+    /// Give this fleet a way to actually run the pairing ceremony.
+    ///
+    /// Without it `pair` refuses rather than pretending: a pairing that
+    /// reported success without a key exchange would write a pin that means
+    /// nothing, which is worse than not pairing at all.
+    #[must_use]
+    pub fn with_pairing(mut self, p: Box<dyn PeerPairing>) -> Self {
+        self.pairing = Some(p);
+        self
     }
 
     /// Attach a source for what this machine is serving.

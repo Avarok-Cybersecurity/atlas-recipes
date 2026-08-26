@@ -178,14 +178,50 @@ impl FleetView for LocalFleet {
             .and_then(|s| s.get(&node).cloned())
             .ok_or_else(|| anyhow::anyhow!("that node is not visible on this network"))?;
 
-        // The ceremony itself runs over the peer channel; this is the point
-        // where that would be driven. Until the peer transport is wired in,
-        // refuse rather than pretend: a pairing that silently succeeded without
-        // a key exchange would write a pin that means nothing.
-        anyhow::bail!(
-            "cannot reach {} to pair: the peer channel is not connected",
-            seen.beacon.name
-        )
+        let Some(driver) = self.pairing.as_ref() else {
+            // Refuse rather than pretend. A pairing that reported success
+            // without a key exchange would write a pin that means nothing,
+            // which is worse than not pairing at all.
+            anyhow::bail!("this agent has no peer transport, so it cannot run a pairing ceremony");
+        };
+
+        // The beacon says where it is; the ceremony decides whether it is who
+        // it claims. An address from an unauthenticated beacon is safe to dial
+        // precisely because dialling it proves nothing on its own.
+        let addr = seen
+            .beacon
+            .addresses
+            .first()
+            .map(|ip| std::net::SocketAddr::new(*ip, seen.beacon.peer_port))
+            .ok_or_else(|| anyhow::anyhow!("{} advertised no address to dial", seen.beacon.name))?;
+
+        let paired = driver.pair(addr, code)?;
+
+        // The ceremony authenticates the peer; this checks it is the peer the
+        // operator asked for. Without it, a machine answering on that address
+        // could be pinned under the identity of the one that was chosen.
+        anyhow::ensure!(
+            paired.node == node,
+            "reached {} at {addr}, but {} was selected",
+            paired.node.short(),
+            node.short()
+        );
+
+        super::record_pairing(
+            &self.pins,
+            paired.node,
+            &paired.public_key,
+            atlasctl_protocol::fleet::DisplayName::new(&paired.name),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
+            Some(addr.ip().to_string()),
+        )?;
+
+        Ok(PairOutcome {
+            node: paired.node,
+            verification: paired.verification,
+        })
     }
 
     fn unpair(&self, node: NodeId) -> Result<bool> {

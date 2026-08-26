@@ -129,6 +129,16 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         .filter_map(|a| a.addr.parse().ok())
         .collect();
 
+    // Built before anything that holds a handle to it. Both the cluster
+    // previewer and the pairing driver dial another machine, and neither can be
+    // constructed without a reactor that already exists.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        // Two workers is ample: this serves one local browser, not a fleet.
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .context("starting the async runtime")?;
+
     let pins = atlasctl_agent::identity::PinStore::new(&config_dir);
     let fleet = atlasctl_agent::fleet::LocalFleet::new(
         atlasctl_agent::identity::Identity::load_or_create(&config_dir)?,
@@ -141,20 +151,19 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     .with_vitals(Box::new(vitals))
     .with_running(Box::new(atlasctl_agent::fleet::DockerRunning(Arc::clone(
         &runner,
-    ))));
+    ))))
+    // Without this the browser can see peers and not pair with them, which is
+    // where the fleet story dead-ended: the dialog existed, the ceremony had
+    // nothing to run it.
+    .with_pairing(Box::new(crate::peerpairing::RuntimePeerPairing::new(
+        Arc::clone(&identity),
+        pins.clone(),
+        rt.handle().clone(),
+    )));
 
     let fleet = Arc::new(fleet);
     let (events, _keep) = tokio::sync::broadcast::channel(256);
 
-    // Built here rather than at the end because the cluster previewer holds a
-    // handle to it: previewing a rank means dialling another machine, and that
-    // needs a reactor that already exists.
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        // Two workers is ample: this serves one local browser, not a fleet.
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .context("starting the async runtime")?;
     let renderer: Arc<dyn atlasctl_agent::rank::RankService> =
         Arc::new(crate::rankservice::LocalRankService::new(
             crate::commands::registry_set()?,
