@@ -6,6 +6,7 @@
 
 mod cli;
 mod commands;
+mod configdir;
 mod hostinfo;
 mod httpscrape;
 mod launchtelemetry;
@@ -35,6 +36,13 @@ fn main() -> std::process::ExitCode {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    // Applied before any command runs, so every path that resolves the config
+    // directory — including the ones inside the agent library, which never see
+    // the CLI — agrees on where state lives. One resolution order, one answer.
+    if let Some(dir) = &cli.config_dir {
+        // SAFETY: single-threaded here; nothing has been spawned yet.
+        unsafe { std::env::set_var(configdir::DIR_ENV, dir) };
+    }
     match cli.command {
         Command::Recipe(RecipeCmd::List(a)) | Command::List(a) => commands::recipe::list(&a),
         Command::Recipe(RecipeCmd::Show(a)) | Command::Show(a) => commands::recipe::show(&a),

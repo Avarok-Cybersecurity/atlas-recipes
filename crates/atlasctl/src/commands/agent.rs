@@ -56,7 +56,20 @@ fn probe_can_launch(runner: &dyn ProcessRunner) -> Result<(), String> {
 /// Run the agent in the foreground.
 pub fn run(args: &AgentRunArgs) -> Result<()> {
     let config_dir = hostinfo::config_dir()?;
-    let tok = token::load_or_create(&config_dir)?;
+    // Checked once, up front, so a permission problem is reported in full
+    // rather than as whichever of the three state files happened to be touched
+    // first — which is how it surfaced as a bare `Permission denied`.
+    crate::configdir::ensure_usable(&config_dir)?;
+
+    // Acquired only when a browser will actually be served. A node that exists
+    // to hold a rank talks to its peers over mutually authenticated TLS and
+    // never consults this token; making it a startup requirement meant a
+    // worker could not run at all because of a credential it would not use.
+    let tok = if args.no_browser {
+        None
+    } else {
+        Some(token::load_or_create(&config_dir)?)
+    };
     let runner: Arc<dyn ProcessRunner> = Arc::new(StdProcessRunner);
     // In client mode the refusal is not a probe result that could later change
     // its mind — this agent has no business launching anything, and says so.
@@ -181,7 +194,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
             &ROOTLESS_V1,
             Box::new(NvidiaDevices),
         )),
-        token: tok.clone(),
+        token: tok.clone().unwrap_or_default(),
         can_launch: can_launch.clone(),
         port: args.port,
         allow_dev_origins: args.dev_origins,
@@ -220,7 +233,13 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         });
     }
 
-    eprintln!("atlasctl agent listening on 127.0.0.1:{}", args.port);
+    if args.no_browser {
+        // Do not claim a port that was never bound. The whole point of this
+        // mode is that there is no browser channel.
+        eprintln!("atlasctl agent running (peer channel only, no browser port)");
+    } else {
+        eprintln!("atlasctl agent listening on 127.0.0.1:{}", args.port);
+    }
     // Client mode is a different kind of agent, not a broken one, so it does
     // not report a docker failure it was never going to use — and it does not
     // repeat the docker-group warning, which would be untrue here.
@@ -237,7 +256,13 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     if args.dev_origins {
         eprintln!("accepting development origins — do not leave this on");
     }
-    eprintln!("\npairing token (paste into the website once):\n  {tok}\n");
+    match &tok {
+        Some(t) => eprintln!("\npairing token (paste into the website once):\n  {t}\n"),
+        None => eprintln!(
+            "\nbrowser channel disabled (--no-browser); no pairing token was created.\n\
+             This node is reachable by its paired peers over the peer channel.\n"
+        ),
+    }
     if args.client {
         eprintln!("This agent does not talk to Docker and cannot start a container.");
         eprintln!("It can discover machines, pair with them, and watch what they are doing.");
@@ -290,6 +315,13 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
             },
         );
 
+        if args.no_browser {
+            // Nothing to serve; the peer channel and discovery are the point.
+            // Park until signalled rather than returning, which would tear the
+            // runtime down and take those with it.
+            std::future::pending::<()>().await;
+            return Ok(());
+        }
         serve(state, args.port).await
     })
 }

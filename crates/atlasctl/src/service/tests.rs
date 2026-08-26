@@ -108,6 +108,7 @@ fn agent() -> AgentInvocation {
         port: 34333,
         client: false,
         discovery: true,
+        browser: true,
     }
 }
 
@@ -154,6 +155,25 @@ fn a_control_only_install_carries_the_flag_into_the_unit() {
 
     let normal = plan(ServiceKind::Systemd, &agent(), &home(), 1000);
     assert!(!normal.unit_body.contains("--client"));
+}
+
+/// A node installed to hold a rank must still be one after a reboot. Dropping
+/// the flag would have it come back demanding a browser credential it does not
+/// use — the failure that stopped a worker starting at all.
+#[test]
+fn a_rank_holder_install_records_no_browser() {
+    let a = AgentInvocation {
+        browser: false,
+        ..agent()
+    };
+    let p = plan(ServiceKind::Systemd, &a, &home(), 1000);
+    assert!(p.unit_body.contains("--no-browser"), "{}", p.unit_body);
+
+    let normal = plan(ServiceKind::Systemd, &agent(), &home(), 1000);
+    assert!(
+        !normal.unit_body.contains("--no-browser"),
+        "an ordinary install must still serve a browser"
+    );
 }
 
 /// systemd splits ExecStart on whitespace itself, so an unquoted path with a

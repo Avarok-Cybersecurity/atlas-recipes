@@ -21,6 +21,7 @@ pub fn install(args: &crate::cli::AgentInstallArgs) -> Result<()> {
         port: args.port,
         client: args.client,
         discovery: !args.no_discovery,
+        browser: !args.no_browser,
     };
     let done = crate::service::install(
         &atlasctl_core::io::StdFileSystem,

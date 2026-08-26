@@ -64,6 +64,12 @@ pub struct AgentInvocation {
     pub client: bool,
     /// Whether to advertise on, and listen to, the network.
     pub discovery: bool,
+    /// Whether to serve the browser channel at all.
+    ///
+    /// Recorded in the unit like the rest: a node installed as a rank-holder
+    /// must still be one after a reboot, rather than quietly starting to
+    /// demand a browser credential it does not use.
+    pub browser: bool,
 }
 
 impl AgentInvocation {
@@ -86,6 +92,9 @@ impl AgentInvocation {
         }
         if !self.discovery {
             v.push("--no-discovery".to_owned());
+        }
+        if !self.browser {
+            v.push("--no-browser".to_owned());
         }
         v
     }
