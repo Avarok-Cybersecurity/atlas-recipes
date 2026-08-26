@@ -123,6 +123,38 @@ def check_release_config() -> int:
     return bad
 
 
+def as_tuple(version: str) -> tuple[int, ...]:
+    """A dotted version as integers, for ordering.
+
+    Only ever used to answer "is the manifest behind the package". These are
+    plain `x.y.z` values written by release-please; anything unparseable sorts
+    lowest, so a value this cannot read is treated as stale rather than
+    silently accepted as current.
+    """
+    return tuple(
+        int(chunk) if chunk.isdigit() else 0
+        for chunk in version.split("-", 1)[0].split(".")
+    )
+
+
+def rewrite_manifest_entry(manifest_file: pathlib.Path, path: str, new: str) -> None:
+    """Record `path` as `new` in the release manifest, in place.
+
+    Line-oriented for the same reason the requirements are: a JSON round-trip
+    would reorder and reformat a file release-please also writes, and a diff
+    nobody can read is a diff nobody reviews.
+    """
+    lines = manifest_file.read_text().splitlines(keepends=True)
+    needle = f'"{path}":'
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith(needle):
+            head, _, tail = line.partition(needle)
+            suffix = "," if tail.rstrip().endswith(",") else ""
+            lines[i] = f'{head}{needle} "{new}"{suffix}\n'
+            manifest_file.write_text("".join(lines))
+            return
+
+
 def rewrite_requirement(manifest: pathlib.Path, name: str, old: str, new: str) -> bool:
     """Point one requirement at a new version, in place.
 
@@ -166,27 +198,42 @@ def main() -> int:
             else:
                 print(f"ok   {rel} [{table}] {name} {required}")
 
-    # Only on a normal tree. On the release branch release-please has already
-    # written the new versions into the Cargo manifests while
-    # .release-please-manifest.json still records the released-from versions —
-    # it is updated when the release is actually cut, not when the PR is
-    # prepared. Failing there would block the very repair this script exists to
-    # perform, which is exactly what it did on the first attempt.
-    if fix:
-        return bad | check_release_config()
-
+    # `--fix` used to skip this half outright, on the reasoning that the release
+    # branch records released-from versions until the release is cut. That
+    # premise was wrong, and the release PR proves it: `chore: release main`
+    # updated four of the five entries in the same commit that bumped their
+    # Cargo manifests, and left the fifth behind. So the manifest *is* written
+    # when the PR is prepared — just not always completely.
+    #
+    # Direction is what decides whether repairing is safe.
+    #
+    # An entry *ahead* of its Cargo.toml is release-please mid-generation.
+    # Rewriting it would undo a bump it is in the middle of making, so it stays
+    # a check even under `--fix`.
+    #
+    # An entry *behind* its Cargo.toml is not transient, and it is quietly
+    # destructive. The manifest is what the next release computes from, so a
+    # stale entry makes the next run propose a version that is already on
+    # crates.io — and crates.io versions are immutable. Nothing fails now; the
+    # release fails permanently, later, from a state no rerun can clear. That
+    # is what `atlasctl-protocol` was about to do at 0.1.3 with its package
+    # already at 0.2.0.
     manifest_file = ROOT / ".release-please-manifest.json"
     for path, recorded in json.loads(manifest_file.read_text()).items():
         target = (ROOT / path / "Cargo.toml") if path != "." else (ROOT / "Cargo.toml")
         actual = package_version(target)
-        if actual != recorded:
-            print(
-                f"::error::.release-please-manifest.json records {path} as {recorded} "
-                f"but {target.relative_to(ROOT)} is {actual}"
-            )
-            bad = 1
-        else:
+        if actual == recorded:
             print(f"ok   release manifest {path} {recorded}")
+            continue
+        if fix and actual is not None and as_tuple(recorded) < as_tuple(actual):
+            rewrite_manifest_entry(manifest_file, path, actual)
+            print(f"fix  release manifest {path} {recorded} -> {actual}")
+            continue
+        print(
+            f"::error::.release-please-manifest.json records {path} as {recorded} "
+            f"but {target.relative_to(ROOT)} is {actual}"
+        )
+        bad = 1
 
     bad |= check_release_config()
 
