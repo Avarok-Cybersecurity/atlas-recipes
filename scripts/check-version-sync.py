@@ -2,6 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Every internal version requirement must equal the package it points at.
 
+With ``--fix``, rewrites them instead of complaining. The release workflow uses
+that: release-please bumps ``[package] version`` and never touches the
+requirements pointing at it, so on the release branch they are stale by
+construction. Repairing them there is the same job as repairing the lock, and
+it makes a split release harmless — each requirement gets the version of the
+crate it actually names, whether or not the crates moved together.
+
 Workspace members depend on each other by path *and* version, because
 publishing to crates.io needs the version. Nothing in cargo keeps that
 requirement in step with the package it names.
@@ -116,7 +123,26 @@ def check_release_config() -> int:
     return bad
 
 
+def rewrite_requirement(manifest: pathlib.Path, name: str, old: str, new: str) -> bool:
+    """Point one requirement at a new version, in place.
+
+    Line-oriented and anchored on the dependency name, because rewriting the
+    file through a TOML serialiser would reformat and strip comments — and the
+    comments here are load-bearing.
+    """
+    lines = manifest.read_text().splitlines(keepends=True)
+    needle = f'version = "{old}"'
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped.startswith(f"{name} ") and needle in line:
+            lines[i] = line.replace(needle, f'version = "{new}"', 1)
+            manifest.write_text("".join(lines))
+            return True
+    return False
+
+
 def main() -> int:
+    fix = "--fix" in sys.argv
     manifests = [ROOT / "Cargo.toml", *sorted(ROOT.glob("crates/*/Cargo.toml"))]
     bad = 0
 
@@ -129,14 +155,19 @@ def main() -> int:
                 print(f"::error::{rel} [{table}] {name} points at {path}, which declares no version")
                 bad = 1
             elif required != actual:
-                print(
-                    f"::error::{rel} [{table}] requires {name} = \"{required}\" "
-                    f"but {target.relative_to(ROOT)} is {actual}"
-                )
-                bad = 1
+                if fix and rewrite_requirement(manifest, name, required, actual):
+                    print(f"fix  {rel} [{table}] {name} {required} -> {actual}")
+                else:
+                    print(
+                        f"::error::{rel} [{table}] requires {name} = \"{required}\" "
+                        f"but {target.relative_to(ROOT)} is {actual}"
+                    )
+                    bad = 1
             else:
                 print(f"ok   {rel} [{table}] {name} {required}")
 
+    # The release branch legitimately has manifest entries ahead of the
+    # manifests for a moment, so this half is a check, never a fix.
     manifest_file = ROOT / ".release-please-manifest.json"
     for path, recorded in json.loads(manifest_file.read_text()).items():
         target = (ROOT / path / "Cargo.toml") if path != "." else (ROOT / "Cargo.toml")
@@ -151,6 +182,9 @@ def main() -> int:
             print(f"ok   release manifest {path} {recorded}")
 
     bad |= check_release_config()
+
+    if fix and not bad:
+        return 0
 
     if bad:
         print(
