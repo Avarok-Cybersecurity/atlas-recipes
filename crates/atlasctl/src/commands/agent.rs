@@ -140,6 +140,10 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         .context("starting the async runtime")?;
 
     let pins = atlasctl_agent::identity::PinStore::new(&config_dir);
+    // Shared by the listener, which admits a stranger only while it is open,
+    // and by the browser verb that opens it. One window, or the gate and the
+    // invitation would be talking about different things.
+    let joining = Arc::new(atlasctl_agent::joining::JoinWindow::default());
     let fleet = atlasctl_agent::fleet::LocalFleet::new(
         atlasctl_agent::identity::Identity::load_or_create(&config_dir)?,
         pins.clone(),
@@ -308,6 +312,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
             events.clone(),
             atlasctl_agent::peer::DEFAULT_PEER_PORT,
             Arc::clone(&renderer),
+            Arc::clone(&joining),
         );
 
         atlasctl_agent::daemon::spawn_all(

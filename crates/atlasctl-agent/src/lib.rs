@@ -12,6 +12,7 @@ pub mod fabric;
 pub mod fleet;
 pub mod guard;
 pub mod identity;
+pub mod joining;
 pub mod launcher;
 pub mod launchstats;
 pub mod logs;
