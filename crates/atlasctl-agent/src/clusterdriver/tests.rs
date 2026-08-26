@@ -65,6 +65,7 @@ pub(super) struct FixtureRank {
     log: Log,
     prepare: PrepareReply,
     commit: Result<String, String>,
+    stop: Result<(), String>,
 }
 
 impl FixtureRank {
@@ -73,6 +74,7 @@ impl FixtureRank {
             log: Arc::clone(log),
             prepare: PrepareReply::Prepared,
             commit: Ok("head-container".to_owned()),
+            stop: Ok(()),
         }
     }
     fn note(&self, what: String) {
@@ -99,7 +101,7 @@ impl RankService for FixtureRank {
     }
     fn stop(&self, container: &str) -> anyhow::Result<()> {
         self.note(format!("local.stop({container})"));
-        Ok(())
+        self.stop.clone().map_err(|e| anyhow::anyhow!(e))
     }
     fn abort(&self, _: &str) {
         self.note("local.abort".to_owned());
@@ -190,6 +192,17 @@ pub(super) fn refusing_rank(log: &Log, why: &str) -> FixtureRank {
             reason: why.to_owned(),
         },
         commit: Err("was never prepared".to_owned()),
+        stop: Ok(()),
+    }
+}
+
+/// This machine, unable to stop what it started.
+pub(super) fn refusing_stop_rank(log: &Log) -> FixtureRank {
+    FixtureRank {
+        log: Arc::clone(log),
+        prepare: PrepareReply::Prepared,
+        commit: Ok("head-container".to_owned()),
+        stop: Err("the container runtime is not answering".to_owned()),
     }
 }
 

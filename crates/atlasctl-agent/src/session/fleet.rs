@@ -175,4 +175,15 @@ impl Session<'_> {
             may_commit: false,
         }]
     }
+
+    /// Stop every rank of the running cluster.
+    pub(super) fn stop_cluster(&self, id: u32) -> Vec<ServerMsg> {
+        let Some(cluster) = self.deps.cluster else {
+            return vec![err(Some(id), AgentError::NotReady)];
+        };
+        match cluster.stop_cluster() {
+            Ok(ranks) => vec![ServerMsg::ClusterStopped { id, ranks }],
+            Err(detail) => vec![err(Some(id), AgentError::LaunchFailed { detail })],
+        }
+    }
 }

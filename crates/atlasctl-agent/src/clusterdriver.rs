@@ -54,6 +54,16 @@ struct Target {
     name: DisplayName,
 }
 
+/// A cluster that started, kept so it can be stopped again.
+///
+/// The containers are recorded rather than looked up later: a rank's container
+/// is named by that machine, and rediscovering it would mean trusting a name
+/// match instead of what the commit actually returned.
+struct Running {
+    targets: Vec<Target>,
+    started: Vec<RankStarted>,
+}
+
 /// A prepare that has been accepted and is waiting to be committed.
 struct Pending {
     epoch: String,
@@ -70,6 +80,7 @@ pub struct ClusterDriver {
     transport: Arc<dyn RankTransport>,
     peer_port: u16,
     pending: Mutex<Option<Pending>>,
+    running: Mutex<Option<Running>>,
 }
 
 impl std::fmt::Debug for ClusterDriver {
@@ -93,6 +104,7 @@ impl ClusterDriver {
             transport,
             peer_port,
             pending: Mutex::new(None),
+            running: Mutex::new(None),
         }
     }
 
@@ -355,6 +367,10 @@ impl ClusterControl for ClusterDriver {
                 }
             }
         }
+        *self.running.lock().expect("running lock poisoned") = Some(Running {
+            targets: pending.targets,
+            started: started.clone(),
+        });
         Ok(started)
     }
 
@@ -371,6 +387,38 @@ impl ClusterControl for ClusterDriver {
         if let Some(p) = taken {
             let all: Vec<&Target> = p.targets.iter().collect();
             self.roll_back(epoch, &all);
+        }
+    }
+
+    fn stop_cluster(&self) -> Result<Vec<RankStarted>, String> {
+        let running = self
+            .running
+            .lock()
+            .expect("running lock poisoned")
+            .take()
+            .ok_or_else(|| "this agent did not start a cluster".to_owned())?;
+
+        // Every rank is attempted even after one fails: a rank left running
+        // holds a whole GPU, so giving up on the first failure would be the
+        // most expensive possible response to it.
+        let mut failures = Vec::new();
+        for r in &running.started {
+            let Some(t) = running.targets.iter().find(|t| t.assignment.node == r.node) else {
+                continue;
+            };
+            match t.addr {
+                None => {
+                    if let Err(e) = self.rank.stop(&r.container) {
+                        failures.push(format!("{}: {e:#}", t.name));
+                    }
+                }
+                Some(addr) => self.transport.stop(t.assignment.node, addr, &r.container),
+            }
+        }
+        if failures.is_empty() {
+            Ok(running.started)
+        } else {
+            Err(format!("could not stop {}", failures.join("; ")))
         }
     }
 }

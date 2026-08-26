@@ -235,3 +235,78 @@ fn the_head_prepares_itself_like_any_other_rank() {
     assert!(!head.prepared);
     assert_eq!(head.reason, "docker is down");
 }
+
+#[test]
+fn a_started_cluster_can_be_stopped_on_every_machine() {
+    let log = new_log();
+    let (d, _) = driver(ready_rank(&log), transport(&log));
+    let (epoch, _, _) = d
+        .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .expect("prepares");
+    let started = d.commit(&epoch).expect("commits");
+
+    let stopped = d.stop_cluster().expect("stops");
+    assert_eq!(stopped.len(), started.len());
+
+    let c = calls(&log);
+    assert!(c.contains(&"local.stop(head-container)".to_owned()), "{c:?}");
+    for seed in [2u8, 3] {
+        let id = node_id(seed).short();
+        assert!(
+            c.iter().any(|x| x.starts_with(&format!("{id}.stop("))),
+            "{id} was never stopped: {c:?}"
+        );
+    }
+}
+
+/// An agent stops the cluster it started. Asking it to stop one it did not is
+/// how a page would use its local agent to reach machines it cannot authorize.
+#[test]
+fn stopping_without_having_started_anything_is_refused() {
+    let log = new_log();
+    let (d, _) = driver(ready_rank(&log), transport(&log));
+    let err = d.stop_cluster().expect_err("nothing was started");
+    assert!(err.contains("did not start a cluster"), "{err}");
+    assert!(calls(&log).is_empty(), "no machine may be contacted");
+}
+
+/// A cluster is stopped once. A second stop must not tear down a cluster
+/// started since.
+#[test]
+fn a_cluster_is_stopped_once() {
+    let log = new_log();
+    let (d, _) = driver(ready_rank(&log), transport(&log));
+    let (epoch, _, _) = d
+        .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .expect("prepares");
+    d.commit(&epoch).expect("commits");
+    d.stop_cluster().expect("stops");
+
+    let before = calls(&log).len();
+    assert!(d.stop_cluster().is_err(), "the cluster is already stopped");
+    assert_eq!(calls(&log).len(), before, "no machine may be contacted again");
+}
+
+/// A rank left running holds a whole GPU, so giving up on the first failure
+/// would be the most expensive possible response to it.
+#[test]
+fn every_rank_is_attempted_even_when_one_refuses_to_stop() {
+    let log = new_log();
+    let (d, _) = driver(refusing_stop_rank(&log), transport(&log));
+    let (epoch, _, _) = d
+        .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .expect("prepares");
+    d.commit(&epoch).expect("commits");
+
+    let err = d.stop_cluster().expect_err("rank 0 could not be stopped");
+    assert!(err.contains("could not stop"), "{err}");
+
+    let c = calls(&log);
+    for seed in [2u8, 3] {
+        let id = node_id(seed).short();
+        assert!(
+            c.iter().any(|x| x.starts_with(&format!("{id}.stop("))),
+            "{id} must still be stopped: {c:?}"
+        );
+    }
+}

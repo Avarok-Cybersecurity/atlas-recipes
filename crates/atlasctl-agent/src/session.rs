@@ -97,6 +97,13 @@ pub trait ClusterControl: Send + Sync {
 
     /// Abandon a prepare, releasing every reservation.
     fn abort(&self, epoch: &str);
+
+    /// Stop every rank of the cluster this agent started.
+    ///
+    /// # Errors
+    /// If no cluster is running, or a rank could not be stopped — and the
+    /// error names which, because a rank left running holds a whole GPU.
+    fn stop_cluster(&self) -> Result<Vec<atlasctl_protocol::msg::fleet::RankStarted>, String>;
 }
 
 /// A single client connection.
@@ -251,6 +258,8 @@ impl<'a> Session<'a> {
             (Phase::Ready, ClientMsg::AbortCluster { id, epoch }) => {
                 self.abort_cluster(id, &epoch)
             }
+
+            (Phase::Ready, ClientMsg::StopCluster { id }) => self.stop_cluster(id),
 
             (Phase::Closed, _) => Vec::new(),
         }

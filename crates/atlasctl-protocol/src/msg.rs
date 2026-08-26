@@ -154,6 +154,17 @@ pub enum ClientMsg {
         epoch: String,
     },
 
+    /// Stop every rank of the cluster this agent started.
+    ///
+    /// Named without a recipe or a node list on purpose: an agent stops the
+    /// cluster it launched and knows the containers for, rather than accepting
+    /// a list of things to stop on machines it was told about. A page cannot
+    /// use its local agent to stop something it did not start.
+    StopCluster {
+        /// Correlates the reply.
+        id: u32,
+    },
+
     /// Ask what is running.
     Status {
         /// Correlates the reply.
@@ -301,6 +312,14 @@ pub enum ServerMsg {
         /// Which prepare this commit consumed.
         epoch: String,
         /// Per-rank outcome, rank 0 first.
+        ranks: Vec<RankStarted>,
+    },
+
+    /// Every rank of a cluster was stopped.
+    ClusterStopped {
+        /// Correlates the request.
+        id: u32,
+        /// Ranks that were stopped, rank 0 first.
         ranks: Vec<RankStarted>,
     },
 
