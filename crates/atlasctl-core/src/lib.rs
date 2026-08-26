@@ -9,6 +9,7 @@ pub mod docker;
 pub mod flags;
 pub mod host;
 pub mod io;
+pub mod metrics;
 pub mod recipe;
 pub mod registry;
 pub mod scalar;
