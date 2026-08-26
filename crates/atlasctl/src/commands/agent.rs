@@ -139,6 +139,13 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         .build()
         .context("starting the async runtime")?;
 
+    // Asked once at startup rather than sampled: a machine does not change
+    // what accelerator it has while the agent is running, and the fleet view
+    // showed an empty string here for every node while the reading it came
+    // from already said "NVIDIA GB10".
+    let accelerator =
+        atlasctl_agent::telemetry::accelerator_name(runner.as_ref()).unwrap_or_default();
+
     let pins = atlasctl_agent::identity::PinStore::new(&config_dir);
     // Shared by the listener, which admits a stranger only while it is open,
     // and by the browser verb that opens it. One window, or the gate and the
@@ -150,7 +157,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         atlasctl_agent::discovery::local_display_name(),
         addresses.clone(),
         launchability,
-        String::new(),
+        accelerator.clone(),
     )
     .with_vitals(Box::new(vitals))
     .with_running(Box::new(atlasctl_agent::fleet::DockerRunning(Arc::clone(
@@ -194,7 +201,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
             Arc::clone(&identity),
             pins.clone(),
             rt.handle().clone(),
-            atlasctl_agent::peer::link::SelfIntro::new(can_launch.is_ok(), ""),
+            atlasctl_agent::peer::link::SelfIntro::new(can_launch.is_ok(), &accelerator),
         )),
         atlasctl_agent::peer::DEFAULT_PEER_PORT,
     ));
@@ -326,7 +333,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
                 peer_port: atlasctl_agent::peer::DEFAULT_PEER_PORT,
                 addresses: beacon_addrs,
                 can_launch: can_launch.is_ok(),
-                accelerator: String::new(),
+                accelerator: accelerator.clone(),
             },
         );
 

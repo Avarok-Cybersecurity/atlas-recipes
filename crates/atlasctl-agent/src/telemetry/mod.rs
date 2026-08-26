@@ -43,6 +43,27 @@ pub fn probe(runner: &dyn ProcessRunner) -> TelemetryCaps {
     }
 }
 
+/// What this machine's accelerator calls itself, for display.
+///
+/// Already parsed out of the capability probe's own output — `name` is the
+/// first field of the query — so this costs one extra invocation at startup
+/// and no new vendor-specific code. The fleet showed an empty string here
+/// while the reading it came from said "NVIDIA GB10".
+///
+/// `None` when there is no accelerator, or when it declines to name itself.
+/// An empty string is not a name, and rendering one puts a separator with
+/// nothing after it in the interface.
+pub fn accelerator_name(runner: &dyn ProcessRunner) -> Option<String> {
+    let out = runner.run(&nvidia::argv()).ok()?;
+    if !out.success() {
+        return None;
+    }
+    nvidia::parse(out.stdout.lines().next().unwrap_or_default())
+        .name
+        .map(|n| n.trim().to_owned())
+        .filter(|n| !n.is_empty())
+}
+
 /// Take one device sample, reporting only what the capabilities allow.
 ///
 /// `busy` says whether the engine has work in flight, which is what makes a low
