@@ -85,6 +85,36 @@ verify_attestation() {
     fi
 }
 
+# Put the agent behind this machine's own supervisor, so the website has
+# something to talk to after a reboot rather than only while a terminal is open.
+#
+# Never fatal. A container with no user systemd bus is a normal place to install
+# atlasctl, and the CLI works fully without an agent — so a failure here is a
+# note, not an error. ATLASCTL_NO_AGENT=1 skips it for anyone who would rather
+# decide when a background process with docker access starts running.
+install_agent() {
+    # The binary's path is passed rather than read from a variable another
+    # function happened to set: install.sh runs under `set -eu` piped from the
+    # network, and an unset global there fails at the least helpful moment.
+    exe="$1"
+    if [ -n "${ATLASCTL_NO_AGENT:-}" ]; then
+        info "skipping the background agent (ATLASCTL_NO_AGENT is set)."
+        info "start it yourself later with: $BIN_NAME agent install"
+        return
+    fi
+    info "installing the background agent"
+    if "$exe" agent install >/dev/null 2>&1; then
+        info "the agent is running and will start on login."
+        info "pair your browser with: $BIN_NAME agent token"
+        return
+    fi
+    warn "could not install the agent as a service on this machine."
+    warn "atlasctl itself is installed and works. To run the agent by hand:"
+    warn "    $BIN_NAME agent run"
+    warn "or, to see why the service install failed:"
+    warn "    $BIN_NAME agent install"
+}
+
 check_docker() {
     if ! command -v docker >/dev/null 2>&1; then
         warn "docker was not found. \`atlasctl run\` needs it; \`atlasctl list\` and"
@@ -201,6 +231,7 @@ main() {
 
     check_docker
     check_sparkrun
+    install_agent "$dir/$BIN_NAME"
 
     info "done. Try:"
     info "    $BIN_NAME list"

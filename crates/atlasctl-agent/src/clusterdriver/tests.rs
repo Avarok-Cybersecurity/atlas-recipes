@@ -68,6 +68,8 @@ pub(super) struct FixtureRank {
     commit: Result<String, String>,
     stop: Result<(), String>,
     alive: bool,
+    /// What this machine's copy of the recipe pins, as `recipe_port` answers.
+    recipe_port: Option<u16>,
 }
 
 impl FixtureRank {
@@ -78,6 +80,9 @@ impl FixtureRank {
             commit: Ok("head-container".to_owned()),
             stop: Ok(()),
             alive: true,
+            // The flagship recipes pin 8888, which is the case that made the
+            // endpoint wrong: an operator who overrides nothing.
+            recipe_port: Some(8888),
         }
     }
     fn note(&self, what: String) {
@@ -92,6 +97,9 @@ impl RankService for FixtureRank {
     }
     fn content_hash(&self, _: &str) -> anyhow::Result<String> {
         Ok("hash".to_owned())
+    }
+    fn recipe_port(&self, _: &str) -> anyhow::Result<Option<u16>> {
+        Ok(self.recipe_port)
     }
     fn prepare(&self, epoch: &str, a: &RankAssignment) -> PrepareReply {
         self.note(format!("local.prepare(rank={})", a.rank));
@@ -213,36 +221,30 @@ pub(super) fn ready_rank(log: &Log) -> FixtureRank {
 
 /// This machine, refusing to be a rank.
 pub(super) fn refusing_rank(log: &Log, why: &str) -> FixtureRank {
+    // Built by difference from the ready fixture, so a new field on the
+    // service does not have to be restated in four places to compile.
     FixtureRank {
-        log: Arc::clone(log),
         prepare: PrepareReply::Refused {
             reason: why.to_owned(),
         },
         commit: Err("was never prepared".to_owned()),
-        stop: Ok(()),
-        alive: true,
+        ..FixtureRank::ready(log)
     }
 }
 
 /// This machine, unable to stop what it started.
 pub(super) fn refusing_stop_rank(log: &Log) -> FixtureRank {
     FixtureRank {
-        log: Arc::clone(log),
-        prepare: PrepareReply::Prepared,
-        commit: Ok("head-container".to_owned()),
         stop: Err("the container runtime is not answering".to_owned()),
-        alive: true,
+        ..FixtureRank::ready(log)
     }
 }
 
 /// This machine, whose container dies moments after it starts.
 pub(super) fn dying_rank(log: &Log) -> FixtureRank {
     FixtureRank {
-        log: Arc::clone(log),
-        prepare: PrepareReply::Prepared,
-        commit: Ok("head-container".to_owned()),
-        stop: Ok(()),
         alive: false,
+        ..FixtureRank::ready(log)
     }
 }
 

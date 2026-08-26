@@ -168,6 +168,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
             Arc::clone(&identity),
             pins.clone(),
             rt.handle().clone(),
+            atlasctl_agent::peer::link::SelfIntro::new(can_launch.is_ok(), ""),
         )),
         atlasctl_agent::peer::DEFAULT_PEER_PORT,
     ));

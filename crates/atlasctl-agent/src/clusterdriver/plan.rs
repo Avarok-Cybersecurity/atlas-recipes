@@ -77,7 +77,7 @@ impl ClusterDriver {
         }
 
         Ok(Pending {
-            port: serve_port(&targets),
+            port: self.serve_port(recipe, &targets),
             epoch,
             targets,
         })
@@ -135,23 +135,44 @@ impl ClusterDriver {
     }
 }
 
-/// The port rank 0 will serve on, for the endpoint shown to the operator.
-///
-/// Read from rank 0's own settings, so it reflects what was actually planned
-/// rather than a guess made at display time.
-fn serve_port(targets: &[Target]) -> u16 {
-    targets
-        .iter()
-        .find(|t| t.assignment.rank == 0)
-        .and_then(|t| match t.assignment.settings.get("port") {
-            Some(SettingValue::Int(p)) => u16::try_from(*p).ok(),
-            _ => None,
-        })
-        .unwrap_or(DEFAULT_SERVE_PORT)
+impl ClusterDriver {
+    /// The port rank 0 will serve on, for the endpoint shown to the operator.
+    ///
+    /// Three layers, in the order that decides the answer:
+    ///
+    /// 1. What the operator set. `assignment.settings` holds **overrides only**
+    ///    — a sparse diff against the recipe, not the effective settings.
+    /// 2. What the recipe pins, asked of this machine's own copy.
+    /// 3. The serving runtime's default.
+    ///
+    /// Layer 2 was missing, and its absence was invisible in exactly the case
+    /// that matters: a recipe pinning `port: 8888` and an operator who did not
+    /// override it produced an empty settings map, so the endpoint told them
+    /// `:8000` while the model served on `:8888`. Reading a sparse diff as if
+    /// it were the whole truth is the same class of bug in either direction.
+    fn serve_port(&self, recipe: &RecipeId, targets: &[Target]) -> u16 {
+        if let Some(SettingValue::Int(p)) = targets
+            .iter()
+            .find(|t| t.assignment.rank == 0)
+            .and_then(|t| t.assignment.settings.get("port"))
+            && let Ok(p) = u16::try_from(*p)
+        {
+            return p;
+        }
+        // A recipe this machine cannot resolve is not worth failing a plan
+        // over here — the content hash above already refused that case, and
+        // this value only decorates a URL.
+        self.rank
+            .recipe_port(recipe.as_str())
+            .ok()
+            .flatten()
+            .unwrap_or(DEFAULT_SERVE_PORT)
+    }
 }
 
-/// The port a recipe serves on when it does not say otherwise.
+/// The port used when neither the operator nor the recipe names one.
 ///
-/// Not a silent fallback: it mirrors the recipe schema's own default, and it
-/// only ever decorates a URL shown to a human — nothing is launched from it.
+/// Not a silent fallback: it is the serving runtime's own default, it is only
+/// reached once both layers above have been asked, and it only ever decorates
+/// a URL shown to a human — nothing is launched from it.
 const DEFAULT_SERVE_PORT: u16 = 8000;

@@ -268,6 +268,17 @@ impl RankService for LocalRankService {
             .content_hash())
     }
 
+    fn recipe_port(&self, recipe: &str) -> Result<Option<u16>> {
+        let resolved = self
+            .registry
+            .resolve(&RecipeRef::parse(recipe))
+            .with_context(|| format!("this node does not ship recipe {recipe}"))?;
+        Ok(match resolved.defaults.get("port") {
+            Some(atlasctl_core::ScalarValue::Int(p)) => u16::try_from(*p).ok(),
+            _ => None,
+        })
+    }
+
     fn prepare(&self, epoch: &str, assignment: &RankAssignment) -> PrepareReply {
         let refuse = |r: RefusalReason| PrepareReply::Refused {
             reason: r.to_string(),
