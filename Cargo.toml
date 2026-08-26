@@ -18,7 +18,7 @@ members = ["crates/atlasctl-core", "crates/atlasctl", "crates/atlasctl-protocol"
 # carries a literal version, and the plugin keeps them in lockstep on release.
 # Everything else here is still shared.
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "AGPL-3.0-only"
 repository = "https://github.com/Avarok-Cybersecurity/atlas-recipes"
 authors = ["Avarok Cybersecurity"]
