@@ -282,3 +282,6 @@ impl RankService for LocalRankService {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
