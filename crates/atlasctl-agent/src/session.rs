@@ -44,6 +44,36 @@ pub struct SessionDeps<'a> {
     /// alone rather than erroring, because "no fleet" is a normal state and a
     /// page that got an error would show a fault where there is none.
     pub fleet: Option<&'a dyn crate::fleet::FleetView>,
+    /// Renders a cluster preview by asking each rank in turn.
+    ///
+    /// `None` means cluster launches are unavailable on this agent, which is
+    /// answered plainly rather than by pretending.
+    pub cluster: Option<&'a dyn ClusterPreviewer>,
+}
+
+/// Asks every rank of a planned cluster what it would run.
+///
+/// A trait so the session stays transport-free: the preview needs to reach
+/// other machines, and a session that opened sockets itself could not be tested
+/// without them.
+pub trait ClusterPreviewer: Send + Sync {
+    /// Plan the launch and collect each rank's own rendering.
+    ///
+    /// # Errors
+    /// If the plan is impossible, or a rank refuses or cannot be reached.
+    fn preview(
+        &self,
+        recipe: &RecipeId,
+        nodes: &[atlasctl_protocol::fleet::NodeId],
+        head: atlasctl_protocol::fleet::NodeId,
+        settings: &BTreeMap<String, SettingValue>,
+    ) -> Result<
+        (
+            Vec<atlasctl_protocol::msg::fleet::RankPreview>,
+            Option<String>,
+        ),
+        String,
+    >;
 }
 
 /// A single client connection.
@@ -163,14 +193,26 @@ impl<'a> Session<'a> {
             (Phase::Ready, ClientMsg::PairPeer { id, node, code }) => self.pair(id, node, &code),
             (Phase::Ready, ClientMsg::UnpairPeer { id, node }) => self.unpair(id, node),
 
-            // Cluster verbs need the peer channel, which is not connected yet.
-            // Refusing plainly is the honest answer: a preview rendered without
-            // asking the other ranks would be a guess presented as a fact, and a
-            // prepare that pretended to reserve would be worse.
+            // A preview is rendered by each rank in turn, on the machine that
+            // would run it — never invented here. The head does not know what
+            // recipe revision or hardware the other machine has.
             (
                 Phase::Ready,
-                ClientMsg::PreviewCluster { id, .. }
-                | ClientMsg::PrepareCluster { id, .. }
+                ClientMsg::PreviewCluster {
+                    id,
+                    recipe,
+                    nodes,
+                    head,
+                    settings,
+                },
+            ) => self.preview_cluster(id, &recipe, &nodes, head, &settings),
+
+            // Prepare and commit are not served yet. Refusing plainly is the
+            // honest answer: a prepare that pretended to reserve would leave an
+            // operator believing a cluster was ready to start.
+            (
+                Phase::Ready,
+                ClientMsg::PrepareCluster { id, .. }
                 | ClientMsg::CommitCluster { id, .. }
                 | ClientMsg::AbortCluster { id, .. },
             ) => vec![err(Some(id), AgentError::NotReady)],
@@ -239,6 +281,37 @@ impl<'a> Session<'a> {
                 Some(id),
                 AgentError::InvalidMessage {
                     detail: e.to_string(),
+                },
+            )],
+        }
+    }
+
+    fn preview_cluster(
+        &self,
+        id: u32,
+        recipe: &RecipeId,
+        nodes: &[atlasctl_protocol::fleet::NodeId],
+        head: atlasctl_protocol::fleet::NodeId,
+        settings: &BTreeMap<String, SettingValue>,
+    ) -> Vec<ServerMsg> {
+        let Some(cluster) = self.deps.cluster else {
+            return vec![err(Some(id), AgentError::NotReady)];
+        };
+        match cluster.preview(recipe, nodes, head, settings) {
+            Ok((ranks, link_warning)) => vec![ServerMsg::ClusterPreview {
+                id,
+                ranks,
+                link_warning,
+            }],
+            // NotLaunchable rather than BadSettings: the plan failing is
+            // usually about the machines — one unpaired, one with no usable
+            // link, the wrong count selected — not about a value being out of
+            // range, and the reason says which.
+            Err(reason) => vec![err(
+                Some(id),
+                AgentError::NotLaunchable {
+                    recipe: recipe.clone(),
+                    reason,
                 },
             )],
         }

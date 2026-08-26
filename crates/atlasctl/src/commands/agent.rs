@@ -130,6 +130,24 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     let fleet = Arc::new(fleet);
     let (events, _keep) = tokio::sync::broadcast::channel(256);
 
+    // Built here rather than at the end because the cluster previewer holds a
+    // handle to it: previewing a rank means dialling another machine, and that
+    // needs a reactor that already exists.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        // Two workers is ample: this serves one local browser, not a fleet.
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .context("starting the async runtime")?;
+    let renderer: Arc<dyn atlasctl_agent::daemon::RankRenderer> =
+        Arc::new(crate::rankrender::LocalRankRenderer::new(
+            crate::commands::registry_set()?,
+            hostinfo::snapshot()?,
+            &ROOTLESS_V1,
+            Box::new(NvidiaDevices),
+            Box::new(atlasctl_core::docker::collective::NcclRoce),
+        ));
+
     let state = Arc::new(AgentState {
         registry: crate::commands::registry_set()?,
         launcher: Box::new(DockerLauncher::new(
@@ -143,6 +161,14 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         port: args.port,
         allow_dev_origins: args.dev_origins,
         fleet: Some(Box::new(FleetHandle(Arc::clone(&fleet)))),
+        cluster: Some(Box::new(crate::clusterpreview::PeerClusterPreviewer::new(
+            Arc::clone(&fleet),
+            Arc::clone(&identity),
+            pins.clone(),
+            Arc::clone(&renderer),
+            atlasctl_agent::peer::DEFAULT_PEER_PORT,
+            rt.handle().clone(),
+        ))),
         events: events.clone(),
     });
 
@@ -173,12 +199,6 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     }
     eprintln!("Stop it with ctrl-c when you are done.\n");
 
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        // Two workers is ample: this serves one local browser, not a fleet.
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .context("starting the async runtime")?;
     rt.block_on(async move {
         // Background work: advertise, listen for peers, sample vitals, age out
         // machines that have gone. Started before serving so the first browser to
@@ -205,6 +225,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
             pins,
             events.clone(),
             atlasctl_agent::peer::DEFAULT_PEER_PORT,
+            Arc::clone(&renderer),
         );
 
         atlasctl_agent::daemon::spawn_all(

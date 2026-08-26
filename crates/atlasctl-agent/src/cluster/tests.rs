@@ -42,8 +42,11 @@ fn roce_node(byte: u8, name: &str, a: &str) -> NodeDescriptor {
     )
 }
 
-fn settings() -> BTreeMap<String, String> {
-    BTreeMap::from([("max_model_len".to_owned(), "8192".to_owned())])
+fn settings() -> BTreeMap<String, atlasctl_protocol::settings::SettingValue> {
+    BTreeMap::from([(
+        "max_model_len".to_owned(),
+        atlasctl_protocol::settings::SettingValue::Int(8192),
+    )])
 }
 
 fn plan_two(head_byte: u8) -> Result<ClusterPlan, PlanError> {

@@ -196,3 +196,172 @@ where
     }
     Ok(())
 }
+
+/// Ask a rank to render the command it would run.
+///
+/// The head does not render this itself, and that is the point: it does not
+/// know what recipe revision, hardware or flag table the other machine has, so
+/// a preview it invented would be a guess presented as the thing that will
+/// execute. Asking means preview and execution come from the same code on the
+/// same box.
+///
+/// # Errors
+/// If the peer cannot be reached, refuses the assignment, or answers with
+/// something other than a preview.
+pub async fn preview_rank(
+    identity: &Identity,
+    pins: PinStore,
+    addr: SocketAddr,
+    expect: NodeId,
+    assignment: crate::cluster::RankAssignment,
+) -> Result<(String, Vec<String>)> {
+    let cfg = client_config(identity, PinnedPeerVerifier::pinned(pins, Some(expect)))?;
+    let connector = tokio_rustls::TlsConnector::from(Arc::new(cfg));
+    let tcp = tokio::time::timeout(DIAL_TIMEOUT, tokio::net::TcpStream::connect(addr))
+        .await
+        .map_err(|_| anyhow::anyhow!("{addr} did not answer within {DIAL_TIMEOUT:?}"))?
+        .with_context(|| format!("connecting to {addr}"))?;
+    let name = rustls::pki_types::ServerName::try_from("peer.atlas.invalid")
+        .context("building a server name")?
+        .to_owned();
+    let mut tls = connector
+        .connect(name, tcp)
+        .await
+        .context("TLS handshake")?;
+
+    write_frame(
+        &mut tls,
+        &PeerFrame::Hello {
+            version: PEER_PROTOCOL_VERSION,
+            name: crate::discovery::local_display_name().as_str().to_owned(),
+            can_launch: true,
+            accelerator: String::new(),
+        },
+    )
+    .await?;
+    let _ = read_frame(&mut tls).await?;
+
+    write_frame(
+        &mut tls,
+        &PeerFrame::PreviewRank {
+            assignment: Box::new(assignment),
+        },
+    )
+    .await?;
+
+    // Vitals are unsolicited — a peer offers them right after its hello, and may
+    // do so again — so they are skipped rather than mistaken for the answer.
+    // Bounded, so a peer that only ever sends vitals cannot hold this open.
+    for _ in 0..8 {
+        match tokio::time::timeout(DIAL_TIMEOUT, read_frame(&mut tls)).await {
+            Ok(Ok(PeerFrame::RankPreviewed { command, unmapped })) => {
+                return Ok((command, unmapped));
+            }
+            Ok(Ok(PeerFrame::RankRefused { reason })) => bail!("{reason}"),
+            Ok(Ok(PeerFrame::Vitals { .. })) => continue,
+            Ok(Ok(other)) => bail!("expected a rank preview, got {other:?}"),
+            Ok(Err(e)) => return Err(e),
+            Err(_) => bail!("{addr} did not answer the preview in time"),
+        }
+    }
+    bail!("{addr} kept sending vitals instead of answering the preview")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use atlasctl_protocol::fleet::Metric;
+
+    fn vitals() -> NodeVitals {
+        NodeVitals {
+            accelerator_util: Metric::Unsupported,
+            sm_clock_mhz: Metric::Unsupported,
+            sm_clock_healthy_mhz: None,
+            temperature_c: Metric::Unsupported,
+            power_w: Metric::Unsupported,
+            memory_used_frac: Metric::Unsupported,
+            memory_total_bytes: Metric::Unsupported,
+            disk_free_bytes: Metric::Unsupported,
+            docker_ok: false,
+            agent_uptime_s: 0,
+        }
+    }
+
+    /// A peer offers vitals unsolicited, so they can land between the request
+    /// and its answer. Reading the next frame as *the* answer mistook a vitals
+    /// sample for a preview and failed every real two-node preview.
+    #[tokio::test]
+    async fn preview_reads_past_interleaved_vitals() {
+        let (mut a, mut b) = tokio::io::duplex(1 << 16);
+
+        let responder = tokio::spawn(async move {
+            // Two vitals frames arrive before the answer.
+            for _ in 0..2 {
+                write_frame(
+                    &mut b,
+                    &PeerFrame::Vitals {
+                        vitals: Box::new(vitals()),
+                    },
+                )
+                .await
+                .unwrap();
+            }
+            write_frame(
+                &mut b,
+                &PeerFrame::RankPreviewed {
+                    command: "docker run rank1".to_owned(),
+                    unmapped: vec!["mtp_gate".to_owned()],
+                },
+            )
+            .await
+            .unwrap();
+        });
+
+        let mut got = None;
+        for _ in 0..8 {
+            match read_frame(&mut a).await.unwrap() {
+                PeerFrame::Vitals { .. } => continue,
+                PeerFrame::RankPreviewed { command, unmapped } => {
+                    got = Some((command, unmapped));
+                    break;
+                }
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        responder.await.unwrap();
+        assert_eq!(
+            got,
+            Some(("docker run rank1".to_owned(), vec!["mtp_gate".to_owned()]))
+        );
+    }
+
+    /// A peer that only ever sends vitals must not hold the preview open.
+    #[tokio::test]
+    async fn preview_gives_up_on_endless_vitals() {
+        let (mut a, mut b) = tokio::io::duplex(1 << 16);
+        tokio::spawn(async move {
+            for _ in 0..20 {
+                if write_frame(
+                    &mut b,
+                    &PeerFrame::Vitals {
+                        vitals: Box::new(vitals()),
+                    },
+                )
+                .await
+                .is_err()
+                {
+                    return;
+                }
+            }
+        });
+
+        let mut answered = false;
+        for _ in 0..8 {
+            if let Ok(PeerFrame::Vitals { .. }) = read_frame(&mut a).await {
+                continue;
+            }
+            answered = true;
+        }
+        assert!(!answered, "the loop must be bounded, not endless");
+    }
+}

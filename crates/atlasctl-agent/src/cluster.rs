@@ -51,8 +51,12 @@ pub struct RankAssignment {
     /// Content hash of the recipe the head used, so a worker running a
     /// different revision refuses rather than silently launching something else.
     pub recipe_hash: String,
-    /// Bounded, already-validated overrides.
-    pub settings: BTreeMap<String, String>,
+    /// Bounded overrides, still typed.
+    ///
+    /// Not flattened to strings: an integer setting would fail its own bound on
+    /// the way back in, and the receiving rank re-validates against the same
+    /// schema rather than trusting the head's word for it.
+    pub settings: BTreeMap<String, atlasctl_protocol::settings::SettingValue>,
 }
 
 /// A whole multi-node launch, ready to be prepared.
@@ -125,7 +129,7 @@ pub fn plan(
     required_nodes: u32,
     selected: &[&NodeDescriptor],
     head: NodeId,
-    settings: &BTreeMap<String, String>,
+    settings: &BTreeMap<String, atlasctl_protocol::settings::SettingValue>,
     epoch: String,
 ) -> Result<ClusterPlan, PlanError> {
     if selected.len() as u32 != required_nodes {

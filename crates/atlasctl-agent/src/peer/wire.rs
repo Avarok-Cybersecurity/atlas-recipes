@@ -67,6 +67,32 @@ pub enum PeerFrame {
         public_key: String,
     },
 
+    /// Render the command this rank would run, without running it.
+    ///
+    /// Asked of the rank itself rather than rendered by the head: the head does
+    /// not know what recipe revision or hardware the other machine has, and a
+    /// preview it invented would be a guess presented as the thing that will
+    /// execute.
+    PreviewRank {
+        /// What this node would be asked to do.
+        assignment: Box<RankAssignment>,
+    },
+
+    /// The command this rank would run.
+    RankPreviewed {
+        /// Shell-quoted, for reading and copying.
+        command: String,
+        /// Settings this node's flag table does not claim, so the operator can
+        /// see what will silently not apply.
+        unmapped: Vec<String>,
+    },
+
+    /// This rank cannot run the assignment, and why.
+    RankRefused {
+        /// Reason, in words the operator can act on.
+        reason: String,
+    },
+
     /// Validate and reserve for a rank. Nothing starts.
     Prepare {
         /// What this node is being asked to do.

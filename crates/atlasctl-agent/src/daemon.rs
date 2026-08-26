@@ -67,12 +67,14 @@ pub fn spawn_peer_work(
     pins: crate::identity::PinStore,
     events: broadcast::Sender<ServerMsg>,
     peer_port: u16,
+    renderer: Arc<dyn RankRenderer>,
 ) {
     spawn_peer_listener(
         Arc::clone(&fleet),
         Arc::clone(&identity),
         pins.clone(),
         peer_port,
+        renderer,
     );
     spawn_peer_poll(fleet, identity, pins, events, peer_port);
 }
@@ -83,6 +85,7 @@ fn spawn_peer_listener(
     identity: Arc<crate::identity::Identity>,
     pins: crate::identity::PinStore,
     port: u16,
+    renderer: Arc<dyn RankRenderer>,
 ) {
     tokio::spawn(async move {
         // Pinned-only: an unpaired agent is refused during the handshake, so
@@ -115,6 +118,7 @@ fn spawn_peer_listener(
             };
             let acceptor = acceptor.clone();
             let fleet = Arc::clone(&fleet);
+            let renderer = Arc::clone(&renderer);
             tokio::spawn(async move {
                 let Ok(mut tls) = acceptor.accept(tcp).await else {
                     // An unpaired caller failing the handshake is the system
@@ -122,14 +126,22 @@ fn spawn_peer_listener(
                     return;
                 };
                 let vitals = fleet.local_vitals_and_id().map(|(_, v)| v);
-                let _ = crate::peer::link::serve_query(
+                if crate::peer::link::serve_query(
                     &mut tls,
                     crate::discovery::local_display_name().as_str(),
                     fleet.can_launch(),
                     "",
                     vitals,
                 )
-                .await;
+                .await
+                .is_err()
+                {
+                    return;
+                }
+                // The peer may go on to ask this rank to describe what it would
+                // run. Rendering happens here, on the machine that would
+                // execute it, from this machine's own vendored recipe.
+                serve_rank_requests(&mut tls, &renderer).await;
             });
         }
     });
@@ -284,4 +296,54 @@ fn spawn_prune(fleet: Arc<LocalFleet>, events: broadcast::Sender<ServerMsg>) {
             }
         }
     });
+}
+
+/// Answer a paired peer's questions about what this rank would run.
+///
+/// Only reached after the TLS verifier confirmed the caller is pinned, so there
+/// is no authorization decision here — only rendering, from this machine's own
+/// copy of the recipe.
+async fn serve_rank_requests<S>(stream: &mut S, renderer: &Arc<dyn RankRenderer>)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use crate::peer::wire::{PeerFrame, read_frame, write_frame};
+    loop {
+        let Ok(frame) = read_frame(stream).await else {
+            return;
+        };
+        let reply = match frame {
+            PeerFrame::PreviewRank { assignment } => match renderer.render(&assignment) {
+                Ok((command, unmapped)) => PeerFrame::RankPreviewed { command, unmapped },
+                Err(e) => PeerFrame::RankRefused {
+                    reason: e.to_string(),
+                },
+            },
+            // Prepare and commit are not served yet, and saying so is better
+            // than a silent hang: an unanswered prepare would strand the head
+            // waiting for a rank that was never going to reply.
+            PeerFrame::Prepare { .. } | PeerFrame::Commit { .. } | PeerFrame::Abort { .. } => {
+                PeerFrame::RankRefused {
+                    reason: "this agent does not serve cluster launches yet".to_owned(),
+                }
+            }
+            _ => return,
+        };
+        if write_frame(stream, &reply).await.is_err() {
+            return;
+        }
+    }
+}
+
+/// Renders what a rank would run, from this machine's own recipe copy.
+pub trait RankRenderer: Send + Sync {
+    /// The command, plus any settings this machine's flag table does not claim.
+    ///
+    /// # Errors
+    /// If the recipe is unknown here, differs from the head's, or cannot be
+    /// translated for this machine.
+    fn render(
+        &self,
+        assignment: &crate::cluster::RankAssignment,
+    ) -> anyhow::Result<(String, Vec<String>)>;
 }
