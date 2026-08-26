@@ -275,3 +275,25 @@ pub fn verify_from(id: NodeId, public_key_hex: &str, msg: &[u8], sig: &[u8]) -> 
         .verify(msg, &Signature::from_bytes(&sig_bytes))
         .context("signature did not verify")
 }
+
+/// Check that a hex public key really is the key behind an id.
+///
+/// Used where a peer offers a key to be pinned: without this it could
+/// authenticate with one key and ask to be recorded under another, which would
+/// pin an identity nobody ever proved.
+///
+/// # Errors
+/// If the key is malformed or does not hash to `id`.
+pub fn verify_key_matches(id: NodeId, public_key_hex: &str) -> Result<()> {
+    let key_bytes: [u8; 32] = hex::decode(public_key_hex)
+        .context("public key is not hex")?
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("public key is not 32 bytes"))?;
+    let public = VerifyingKey::from_bytes(&key_bytes).context("public key is not on the curve")?;
+    anyhow::ensure!(
+        fingerprint(&public) == id,
+        "public key does not match the fingerprint it claims"
+    );
+    Ok(())
+}

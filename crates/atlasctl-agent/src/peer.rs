@@ -14,11 +14,17 @@
 //! "launch one of the recipes this machine already has, with in-range
 //! parameters", not remote code execution.
 
+pub mod pair;
 pub mod tls;
+pub mod wire;
 
 #[cfg(test)]
 #[path = "peer/tls_tests.rs"]
 mod tls_tests;
+
+#[cfg(test)]
+#[path = "peer/pair_tests.rs"]
+mod pair_tests;
 
 /// Port the peer channel listens on.
 pub const DEFAULT_PEER_PORT: u16 = 34334;
