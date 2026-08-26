@@ -237,6 +237,18 @@ impl LocalFleet {
         self.seen.lock().ok()
     }
 
+    /// This machine's id and a fresh vitals sample, when anything can supply
+    /// one.
+    ///
+    /// Separate from [`Self::local_node`] because the vitals pusher wants only
+    /// the sample: rebuilding the whole descriptor once a second would send the
+    /// unchanged parts over and over.
+    #[must_use]
+    pub fn local_vitals_and_id(&self) -> Option<(NodeId, NodeVitals)> {
+        let source = self.vitals.as_ref()?;
+        Some((self.identity.id(), source.vitals()))
+    }
+
     /// This machine, as a node.
     fn local_node(&self) -> NodeDescriptor {
         let vitals = self

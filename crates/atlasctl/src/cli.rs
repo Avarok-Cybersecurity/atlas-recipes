@@ -138,6 +138,18 @@ pub struct AgentRunArgs {
     /// Also accept connections from a local development server.
     #[arg(long)]
     pub dev_origins: bool,
+
+    /// Run as a control node: discover, pair and monitor, but never launch.
+    ///
+    /// For a laptop driving headless GPU boxes. The refusal is structural — a
+    /// client-mode agent reports `can_launch = false` and has no launcher at
+    /// all, rather than being trusted to decline.
+    #[arg(long)]
+    pub client: bool,
+
+    /// Do not advertise on the network, and do not listen for other agents.
+    #[arg(long)]
+    pub no_discovery: bool,
 }
 
 /// `agent token` arguments.

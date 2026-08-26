@@ -5,6 +5,7 @@
 //! The local agent: lets the Atlas website launch recipes on this machine.
 
 pub mod cluster;
+pub mod daemon;
 pub mod discovery;
 pub mod fabric;
 pub mod fleet;

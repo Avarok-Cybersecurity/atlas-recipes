@@ -46,6 +46,12 @@ pub struct AgentState {
     /// `None` for a single-node agent, which is a normal configuration rather
     /// than a degraded one.
     pub fleet: Option<Box<dyn crate::fleet::FleetView>>,
+    /// Fleet changes pushed to every authenticated session.
+    ///
+    /// A broadcast channel rather than a per-session queue: a slow tab must not
+    /// be able to stall the sampler for the others. Lagging receivers lose the
+    /// oldest frames, which for coalesced vitals costs nothing.
+    pub events: tokio::sync::broadcast::Sender<ServerMsg>,
 }
 
 /// Build the router.
@@ -114,6 +120,7 @@ async fn upgrade(
 }
 
 async fn run_session(mut socket: ws::WebSocket, state: Arc<AgentState>) {
+    let mut events = state.events.subscribe();
     let (mut session, welcome) = Session::new(SessionDeps {
         registry: &state.registry,
         launcher: state.launcher.as_ref(),
@@ -126,7 +133,34 @@ async fn run_session(mut socket: ws::WebSocket, state: Arc<AgentState>) {
         return;
     }
 
-    while let Some(Ok(frame)) = socket.recv().await {
+    loop {
+        let frame = tokio::select! {
+            // Pushed fleet changes. Only forwarded once the handshake has
+            // completed — an unauthenticated socket learns nothing about the
+            // machines on this network.
+            pushed = events.recv() => {
+                match pushed {
+                    Ok(msg) => {
+                        if session.is_ready() && send(&mut socket, &msg).await.is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+                    // Lagged: this tab fell behind and lost some samples. The
+                    // next one supersedes them, so carry on rather than
+                    // dropping the connection.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            incoming = socket.recv() => {
+                match incoming {
+                    Some(Ok(f)) => f,
+                    _ => break,
+                }
+            }
+        };
+
         let text = match frame {
             ws::Message::Text(t) => t,
             // Binary frames are not part of this protocol. Accepting them would

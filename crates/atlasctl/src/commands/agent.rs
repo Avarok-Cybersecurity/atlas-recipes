@@ -12,6 +12,31 @@ use atlasctl_core::docker::profile::{NvidiaDevices, ROOTLESS_V1};
 use atlasctl_core::io::{ProcessRunner, StdProcessRunner};
 use std::sync::Arc;
 
+/// Lets the background loops and the server share one fleet.
+///
+/// `AgentState` wants an owned `Box<dyn FleetView>` while the daemon loops need
+/// an `Arc`; this forwards rather than duplicating the state, so a peer
+/// discovered by the loops is visible to the next browser request.
+struct FleetHandle(Arc<atlasctl_agent::fleet::LocalFleet>);
+
+impl atlasctl_agent::fleet::FleetView for FleetHandle {
+    fn nodes(&self) -> Vec<atlasctl_protocol::fleet::NodeDescriptor> {
+        self.0.nodes()
+    }
+
+    fn pair(
+        &self,
+        node: atlasctl_protocol::fleet::NodeId,
+        code: &str,
+    ) -> anyhow::Result<atlasctl_agent::fleet::PairOutcome> {
+        self.0.pair(node, code)
+    }
+
+    fn unpair(&self, node: atlasctl_protocol::fleet::NodeId) -> anyhow::Result<bool> {
+        self.0.unpair(node)
+    }
+}
+
 /// Whether this machine can actually run a recipe, and why not if it cannot.
 ///
 /// Probed once at startup and reported to the client, so a browser can say
@@ -33,7 +58,17 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     let config_dir = hostinfo::config_dir()?;
     let tok = token::load_or_create(&config_dir)?;
     let runner: Arc<dyn ProcessRunner> = Arc::new(StdProcessRunner);
-    let can_launch = probe_can_launch(runner.as_ref());
+    // In client mode the refusal is not a probe result that could later change
+    // its mind — this agent has no business launching anything, and says so.
+    let can_launch = if args.client {
+        Err(
+            "this agent runs in --client mode: it can discover, pair and monitor, \
+             but it will not run a model"
+                .to_owned(),
+        )
+    } else {
+        probe_can_launch(runner.as_ref())
+    };
 
     // The fleet view is what makes /control show real machines. It is built
     // from this box's own facts — identity, links, launchability — so a fresh
@@ -74,6 +109,11 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         }
     );
 
+    let beacon_addrs: Vec<std::net::IpAddr> = addresses
+        .iter()
+        .filter_map(|a| a.addr.parse().ok())
+        .collect();
+
     let fleet = atlasctl_agent::fleet::LocalFleet::new(
         identity,
         atlasctl_agent::identity::PinStore::new(&config_dir),
@@ -83,6 +123,9 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         String::new(),
     )
     .with_vitals(Box::new(vitals));
+
+    let fleet = Arc::new(fleet);
+    let (events, _keep) = tokio::sync::broadcast::channel(256);
 
     let state = Arc::new(AgentState {
         registry: crate::commands::registry_set()?,
@@ -96,22 +139,35 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         can_launch: can_launch.clone(),
         port: args.port,
         allow_dev_origins: args.dev_origins,
-        fleet: Some(Box::new(fleet)),
+        fleet: Some(Box::new(FleetHandle(Arc::clone(&fleet)))),
+        events: events.clone(),
     });
 
     eprintln!("atlasctl agent listening on 127.0.0.1:{}", args.port);
-    match &can_launch {
-        Ok(()) => eprintln!("docker: ok"),
-        Err(why) => eprintln!(
-            "docker: unavailable — {why}\n  this agent can list and inspect recipes but not launch them"
-        ),
+    // Client mode is a different kind of agent, not a broken one, so it does
+    // not report a docker failure it was never going to use — and it does not
+    // repeat the docker-group warning, which would be untrue here.
+    if args.client {
+        eprintln!("mode: control only — this agent will not run a model");
+    } else {
+        match &can_launch {
+            Ok(()) => eprintln!("docker: ok"),
+            Err(why) => eprintln!(
+                "docker: unavailable — {why}\n  this agent can list and inspect recipes but not launch them"
+            ),
+        }
     }
     if args.dev_origins {
         eprintln!("accepting development origins — do not leave this on");
     }
     eprintln!("\npairing token (paste into the website once):\n  {tok}\n");
-    eprintln!("This agent talks to Docker. On Linux, membership of the `docker` group is");
-    eprintln!("root-equivalent, so anything that can drive this agent can do what you can.");
+    if args.client {
+        eprintln!("This agent does not talk to Docker and cannot start a container.");
+        eprintln!("It can discover machines, pair with them, and watch what they are doing.");
+    } else {
+        eprintln!("This agent talks to Docker. On Linux, membership of the `docker` group is");
+        eprintln!("root-equivalent, so anything that can drive this agent can do what you can.");
+    }
     eprintln!("Stop it with ctrl-c when you are done.\n");
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -120,7 +176,39 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         .enable_all()
         .build()
         .context("starting the async runtime")?;
-    rt.block_on(serve(state, args.port))
+    rt.block_on(async move {
+        // Background work: advertise, listen for peers, sample vitals, age out
+        // machines that have gone. Started before serving so the first browser to
+        // connect already has a populated fleet.
+        let discovery: Option<Arc<dyn atlasctl_agent::daemon::DiscoveryPair>> = if args.no_discovery
+        {
+            eprintln!("discovery disabled; add peers with `atlasctl peer add <host>`");
+            None
+        } else {
+            match atlasctl_agent::discovery::mdns::MdnsDiscovery::new() {
+                Ok(d) => Some(Arc::new(d)),
+                Err(e) => {
+                    eprintln!("discovery unavailable: {e}");
+                    None
+                }
+            }
+        };
+        atlasctl_agent::daemon::spawn_all(
+            Arc::clone(&fleet),
+            events,
+            discovery,
+            atlasctl_agent::discovery::Beacon {
+                id: fleet.id(),
+                name: atlasctl_agent::discovery::local_display_name(),
+                peer_port: atlasctl_agent::peer::DEFAULT_PEER_PORT,
+                addresses: beacon_addrs,
+                can_launch: can_launch.is_ok(),
+                accelerator: String::new(),
+            },
+        );
+
+        serve(state, args.port).await
+    })
 }
 
 /// Print, or rotate, the pairing token.
@@ -174,6 +262,26 @@ pub fn pair(args: &crate::cli::AgentPairArgs) -> Result<()> {
     let pins = PinStore::new(&dir);
     let code = PairingCode::generate();
 
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("starting a runtime")?;
+
+    // Bind BEFORE printing the code. Printing first and failing after shows
+    // someone a code that can never be used — and on a second Spark that
+    // already had a pairing waiting, that is exactly what happened.
+    let listener = runtime.block_on(async {
+        tokio::net::TcpListener::bind(("0.0.0.0", args.port))
+            .await
+            .with_context(|| {
+                format!(
+                    "could not bind the peer port {} — is another `atlasctl agent pair` \
+                     already waiting?",
+                    args.port
+                )
+            })
+    })?;
+
     println!();
     println!("  Pairing code:  {}", code.grouped());
     println!();
@@ -187,17 +295,9 @@ pub fn pair(args: &crate::cli::AgentPairArgs) -> Result<()> {
     println!("  This code is good for {CODE_TTL_SECS} seconds and for one attempt.");
     println!("  Waiting…");
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("starting a runtime")?;
-
     let paired = runtime.block_on(async {
         let cfg = server_config(&identity, PinnedPeerVerifier::pairing(pins.clone()))?;
         let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(cfg));
-        let listener = tokio::net::TcpListener::bind(("0.0.0.0", args.port))
-            .await
-            .with_context(|| format!("binding the peer port {}", args.port))?;
 
         let accept = async {
             let (tcp, _) = listener.accept().await?;

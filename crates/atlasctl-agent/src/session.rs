@@ -90,6 +90,16 @@ impl<'a> Session<'a> {
         }
     }
 
+    /// Whether the handshake has completed.
+    ///
+    /// The transport asks before forwarding a pushed frame: fleet events name
+    /// machines on someone's network, and an unauthenticated socket must not
+    /// receive them just because it stayed open.
+    #[must_use]
+    pub const fn is_ready(&self) -> bool {
+        matches!(self.phase, Phase::Ready)
+    }
+
     /// Handle one decoded message.
     pub fn handle(&mut self, msg: ClientMsg) -> Vec<ServerMsg> {
         if self.phase == Phase::Closed {
