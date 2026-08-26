@@ -202,12 +202,35 @@ fn a_beacon_claiming_it_cannot_launch_is_taken_at_its_word() {
     assert!(!peer.launchability.can_launch);
 }
 
+/// OS travels on the authenticated channel and nowhere else. A machine we
+/// have only *seen* has told us nothing about itself we can believe, and the
+/// interface must show a blank rather than a guess.
+#[test]
+fn a_discovered_node_reports_no_operating_system() {
+    let t = Tmp::new("osdisc");
+    let f = fleet_at(&t.0);
+    f.observe(beacon(NodeId::from_bytes([4; 32]), "stranger", true));
+    let peer = f.nodes().into_iter().find(|n| !n.is_local).expect("listed");
+    assert_eq!(peer.os, "", "a beacon must not be able to claim an OS");
+}
+
+/// And this machine does report its own, because it is the one thing here we
+/// know first-hand.
+#[test]
+fn the_local_node_reports_its_operating_system() {
+    let t = Tmp::new("oslocal");
+    let f = fleet_at(&t.0);
+    let me = f.nodes().into_iter().find(|n| n.is_local).expect("local");
+    assert!(!me.os.is_empty(), "this machine knows what it is running");
+}
+
 fn report(id: NodeId, name: &str, can_launch: bool) -> crate::peer::link::PeerReport {
     crate::peer::link::PeerReport {
         node: id,
         name: name.to_owned(),
         can_launch,
         accelerator: "GB10".to_owned(),
+        os: "Linux".to_owned(),
         vitals: None,
         link: LinkClass::Roce,
         addresses: vec![roce("10.10.10.10")],

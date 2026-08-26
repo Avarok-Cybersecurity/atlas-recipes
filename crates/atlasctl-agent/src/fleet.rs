@@ -353,6 +353,7 @@ impl LocalFleet {
             launchability: self.launchability.clone(),
             agent_version: env!("CARGO_PKG_VERSION").to_owned(),
             accelerator: self.accelerator.clone(),
+            os: crate::discovery::local_os(),
             vitals: Some(vitals),
             alerts: self
                 .alerts

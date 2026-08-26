@@ -132,6 +132,10 @@ impl FleetView for LocalFleet {
                     || sighting.map_or_else(String::new, |s| s.beacon.accelerator.clone()),
                     |r| r.accelerator.clone(),
                 ),
+                // Only from the authenticated channel. A beacon does not carry
+                // it, and inventing one would put a guess where the interface
+                // shows a fact.
+                os: report.map_or_else(String::new, |r| r.os.clone()),
                 // Only ever from the authenticated channel. A peer we have not
                 // spoken to reports none, rather than a beacon's word for it.
                 vitals: report.and_then(|r| r.vitals.clone()),
@@ -158,6 +162,9 @@ impl FleetView for LocalFleet {
                     launchability: as_launchability(s.beacon.can_launch),
                     agent_version: String::new(),
                     accelerator: s.beacon.accelerator.clone(),
+                    // A machine we have never spoken to has told us nothing we
+                    // can believe about itself.
+                    os: String::new(),
                     vitals: None,
                     alerts: Vec::new(),
                     running: None,

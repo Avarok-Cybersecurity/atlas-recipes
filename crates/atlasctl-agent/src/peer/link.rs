@@ -44,6 +44,8 @@ pub struct SelfIntro {
     pub can_launch: bool,
     /// This node's accelerator tag, empty when it has none to report.
     pub accelerator: String,
+    /// This node's operating system, coarsely.
+    pub os: String,
 }
 
 impl SelfIntro {
@@ -54,6 +56,7 @@ impl SelfIntro {
             name: crate::discovery::local_display_name().as_str().to_owned(),
             can_launch,
             accelerator: accelerator.to_owned(),
+            os: crate::discovery::local_os(),
         }
     }
 }
@@ -67,6 +70,8 @@ pub struct Hello {
     pub can_launch: bool,
     /// Its accelerator tag.
     pub accelerator: String,
+    /// Its operating system, coarsely.
+    pub os: String,
     /// The addresses it is reachable on, with subnets.
     pub addresses: Vec<atlasctl_protocol::fleet::NodeAddress>,
 }
@@ -85,6 +90,8 @@ pub struct PeerReport {
     pub can_launch: bool,
     /// Its accelerator tag.
     pub accelerator: String,
+    /// Its operating system, coarsely.
+    pub os: String,
     /// Its vitals, when it sent any.
     pub vitals: Option<NodeVitals>,
     /// The class of the link we actually reached it over.
@@ -165,6 +172,7 @@ where
             name: intro.name.clone(),
             can_launch: intro.can_launch,
             accelerator: intro.accelerator.clone(),
+            os: intro.os.clone(),
             addresses: local.to_vec(),
         },
     )
@@ -180,6 +188,7 @@ where
             name,
             can_launch,
             accelerator,
+            os,
             addresses,
         } => {
             anyhow::ensure!(
@@ -190,6 +199,7 @@ where
                 name,
                 can_launch,
                 accelerator,
+                os,
                 addresses,
             })
         }
@@ -235,6 +245,7 @@ pub async fn query(
         name: hello.name,
         can_launch: hello.can_launch,
         accelerator: hello.accelerator,
+        os: hello.os,
         vitals,
         link,
         addresses: hello.addresses,
@@ -254,6 +265,7 @@ pub async fn serve_query<S>(
     name: &str,
     can_launch: bool,
     accelerator: &str,
+    os: &str,
     vitals: Option<NodeVitals>,
     local: &[atlasctl_protocol::fleet::NodeAddress],
 ) -> Result<()>
@@ -273,6 +285,7 @@ where
             name: name.to_owned(),
             can_launch,
             accelerator: accelerator.to_owned(),
+            os: os.to_owned(),
             addresses: local.to_vec(),
         },
     )
@@ -368,6 +381,7 @@ mod tests {
             name: "laptop".to_owned(),
             can_launch: false,
             accelerator: String::new(),
+            os: "macOS".to_owned(),
         };
 
         let peer = tokio::spawn(async move {
@@ -380,6 +394,7 @@ mod tests {
                     name: "spark".to_owned(),
                     can_launch: true,
                     accelerator: "gb10".to_owned(),
+                    os: "Linux".to_owned(),
                     addresses: Vec::new(),
                 },
             )

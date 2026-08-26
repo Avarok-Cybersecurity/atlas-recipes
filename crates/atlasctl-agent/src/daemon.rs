@@ -157,6 +157,7 @@ fn spawn_peer_listener(
                     crate::discovery::local_display_name().as_str(),
                     fleet.can_launch(),
                     "",
+                    &crate::discovery::local_os(),
                     vitals,
                     &fleet.local_addresses(),
                 )
