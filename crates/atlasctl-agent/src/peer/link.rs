@@ -29,6 +29,35 @@ use std::time::Duration;
 /// How long to wait for a peer to answer before treating it as down.
 pub const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// What this agent says about itself when it introduces itself.
+///
+/// Exists so the outbound hello cannot be written by hand at each call site.
+/// It was, and every one of them claimed `can_launch: true` — including the
+/// control-only agents whose entire purpose is to be unable to run a model. A
+/// value that must be constructed from the truth is harder to get wrong than a
+/// literal that must be remembered.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelfIntro {
+    /// This node's display name.
+    pub name: String,
+    /// Whether this node can run a model. Never assumed.
+    pub can_launch: bool,
+    /// This node's accelerator tag, empty when it has none to report.
+    pub accelerator: String,
+}
+
+impl SelfIntro {
+    /// Describe this node. The name is derived; the capability must be supplied.
+    #[must_use]
+    pub fn new(can_launch: bool, accelerator: &str) -> Self {
+        Self {
+            name: crate::discovery::local_display_name().as_str().to_owned(),
+            can_launch,
+            accelerator: accelerator.to_owned(),
+        }
+    }
+}
+
 /// What a peer said when it introduced itself.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Hello {
@@ -123,6 +152,7 @@ pub async fn dial(
 pub async fn exchange_hello<S>(
     tls: &mut S,
     addr: SocketAddr,
+    intro: &SelfIntro,
     local: &[atlasctl_protocol::fleet::NodeAddress],
 ) -> Result<Hello>
 where
@@ -132,9 +162,9 @@ where
         tls,
         &PeerFrame::Hello {
             version: PEER_PROTOCOL_VERSION,
-            name: crate::discovery::local_display_name().as_str().to_owned(),
-            can_launch: true,
-            accelerator: String::new(),
+            name: intro.name.clone(),
+            can_launch: intro.can_launch,
+            accelerator: intro.accelerator.clone(),
             addresses: local.to_vec(),
         },
     )
@@ -186,10 +216,11 @@ pub async fn query(
     addr: SocketAddr,
     expect: NodeId,
     link: LinkClass,
+    intro: &SelfIntro,
     local: &[atlasctl_protocol::fleet::NodeAddress],
 ) -> Result<PeerReport> {
     let mut tls = dial(identity, pins, addr, expect).await?;
-    let hello = exchange_hello(&mut tls, addr, local).await?;
+    let hello = exchange_hello(&mut tls, addr, intro, local).await?;
 
     // Vitals are optional: an agent may be up and simply have nothing to say
     // about its hardware, which is not a failure.
@@ -325,6 +356,64 @@ mod tests {
             got,
             Some(("docker run rank1".to_owned(), vec!["mtp_gate".to_owned()]))
         );
+    }
+
+    /// The whole point of a control-only agent is that it cannot run a model.
+    /// Every outbound hello used to be written by hand with `can_launch: true`,
+    /// so such an agent introduced itself to every peer as able to launch.
+    #[tokio::test]
+    async fn a_control_only_agent_does_not_claim_it_can_launch() {
+        let (mut a, mut b) = tokio::io::duplex(1 << 16);
+        let intro = SelfIntro {
+            name: "laptop".to_owned(),
+            can_launch: false,
+            accelerator: String::new(),
+        };
+
+        let peer = tokio::spawn(async move {
+            let heard = read_frame(&mut b).await.unwrap();
+            // Answer so the exchange completes; the claim under test is ours.
+            write_frame(
+                &mut b,
+                &PeerFrame::Hello {
+                    version: PEER_PROTOCOL_VERSION,
+                    name: "spark".to_owned(),
+                    can_launch: true,
+                    accelerator: "gb10".to_owned(),
+                    addresses: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+            heard
+        });
+
+        let addr: SocketAddr = "10.0.0.1:34334".parse().unwrap();
+        let theirs = exchange_hello(&mut a, addr, &intro, &[]).await.unwrap();
+        let ours = peer.await.unwrap();
+
+        match ours {
+            PeerFrame::Hello {
+                name, can_launch, ..
+            } => {
+                assert!(!can_launch, "a control-only agent claimed it can launch");
+                assert_eq!(name, "laptop");
+            }
+            other => panic!("expected a hello, got {other:?}"),
+        }
+        // And the peer's own claim is carried back untouched, which is what
+        // launchability is now derived from.
+        assert!(theirs.can_launch);
+        assert_eq!(theirs.accelerator, "gb10");
+    }
+
+    /// The name is derived, but the capability must be supplied — there is no
+    /// default, because the wrong default is the bug above.
+    #[test]
+    fn an_intro_reports_the_capability_it_was_given() {
+        assert!(!SelfIntro::new(false, "").can_launch);
+        assert!(SelfIntro::new(true, "gb10").can_launch);
+        assert_eq!(SelfIntro::new(true, "gb10").accelerator, "gb10");
     }
 
     /// A peer that only ever sends vitals must not hold the preview open.

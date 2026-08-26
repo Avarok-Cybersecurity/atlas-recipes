@@ -12,7 +12,7 @@
 //! here skips them rather than mistaking one for an answer, bounded so that a
 //! peer sending nothing else cannot hold a phase open.
 
-use super::link::{DIAL_TIMEOUT, dial, exchange_hello};
+use super::link::{DIAL_TIMEOUT, SelfIntro, dial, exchange_hello};
 use super::wire::{PeerFrame, read_frame, write_frame};
 use crate::cluster::{PrepareReply, RankAssignment};
 use crate::identity::{Identity, PinStore};
@@ -68,10 +68,11 @@ pub async fn preview_rank(
     pins: PinStore,
     addr: SocketAddr,
     expect: NodeId,
+    intro: &SelfIntro,
     assignment: RankAssignment,
 ) -> Result<(String, Vec<String>)> {
     let mut tls = dial(identity, pins, addr, expect).await?;
-    exchange_hello(&mut tls, addr, &[]).await?;
+    exchange_hello(&mut tls, addr, intro, &[]).await?;
     write_frame(
         &mut tls,
         &PeerFrame::PreviewRank {
@@ -103,11 +104,12 @@ pub async fn prepare_rank(
     pins: PinStore,
     addr: SocketAddr,
     expect: NodeId,
+    intro: &SelfIntro,
     epoch: &str,
     assignment: RankAssignment,
 ) -> Result<PrepareReply> {
     let mut tls = dial(identity, pins, addr, expect).await?;
-    exchange_hello(&mut tls, addr, &[]).await?;
+    exchange_hello(&mut tls, addr, intro, &[]).await?;
     write_frame(
         &mut tls,
         &PeerFrame::Prepare {
@@ -144,10 +146,11 @@ pub async fn commit_rank(
     pins: PinStore,
     addr: SocketAddr,
     expect: NodeId,
+    intro: &SelfIntro,
     epoch: &str,
 ) -> Result<String> {
     let mut tls = dial(identity, pins, addr, expect).await?;
-    exchange_hello(&mut tls, addr, &[]).await?;
+    exchange_hello(&mut tls, addr, intro, &[]).await?;
     write_frame(
         &mut tls,
         &PeerFrame::Commit {
@@ -180,10 +183,11 @@ pub async fn abort_rank(
     pins: PinStore,
     addr: SocketAddr,
     expect: NodeId,
+    intro: &SelfIntro,
     epoch: &str,
 ) -> Result<()> {
     let mut tls = dial(identity, pins, addr, expect).await?;
-    exchange_hello(&mut tls, addr, &[]).await?;
+    exchange_hello(&mut tls, addr, intro, &[]).await?;
     write_frame(
         &mut tls,
         &PeerFrame::Abort {
@@ -209,10 +213,11 @@ pub async fn rank_alive(
     pins: PinStore,
     addr: SocketAddr,
     expect: NodeId,
+    intro: &SelfIntro,
     container: &str,
 ) -> Result<bool> {
     let mut tls = dial(identity, pins, addr, expect).await?;
-    exchange_hello(&mut tls, addr, &[]).await?;
+    exchange_hello(&mut tls, addr, intro, &[]).await?;
     write_frame(
         &mut tls,
         &PeerFrame::IsRankAlive {
@@ -242,10 +247,11 @@ pub async fn stop_rank(
     pins: PinStore,
     addr: SocketAddr,
     expect: NodeId,
+    intro: &SelfIntro,
     container: &str,
 ) -> Result<()> {
     let mut tls = dial(identity, pins, addr, expect).await?;
-    exchange_hello(&mut tls, addr, &[]).await?;
+    exchange_hello(&mut tls, addr, intro, &[]).await?;
     write_frame(
         &mut tls,
         &PeerFrame::StopRank {

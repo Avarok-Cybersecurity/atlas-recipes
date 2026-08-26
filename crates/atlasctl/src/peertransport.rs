@@ -11,6 +11,7 @@ use anyhow::Result;
 use atlasctl_agent::cluster::{PrepareReply, RankAssignment};
 use atlasctl_agent::identity::{Identity, PinStore};
 use atlasctl_agent::peer::cluster;
+use atlasctl_agent::peer::link::SelfIntro;
 use atlasctl_agent::transport::RankTransport;
 use atlasctl_protocol::fleet::NodeId;
 use std::future::Future;
@@ -22,6 +23,10 @@ pub struct PeerTransport {
     identity: Arc<Identity>,
     pins: PinStore,
     runtime: tokio::runtime::Handle,
+    /// How this agent introduces itself to a rank. Built once, from the same
+    /// launchability the rest of the agent reports, so a control-only head
+    /// cannot describe itself as able to run a model.
+    intro: SelfIntro,
 }
 
 impl std::fmt::Debug for PeerTransport {
@@ -33,11 +38,17 @@ impl std::fmt::Debug for PeerTransport {
 impl PeerTransport {
     /// Build a transport.
     #[must_use]
-    pub fn new(identity: Arc<Identity>, pins: PinStore, runtime: tokio::runtime::Handle) -> Self {
+    pub fn new(
+        identity: Arc<Identity>,
+        pins: PinStore,
+        runtime: tokio::runtime::Handle,
+        intro: SelfIntro,
+    ) -> Self {
         Self {
             identity,
             pins,
             runtime,
+            intro,
         }
     }
 
@@ -64,6 +75,7 @@ impl RankTransport for PeerTransport {
             self.pins.clone(),
             addr,
             node,
+            &self.intro,
             assignment.clone(),
         ))
     }
@@ -80,6 +92,7 @@ impl RankTransport for PeerTransport {
             self.pins.clone(),
             addr,
             node,
+            &self.intro,
             epoch,
             assignment.clone(),
         ))
@@ -97,6 +110,7 @@ impl RankTransport for PeerTransport {
             self.pins.clone(),
             addr,
             node,
+            &self.intro,
             epoch,
         ))
     }
@@ -107,6 +121,7 @@ impl RankTransport for PeerTransport {
             self.pins.clone(),
             addr,
             node,
+            &self.intro,
             epoch,
         ));
     }
@@ -117,6 +132,7 @@ impl RankTransport for PeerTransport {
             self.pins.clone(),
             addr,
             node,
+            &self.intro,
             container,
         ))
     }
@@ -127,6 +143,7 @@ impl RankTransport for PeerTransport {
             self.pins.clone(),
             addr,
             node,
+            &self.intro,
             container,
         ));
     }

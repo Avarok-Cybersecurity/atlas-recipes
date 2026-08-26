@@ -202,6 +202,86 @@ fn a_beacon_claiming_it_cannot_launch_is_taken_at_its_word() {
     assert!(!peer.launchability.can_launch);
 }
 
+fn report(id: NodeId, name: &str, can_launch: bool) -> crate::peer::link::PeerReport {
+    crate::peer::link::PeerReport {
+        node: id,
+        name: name.to_owned(),
+        can_launch,
+        accelerator: "GB10".to_owned(),
+        vitals: None,
+        link: LinkClass::Roce,
+        addresses: vec![roce("10.10.10.10")],
+    }
+}
+
+/// Enterprise wifi filters multicast and the Spark links are point-to-point
+/// /30s, so a paired machine having no beacon is ordinary — it is the case
+/// `peer add` exists for. Launchability was read from the beacon alone, so
+/// such a machine reported "not reachable right now" and could not be given a
+/// rank, moments after completing an authenticated handshake with us.
+#[test]
+fn a_paired_peer_we_have_spoken_to_is_launchable_without_a_beacon() {
+    let t = Tmp::new("noboacon");
+    let f = fleet_at(&t.0);
+    let peer = Identity::generate();
+    record_pairing(
+        &PinStore::new(&t.0),
+        peer.id(),
+        &hex::encode(peer.public().as_bytes()),
+        DisplayName::new("spark-43fa"),
+        0,
+        None,
+    )
+    .expect("pin");
+    // No `observe`: nothing was ever heard on multicast.
+    f.record_report(report(peer.id(), "spark-43fa", true));
+
+    let listed = f
+        .nodes()
+        .into_iter()
+        .find(|n| n.id == peer.id())
+        .expect("listed");
+    assert_eq!(listed.pairing, PairingState::Paired);
+    assert!(
+        listed.launchability.can_launch,
+        "a peer we authenticated with was called unreachable: {:?}",
+        listed.launchability.reason
+    );
+}
+
+/// The authenticated channel outranks the beacon, and it has to: a beacon is
+/// unauthenticated, so believing it over something that proved it holds the
+/// pinned key would let anyone on the network decide whether a machine of ours
+/// is allowed to hold a rank.
+#[test]
+fn an_authenticated_report_outranks_a_beacon_that_disagrees() {
+    let t = Tmp::new("outrank");
+    let f = fleet_at(&t.0);
+    let peer = Identity::generate();
+    record_pairing(
+        &PinStore::new(&t.0),
+        peer.id(),
+        &hex::encode(peer.public().as_bytes()),
+        DisplayName::new("laptop"),
+        0,
+        None,
+    )
+    .expect("pin");
+    // The beacon says it can launch; the machine itself says it cannot.
+    f.observe(beacon(peer.id(), "laptop", true));
+    f.record_report(report(peer.id(), "laptop", false));
+
+    let listed = f
+        .nodes()
+        .into_iter()
+        .find(|n| n.id == peer.id())
+        .expect("listed");
+    assert!(
+        !listed.launchability.can_launch,
+        "a beacon overrode the machine's own authenticated answer"
+    );
+}
+
 #[test]
 fn pairing_refuses_a_code_of_the_wrong_shape_without_touching_the_network() {
     let t = Tmp::new("shape");

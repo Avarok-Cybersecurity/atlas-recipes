@@ -23,6 +23,18 @@ use crate::fleet::FleetView;
 use anyhow::Result;
 use atlasctl_protocol::fleet::{Launchability, NodeAddress, NodeDescriptor, NodeId, PairingState};
 
+/// Turn a peer's own answer about itself into a launchability.
+///
+/// One function so the two places that decide this cannot drift, and so the
+/// wording an operator reads is the same whichever source supplied it.
+fn as_launchability(can_launch: bool) -> Launchability {
+    if can_launch {
+        Launchability::yes()
+    } else {
+        Launchability::no("this node reports it cannot run models")
+    }
+}
+
 impl FleetView for LocalFleet {
     fn nodes(&self) -> Vec<NodeDescriptor> {
         let mut out = vec![self.local_node()];
@@ -100,15 +112,20 @@ impl FleetView for LocalFleet {
                             |s| addresses_of(&s.beacon),
                         )
                     }),
-                launchability: sighting.map_or_else(
-                    || Launchability::no("not reachable right now"),
-                    |s| {
-                        if s.beacon.can_launch {
-                            Launchability::yes()
-                        } else {
-                            Launchability::no("this node reports it cannot run models")
-                        }
+                // Same precedence as everything else on this descriptor, and
+                // it was missing here: launchability came from the beacon
+                // alone. A paired machine on a network that filters multicast
+                // has no beacon — the case `peer add` exists for — so it
+                // reported "not reachable right now" and could not be given a
+                // rank, moments after completing an authenticated handshake.
+                launchability: report.map_or_else(
+                    || {
+                        sighting.map_or_else(
+                            || Launchability::no("not reachable right now"),
+                            |s| as_launchability(s.beacon.can_launch),
+                        )
                     },
+                    |r| as_launchability(r.can_launch),
                 ),
                 agent_version: String::new(),
                 accelerator: report.map_or_else(
@@ -138,11 +155,7 @@ impl FleetView for LocalFleet {
                     is_local: false,
                     pairing: PairingState::Discovered,
                     addresses: addresses_of(&s.beacon),
-                    launchability: if s.beacon.can_launch {
-                        Launchability::yes()
-                    } else {
-                        Launchability::no("this node reports it cannot run models")
-                    },
+                    launchability: as_launchability(s.beacon.can_launch),
                     agent_version: String::new(),
                     accelerator: s.beacon.accelerator.clone(),
                     vitals: None,

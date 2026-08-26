@@ -176,6 +176,7 @@ fn spawn_peer_poll(
                     sock,
                     id,
                     link,
+                    &crate::peer::link::SelfIntro::new(fleet.can_launch(), ""),
                     &fleet.local_addresses(),
                 )
                 .await
