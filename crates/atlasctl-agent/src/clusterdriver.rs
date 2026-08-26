@@ -65,6 +65,17 @@ struct Running {
     started: Vec<RankStarted>,
 }
 
+impl Target {
+    /// Enough of a target to ask whether its rank is alive.
+    fn clone_shallow(&self) -> Self {
+        Self {
+            assignment: self.assignment.clone(),
+            addr: self.addr,
+            name: self.name.clone(),
+        }
+    }
+}
+
 /// A prepare that has been accepted and is waiting to be committed.
 struct Pending {
     epoch: String,
@@ -341,6 +352,53 @@ impl ClusterControl for ClusterDriver {
         }
     }
 
+    fn supervise(&self) -> Option<String> {
+        // Read the roster under the lock, then release it: asking a peer
+        // whether it is alive dials the network, and holding the lock across
+        // that would block a stop the operator asked for.
+        let (targets, started) = {
+            let held = self.running.lock().expect("running lock poisoned");
+            let r = held.as_ref()?;
+            (
+                r.targets
+                    .iter()
+                    .map(Target::clone_shallow)
+                    .collect::<Vec<_>>(),
+                r.started.clone(),
+            )
+        };
+
+        let mut dead = Vec::new();
+        for r in &started {
+            let Some(t) = targets.iter().find(|t| t.assignment.node == r.node) else {
+                continue;
+            };
+            let alive = match t.addr {
+                None => self.rank.alive(&r.container).unwrap_or(false),
+                // Unreachable is not alive. A rank we cannot ask is not one we
+                // can count as part of a whole cluster — and if the answer is
+                // wrong, tearing down is the cheap mistake.
+                Some(addr) => self
+                    .transport
+                    .alive(t.assignment.node, addr, &r.container)
+                    .unwrap_or(false),
+            };
+            if !alive {
+                dead.push(t.name.to_string());
+            }
+        }
+        if dead.is_empty() {
+            return None;
+        }
+
+        let _ = self.stop_cluster();
+        Some(format!(
+            "{} stopped, so the cluster was torn down. A half cluster waits at a \
+             rendezvous that will never complete while its survivors hold their GPUs.",
+            dead.join(" and ")
+        ))
+    }
+
     fn stop_cluster(&self) -> Result<Vec<RankStarted>, String> {
         let running = self
             .running
@@ -371,6 +429,14 @@ impl ClusterControl for ClusterDriver {
         } else {
             Err(format!("could not stop {}", failures.join("; ")))
         }
+    }
+}
+
+#[cfg(test)]
+impl ClusterDriver {
+    /// Mark a rank's container dead, so supervision has something to find.
+    pub(crate) fn kill_for_test(&self, node: NodeId) {
+        self.transport.kill_for_test(node);
     }
 }
 

@@ -119,6 +119,19 @@ pub trait ClusterControl: Send + Sync {
     /// If no cluster is running, or a rank could not be stopped — and the
     /// error names which, because a rank left running holds a whole GPU.
     fn stop_cluster(&self) -> Result<Vec<atlasctl_protocol::msg::fleet::RankStarted>, String>;
+
+    /// Check a running cluster is still whole, and tear it down if it is not.
+    ///
+    /// The settle gate at commit is a liveness check by construction: weights
+    /// take minutes to load, so it cannot wait for readiness and only catches
+    /// a rank that dies immediately. A rank that dies four minutes in — during
+    /// model build, say — passed that gate, and the survivors then hold their
+    /// GPUs indefinitely serving nothing, because a half cluster waits at a
+    /// rendezvous that will never complete.
+    ///
+    /// Returns a description of what it tore down, or `None` when the cluster
+    /// is whole or absent.
+    fn supervise(&self) -> Option<String>;
 }
 
 /// A single client connection.

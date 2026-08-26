@@ -158,6 +158,20 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
             },
         ));
 
+    // Built before the state so the supervisor task can hold the same driver:
+    // a rank that dies after commit has to be noticed by something, and the
+    // session only exists while a browser is connected.
+    let cluster = Arc::new(atlasctl_agent::clusterdriver::ClusterDriver::new(
+        Arc::clone(&fleet) as Arc<dyn atlasctl_agent::fleet::FleetView>,
+        Arc::clone(&renderer),
+        Arc::new(crate::peertransport::PeerTransport::new(
+            Arc::clone(&identity),
+            pins.clone(),
+            rt.handle().clone(),
+        )),
+        atlasctl_agent::peer::DEFAULT_PEER_PORT,
+    ));
+
     let state = Arc::new(AgentState {
         registry: crate::commands::registry_set()?,
         launcher: Box::new(DockerLauncher::new(
@@ -177,18 +191,33 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
                 crate::httpscrape::HttpScraper,
             )),
         ))),
-        cluster: Some(Box::new(atlasctl_agent::clusterdriver::ClusterDriver::new(
-            Arc::clone(&fleet) as Arc<dyn atlasctl_agent::fleet::FleetView>,
-            Arc::clone(&renderer),
-            Arc::new(crate::peertransport::PeerTransport::new(
-                Arc::clone(&identity),
-                pins.clone(),
-                rt.handle().clone(),
-            )),
-            atlasctl_agent::peer::DEFAULT_PEER_PORT,
-        ))),
+        cluster: Some(Arc::clone(&cluster) as Arc<dyn atlasctl_agent::session::ClusterControl>),
         events: events.clone(),
     });
+
+    use atlasctl_agent::session::ClusterControl as _;
+
+    // Watch the cluster stay whole. The settle gate at commit only catches a
+    // rank that dies immediately; weights take minutes to load, so a rank that
+    // dies during model build passes it and leaves its peers holding GPUs and
+    // serving nothing.
+    {
+        let cluster = Arc::clone(&cluster);
+        rt.spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(20));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tick.tick().await;
+                let cluster = Arc::clone(&cluster);
+                // Asking a peer dials the network, so it must not run on the
+                // async runtime's worker threads.
+                let torn = tokio::task::spawn_blocking(move || cluster.supervise()).await;
+                if let Ok(Some(why)) = torn {
+                    eprintln!("cluster: {why}");
+                }
+            }
+        });
+    }
 
     eprintln!("atlasctl agent listening on 127.0.0.1:{}", args.port);
     // Client mode is a different kind of agent, not a broken one, so it does

@@ -121,6 +121,8 @@ pub(super) struct FixtureTransport {
     prepare: BTreeMap<NodeId, PrepareReply>,
     commit: BTreeMap<NodeId, Result<String, String>>,
     dead: BTreeMap<NodeId, bool>,
+    /// Ranks killed mid-run by a test, after commit succeeded.
+    killed: StdMutex<std::collections::BTreeSet<NodeId>>,
 }
 
 impl FixtureTransport {
@@ -130,6 +132,7 @@ impl FixtureTransport {
             prepare: BTreeMap::new(),
             commit: BTreeMap::new(),
             dead: BTreeMap::new(),
+            killed: StdMutex::new(std::collections::BTreeSet::new()),
         }
     }
     /// A peer whose container does not survive its own start.
@@ -185,10 +188,16 @@ impl RankTransport for FixtureTransport {
     }
     fn alive(&self, node: NodeId, _: SocketAddr, container: &str) -> anyhow::Result<bool> {
         self.note(format!("{}.alive({container})", node.short()));
+        if self.killed.lock().expect("killed lock").contains(&node) {
+            return Ok(false);
+        }
         Ok(!self.dead.get(&node).copied().unwrap_or(false))
     }
     fn stop(&self, node: NodeId, _: SocketAddr, container: &str) {
         self.note(format!("{}.stop({container})", node.short()));
+    }
+    fn kill_for_test(&self, node: NodeId) {
+        self.killed.lock().expect("killed lock").insert(node);
     }
 }
 

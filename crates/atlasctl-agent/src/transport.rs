@@ -71,4 +71,8 @@ pub trait RankTransport: Send + Sync {
 
     /// Stop a container this rank started. Failures are the driver's to ignore.
     fn stop(&self, node: NodeId, addr: SocketAddr, container: &str);
+
+    /// Mark a rank dead, so a test can exercise supervision.
+    #[cfg(test)]
+    fn kill_for_test(&self, _node: NodeId) {}
 }

@@ -50,7 +50,7 @@ pub struct AgentState {
     ///
     /// `None` on an agent that cannot reach peers, which is answered plainly
     /// rather than by inventing a preview.
-    pub cluster: Option<Box<dyn crate::session::ClusterControl>>,
+    pub cluster: Option<std::sync::Arc<dyn crate::session::ClusterControl>>,
     /// Sampling a running launch, when this agent can.
     pub telemetry: Option<Box<dyn crate::session::LaunchTelemetry>>,
     /// Fleet changes pushed to every authenticated session.
