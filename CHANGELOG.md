@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.2.0...v0.3.0) (2026-08-26)
+
+
+### Features
+
+* **agent:** make a worker node work — onboarding, pairing, and a legible failure ([#56](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/56)) ([e787a66](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/e787a6694ff8c4e55d8095ff856bdb488f0b40d9))
+* **agent:** report what accelerator a machine actually has ([#59](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/59)) ([88f00c5](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/88f00c56ced72d3d141cf1dc63c015aad32a7c21))
+
+
+### Bug Fixes
+
+* **cli:** say why a join was refused, not which TLS alert arrived ([#58](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/58)) ([2d35e1f](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/2d35e1f37f368d35723d2c49cbaae2362e9a7f26))
+* **flags:** claim the nine recipe settings that never reached the engine ([#61](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/61)) ([d7f9ea2](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/d7f9ea26692d999d499bacf9835b181f9ac33fa4))
+* **release:** build the musl wheel where a musl compiler exists ([#54](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/54)) ([1f4224b](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/1f4224be485cdf05db076a0408c9baec491e3555))
+* **release:** the already-published guard never fired ([#57](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/57)) ([e206079](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/e206079ee1c683a731f730e470724dc4ba39e146))
+* **settings:** the launch modal offered a value that kills the launch ([#60](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/60)) ([d9daade](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/d9daade84f704e2a49b49ba2f75e3da9a0687c9c))
+
 ## [0.2.0](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.1.3...v0.2.0) (2026-08-26)
 
 
