@@ -35,6 +35,12 @@ pub const VITALS_INTERVAL: Duration = Duration::from_secs(1);
 /// How often stale sightings are aged out.
 pub const PRUNE_INTERVAL: Duration = Duration::from_secs(10);
 
+/// How often paired peers are asked how they are.
+///
+/// Slower than local vitals on purpose: this opens a TLS connection per peer,
+/// and a fleet of idle machines should cost almost nothing to watch.
+pub const PEER_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
 /// Start every background loop.
 ///
 /// Returns immediately; the loops run until the process ends.
@@ -48,7 +54,127 @@ pub fn spawn_all(
         spawn_discovery(Arc::clone(&fleet), events.clone(), d, beacon);
     }
     spawn_vitals(Arc::clone(&fleet), events.clone());
-    spawn_prune(fleet, events);
+    spawn_prune(Arc::clone(&fleet), events);
+}
+
+/// Serve the peer channel, and keep paired peers fresh.
+///
+/// Separate from [`spawn_all`] because it needs this agent's identity, which
+/// the fleet view owns privately.
+pub fn spawn_peer_work(
+    fleet: Arc<crate::fleet::LocalFleet>,
+    identity: Arc<crate::identity::Identity>,
+    pins: crate::identity::PinStore,
+    events: broadcast::Sender<ServerMsg>,
+    peer_port: u16,
+) {
+    spawn_peer_listener(
+        Arc::clone(&fleet),
+        Arc::clone(&identity),
+        pins.clone(),
+        peer_port,
+    );
+    spawn_peer_poll(fleet, identity, pins, events, peer_port);
+}
+
+/// Accept connections from paired peers.
+fn spawn_peer_listener(
+    fleet: Arc<crate::fleet::LocalFleet>,
+    identity: Arc<crate::identity::Identity>,
+    pins: crate::identity::PinStore,
+    port: u16,
+) {
+    tokio::spawn(async move {
+        // Pinned-only: an unpaired agent is refused during the handshake, so
+        // nothing past this point has an authorization decision to make.
+        let cfg = match crate::peer::tls::server_config(
+            &identity,
+            crate::peer::tls::PinnedPeerVerifier::pinned(pins, None),
+        ) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("peer channel disabled: {e}");
+                return;
+            }
+        };
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(cfg));
+        let listener = match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!(
+                    "peer channel disabled: could not bind {port}: {e}\n                       other machines will not be able to reach this one"
+                );
+                return;
+            }
+        };
+        eprintln!("peer channel on 0.0.0.0:{port}");
+
+        loop {
+            let Ok((tcp, _)) = listener.accept().await else {
+                continue;
+            };
+            let acceptor = acceptor.clone();
+            let fleet = Arc::clone(&fleet);
+            tokio::spawn(async move {
+                let Ok(mut tls) = acceptor.accept(tcp).await else {
+                    // An unpaired caller failing the handshake is the system
+                    // working, not an incident worth logging.
+                    return;
+                };
+                let vitals = fleet.local_vitals_and_id().map(|(_, v)| v);
+                let _ = crate::peer::link::serve_query(
+                    &mut tls,
+                    crate::discovery::local_display_name().as_str(),
+                    fleet.can_launch(),
+                    "",
+                    vitals,
+                )
+                .await;
+            });
+        }
+    });
+}
+
+/// Ask each paired peer how it is.
+fn spawn_peer_poll(
+    fleet: Arc<crate::fleet::LocalFleet>,
+    identity: Arc<crate::identity::Identity>,
+    pins: crate::identity::PinStore,
+    events: broadcast::Sender<ServerMsg>,
+    port: u16,
+) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(PEER_POLL_INTERVAL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            let Ok(peers) = fleet.dialable_peers() else {
+                continue;
+            };
+            for (id, addr) in peers {
+                let Ok(sock) = format!("{addr}:{port}").parse() else {
+                    continue;
+                };
+                let link = fleet.classify_peer_address(&addr);
+                match crate::peer::link::query(&identity, pins.clone(), sock, id, link).await {
+                    Ok(report) => {
+                        fleet.record_report(report);
+                        if let Some(node) = fleet.nodes().into_iter().find(|n| n.id == id) {
+                            let _ = events.send(ServerMsg::FleetEvent {
+                                event: FleetEvent::NodeChanged {
+                                    node: Box::new(node),
+                                },
+                            });
+                        }
+                    }
+                    // A peer that is switched off is the normal state of a
+                    // fleet, not an error. Forget what it last said so the
+                    // interface stops presenting stale vitals as current.
+                    Err(_) => fleet.clear_report(id),
+                }
+            }
+        }
+    });
 }
 
 /// Something that can both advertise and browse.

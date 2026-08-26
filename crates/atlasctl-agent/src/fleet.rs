@@ -140,6 +140,12 @@ pub struct LocalFleet {
     alerts: Mutex<BTreeMap<NodeId, Vec<NodeAlert>>>,
     /// What is running locally, if anything.
     running: Mutex<Option<String>>,
+    /// What paired peers have told us over the authenticated channel.
+    ///
+    /// Separate from `seen`, and it must stay separate: a beacon says where a
+    /// machine claims to be, while this is what a machine holding the key we
+    /// pinned actually said. Only the second is evidence.
+    reports: Mutex<BTreeMap<NodeId, crate::peer::link::PeerReport>>,
 }
 
 impl std::fmt::Debug for LocalFleet {
@@ -172,6 +178,7 @@ impl LocalFleet {
             seen: Mutex::new(BTreeMap::new()),
             alerts: Mutex::new(BTreeMap::new()),
             running: Mutex::new(None),
+            reports: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -180,6 +187,12 @@ impl LocalFleet {
     pub fn with_vitals(mut self, source: Box<dyn VitalsSource>) -> Self {
         self.vitals = Some(source);
         self
+    }
+
+    /// Whether this machine can run a model.
+    #[must_use]
+    pub fn can_launch(&self) -> bool {
+        self.launchability.can_launch
     }
 
     /// This agent's identity.
@@ -210,6 +223,58 @@ impl LocalFleet {
                 },
             );
         }
+    }
+
+    /// Record what a peer said over the authenticated channel.
+    pub fn record_report(&self, report: crate::peer::link::PeerReport) {
+        if let Ok(mut r) = self.reports.lock() {
+            r.insert(report.node, report);
+        }
+    }
+
+    /// Forget what a peer said, because it stopped answering.
+    pub fn clear_report(&self, node: NodeId) {
+        if let Ok(mut r) = self.reports.lock() {
+            r.remove(&node);
+        }
+    }
+
+    /// Peers this agent should try to reach, with the address to use.
+    ///
+    /// # Errors
+    /// If the pin store cannot be read.
+    pub fn dialable_peers(&self) -> Result<Vec<(NodeId, String)>> {
+        let pinned = self.pins.load()?;
+        let seen = self.lock_seen();
+        Ok(pinned
+            .iter()
+            .filter_map(|(id, pin)| {
+                let addr = seen
+                    .as_ref()
+                    .and_then(|s| s.get(id))
+                    .and_then(|s| s.beacon.addresses.first().map(ToString::to_string))
+                    .or_else(|| pin.last_address.clone())?;
+                Some((*id, addr))
+            })
+            .collect())
+    }
+
+    /// How this machine classifies the link an address sits on.
+    ///
+    /// Asked of our own fabric probe, never of the peer: a peer's opinion of
+    /// its own link says nothing about the path between us.
+    #[must_use]
+    pub fn classify_peer_address(&self, addr: &str) -> atlasctl_protocol::fleet::LinkClass {
+        use atlasctl_protocol::fleet::LinkClass;
+        // Same /24 as one of our own interfaces is a reasonable proxy for
+        // "reached over that interface" without shelling out to a routing
+        // table on every poll.
+        let prefix = |a: &str| a.rsplit_once('.').map(|(head, _)| head.to_owned());
+        let want = prefix(addr);
+        self.local_addresses
+            .iter()
+            .find(|a| prefix(&a.addr) == want)
+            .map_or(LinkClass::Unverified, |a| a.class)
     }
 
     /// Note what is running locally, so the fleet view can report it.
@@ -293,9 +358,16 @@ impl FleetView for LocalFleet {
         // Start from the pin store, so a paired machine that is switched off is
         // still listed. A fleet that forgets its members when they sleep is not
         // a fleet.
+        let reports = self.reports.lock().ok();
         for (id, pin) in &pinned {
             let sighting = seen.as_ref().and_then(|s| s.get(id));
-            let fresh = sighting.is_some_and(|s| s.at.elapsed() < UNREACHABLE_AFTER);
+            let report = reports.as_ref().and_then(|r| r.get(id));
+            // A completed handshake is better evidence of liveness than a
+            // beacon in either direction: a wedged agent can still broadcast,
+            // and a healthy one goes quiet the moment a switch filters
+            // multicast.
+            let fresh =
+                report.is_some() || sighting.is_some_and(|s| s.at.elapsed() < UNREACHABLE_AFTER);
             out.push(NodeDescriptor {
                 id: *id,
                 name: sighting.map_or_else(|| pin.name.clone(), |s| s.beacon.name.clone()),
@@ -308,23 +380,41 @@ impl FleetView for LocalFleet {
                 // A live sighting wins; otherwise fall back to where this peer
                 // was last known to be, so a restart does not make a paired
                 // machine look unreachable-and-addressless.
-                addresses: sighting.map_or_else(
-                    || {
-                        pin.last_address
-                            .as_ref()
-                            .map(|a| {
-                                vec![NodeAddress {
-                                    iface: String::new(),
-                                    addr: a.clone(),
-                                    class: atlasctl_protocol::fleet::LinkClass::Unverified,
-                                    speed_mbps: None,
-                                    rdma: false,
-                                }]
-                            })
-                            .unwrap_or_default()
-                    },
-                    |s| addresses_of(&s.beacon),
-                ),
+                addresses: report
+                    .map(|r| {
+                        // Reached and authenticated, so the link class is ours
+                        // to state rather than a guess.
+                        vec![NodeAddress {
+                            iface: String::new(),
+                            addr: pin.last_address.clone().unwrap_or_default(),
+                            class: r.link,
+                            speed_mbps: None,
+                            rdma: matches!(
+                                r.link,
+                                atlasctl_protocol::fleet::LinkClass::Roce
+                                    | atlasctl_protocol::fleet::LinkClass::InfiniBand
+                            ),
+                        }]
+                    })
+                    .unwrap_or_else(|| {
+                        sighting.map_or_else(
+                            || {
+                                pin.last_address
+                                    .as_ref()
+                                    .map(|a| {
+                                        vec![NodeAddress {
+                                            iface: String::new(),
+                                            addr: a.clone(),
+                                            class: atlasctl_protocol::fleet::LinkClass::Unverified,
+                                            speed_mbps: None,
+                                            rdma: false,
+                                        }]
+                                    })
+                                    .unwrap_or_default()
+                            },
+                            |s| addresses_of(&s.beacon),
+                        )
+                    }),
                 launchability: sighting.map_or_else(
                     || Launchability::no("not reachable right now"),
                     |s| {
@@ -336,10 +426,13 @@ impl FleetView for LocalFleet {
                     },
                 ),
                 agent_version: String::new(),
-                accelerator: sighting.map_or_else(String::new, |s| s.beacon.accelerator.clone()),
-                // Vitals arrive over the authenticated peer channel, never from
-                // a beacon, so a peer we have not spoken to reports none.
-                vitals: None,
+                accelerator: report.map_or_else(
+                    || sighting.map_or_else(String::new, |s| s.beacon.accelerator.clone()),
+                    |r| r.accelerator.clone(),
+                ),
+                // Only ever from the authenticated channel. A peer we have not
+                // spoken to reports none, rather than a beacon's word for it.
+                vitals: report.and_then(|r| r.vitals.clone()),
                 alerts: alerts
                     .as_ref()
                     .and_then(|a| a.get(id).cloned())

@@ -73,7 +73,9 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     // The fleet view is what makes /control show real machines. It is built
     // from this box's own facts — identity, links, launchability — so a fresh
     // agent shows itself correctly before any peer exists.
-    let identity = atlasctl_agent::identity::Identity::load_or_create(&config_dir)?;
+    let identity = Arc::new(atlasctl_agent::identity::Identity::load_or_create(
+        &config_dir,
+    )?);
     use atlasctl_agent::fabric::FabricProvider as _;
     let fabric = atlasctl_agent::fabric::linux::LinuxFabric::new();
     let addresses = fabric.addresses().unwrap_or_default();
@@ -114,9 +116,10 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         .filter_map(|a| a.addr.parse().ok())
         .collect();
 
+    let pins = atlasctl_agent::identity::PinStore::new(&config_dir);
     let fleet = atlasctl_agent::fleet::LocalFleet::new(
-        identity,
-        atlasctl_agent::identity::PinStore::new(&config_dir),
+        atlasctl_agent::identity::Identity::load_or_create(&config_dir)?,
+        pins.clone(),
         atlasctl_agent::discovery::local_display_name(),
         addresses,
         launchability,
@@ -193,6 +196,17 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
                 }
             }
         };
+        // Serving the peer channel is what turns a pairing into a working
+        // link: it is how a peer's real vitals and verified link class arrive,
+        // rather than a beacon's unauthenticated word for them.
+        atlasctl_agent::daemon::spawn_peer_work(
+            Arc::clone(&fleet),
+            Arc::clone(&identity),
+            pins,
+            events.clone(),
+            atlasctl_agent::peer::DEFAULT_PEER_PORT,
+        );
+
         atlasctl_agent::daemon::spawn_all(
             Arc::clone(&fleet),
             events,
