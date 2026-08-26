@@ -166,8 +166,15 @@ def main() -> int:
             else:
                 print(f"ok   {rel} [{table}] {name} {required}")
 
-    # The release branch legitimately has manifest entries ahead of the
-    # manifests for a moment, so this half is a check, never a fix.
+    # Only on a normal tree. On the release branch release-please has already
+    # written the new versions into the Cargo manifests while
+    # .release-please-manifest.json still records the released-from versions —
+    # it is updated when the release is actually cut, not when the PR is
+    # prepared. Failing there would block the very repair this script exists to
+    # perform, which is exactly what it did on the first attempt.
+    if fix:
+        return bad | check_release_config()
+
     manifest_file = ROOT / ".release-please-manifest.json"
     for path, recorded in json.loads(manifest_file.read_text()).items():
         target = (ROOT / path / "Cargo.toml") if path != "." else (ROOT / "Cargo.toml")
