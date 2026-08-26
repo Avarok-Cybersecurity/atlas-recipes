@@ -168,3 +168,6 @@ impl LaunchTelemetry for LocalLaunchTelemetry {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;
