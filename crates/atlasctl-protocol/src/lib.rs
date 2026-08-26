@@ -7,11 +7,16 @@
 //! Deliberately dependency-light — serde and nothing else — so the entire
 //! surface a webpage can reach is small enough to read in one sitting.
 
+pub mod fleet;
 pub mod id;
 pub mod msg;
 pub mod settings;
 pub mod telemetry;
 
+pub use fleet::{
+    AlertKind, DisplayName, Launchability, LinkClass, Metric, NodeAddress, NodeAlert,
+    NodeDescriptor, NodeId, NodeIdError, NodeVitals, PairingState, Severity,
+};
 pub use id::{RecipeId, RecipeIdError};
 pub use msg::{AgentError, ClientMsg, RecipeInfo, RunningLaunch, ServerMsg};
 pub use settings::{Bound, Group, SettingError, SettingSpec, SettingValue};
