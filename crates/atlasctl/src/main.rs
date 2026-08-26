@@ -59,7 +59,7 @@ fn run() -> Result<()> {
         Command::Agent(AgentCmd::Run(a)) => commands::agent::run(&a),
         Command::Agent(AgentCmd::Token(a)) => commands::agent::token(&a),
         Command::Agent(AgentCmd::Status) => commands::agent::status(),
-        Command::Agent(AgentCmd::Pair(a)) => commands::agent::pair(&a),
+        Command::Agent(AgentCmd::Pair(a)) => commands::agentpair::pair(&a),
         Command::Agent(AgentCmd::Install(a)) => commands::service::install(&a),
         Command::Agent(AgentCmd::Uninstall) => commands::service::uninstall(),
         Command::Peer(PeerCmd::List) => commands::peer::list(),
