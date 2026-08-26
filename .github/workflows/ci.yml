@@ -63,51 +63,11 @@ jobs:
       - run: cargo check --workspace --locked
 
   version-sync:
-    name: workspace dep versions match their packages
+    name: internal version requirements match their packages
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - name: Every path dependency's version tracks the package it points at
-        run: |
-          set -euo pipefail
-          # Workspace members depend on each other by path *and* version.
-          # Publishing to crates.io needs the version; nothing keeps it in step
-          # with the package it names.
-          #
-          # A stale requirement is invisible while both are 0.1.x, because
-          # `^0.1.1` resolves against 0.1.3 quite happily. It only bites when a
-          # release cuts a minor bump: `^0.1.1` means `>=0.1.1, <0.2.0`, so
-          # 0.2.0 cannot satisfy it and the release job dies with
-          #   error: failed to select a version for the requirement
-          # *after* the release PR is open and looking healthy. That blocked
-          # every release attempt on 2026-08-26.
-          #
-          # release-please rewrites these by searching for the current version
-          # string, so a stale one is skipped rather than corrected — which is
-          # why this is checked at build time, where it is still cheap.
-          #
-          # Every path dependency is checked, not a named few: fixing only the
-          # one that happened to fail first leaves the next release to discover
-          # the rest.
-          fail=0
-          while IFS= read -r line; do
-            name=${line%% =*}
-            path=$(sed -E 's/.*path = "([^"]+)".*/\1/' <<<"$line")
-            want=$(sed -E 's/.*version = "([^"]+)".*/\1/' <<<"$line")
-            manifest="${path%/}/Cargo.toml"
-            have=$(awk '/^\[package\]/{p=1} p && /^version = /{gsub(/[",]/,"",$3); print $3; exit}' "$manifest")
-            if [ "$want" != "$have" ]; then
-              echo "::error::$name is required at \"$want\" but $manifest is $have"
-              fail=1
-            else
-              echo "ok   $name $want"
-            fi
-          done < <(grep -E '^[a-z0-9-]+ = \{ path = "[^"]+", version = "[^"]+" \}' Cargo.toml)
-          [ "$fail" = 0 ] || {
-            echo "::error::Set each requirement equal to its package version, or the next minor release will fail to resolve."
-            exit 1
-          }
-          echo "all workspace dependency versions in sync"
+      - run: python3 scripts/check-version-sync.py
 
   license-headers:
     name: license headers
