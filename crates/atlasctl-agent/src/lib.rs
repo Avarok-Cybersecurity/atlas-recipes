@@ -18,6 +18,7 @@ pub mod logs;
 pub mod pairing;
 pub mod peer;
 pub mod rank;
+pub mod rendezvous;
 pub mod server;
 pub mod session;
 pub mod telemetry;

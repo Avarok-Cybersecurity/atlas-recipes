@@ -23,6 +23,27 @@ fn host() -> atlasctl_core::host::HostSnapshot {
     }
 }
 
+/// A network in which nothing is routable beyond the local links.
+struct NeverAnswers;
+
+impl atlasctl_agent::rendezvous::Reachability for NeverAnswers {
+    fn answers(&self, _: &str, _: u16) -> bool {
+        false
+    }
+}
+
+/// This machine's own link, sharing a /30 with the fixture rendezvous address.
+fn local_link() -> atlasctl_protocol::fleet::NodeAddress {
+    atlasctl_protocol::fleet::NodeAddress {
+        iface: "enp1s0f0np0".to_owned(),
+        addr: "10.0.0.2".to_owned(),
+        class: atlasctl_protocol::fleet::LinkClass::Roce,
+        speed_mbps: Some(200_000),
+        rdma: true,
+        prefix_len: 30,
+    }
+}
+
 fn node() -> NodeId {
     NodeId::parse(&"ab".repeat(32)).expect("64 hex chars")
 }
@@ -35,7 +56,24 @@ fn service(runner: &Arc<RecordingRunner>, can_launch: Result<(), String>) -> Loc
         Box::new(NvidiaDevices),
         Box::new(atlasctl_core::docker::collective::NcclRoce),
         Arc::clone(runner) as Arc<dyn ProcessRunner>,
-        can_launch,
+        RankEnvironment {
+            can_launch,
+            // On the same /30 as the fixtures' rendezvous address, which is
+            // what a real head would offer: an address on a link this node is
+            // attached to.
+            local_addresses: vec![local_link()],
+            // Nothing answers. The address that broke the real cluster is one
+            // of this host's own interfaces, so a live probe would report it
+            // reachable and the refusal test would pass for the wrong reason.
+            reachability: Box::new(NeverAnswers),
+            // The real pair's mapping: each RoCE port has its own device.
+            rdma_devices: [
+                ("enp1s0f0np0".to_owned(), "rocep1s0f0".to_owned()),
+                ("enp1s0f1np1".to_owned(), "rocep1s0f1".to_owned()),
+            ]
+            .into_iter()
+            .collect(),
+        },
     )
 }
 
@@ -306,4 +344,119 @@ fn a_container_removed_after_dying_reports_not_alive() {
         !svc.alive("atlas-x")
             .expect("a missing container is an answer")
     );
+}
+
+/// The failure that hung a real two-node launch.
+///
+/// A DGX Spark carries several point-to-point RoCE links. The head offered its
+/// address on one this machine is not attached to, and the rank started, waited
+/// at the collective barrier, and retried `Connection timed out` every second
+/// while the operator saw two healthy containers and no server.
+///
+/// It is a refusal now, at prepare, before anything starts.
+#[test]
+fn a_rendezvous_address_on_a_link_this_node_lacks_is_refused() {
+    let runner = Arc::new(RecordingRunner::new());
+    let svc = service(&runner, Ok(()));
+    let mut a = agreeing(&svc, 1);
+    // The fixture node is on 10.0.0.2/30; this is the head's *other* link.
+    a.master_addr = "10.10.10.13".to_owned();
+
+    let PrepareReply::Refused { reason } = svc.prepare("e1", &a) else {
+        panic!("an unreachable rendezvous must be refused, not reserved");
+    };
+    assert!(reason.contains("10.10.10.13"), "{reason}");
+    assert!(
+        reason.contains("10.0.0.2/30"),
+        "must name this node's links: {reason}"
+    );
+    assert!(
+        svc.commit("e1").is_err(),
+        "a refused prepare must reserve nothing"
+    );
+}
+
+/// The address on the shared link still works — the check must not refuse
+/// everything.
+#[test]
+fn a_rendezvous_address_on_the_shared_link_is_accepted() {
+    let runner = Arc::new(RecordingRunner::new());
+    let svc = service(&runner, Ok(()));
+    let mut a = agreeing(&svc, 1);
+    a.master_addr = "10.0.0.1".to_owned();
+    assert_eq!(svc.prepare("e1", &a), PrepareReply::Prepared);
+}
+
+/// The collective has to be told which link to use, or it picks one itself.
+///
+/// Nothing set NCCL_SOCKET_IFNAME or NCCL_IB_HCA, on the reasoning that
+/// guessing a NIC name silently uses the wrong fabric. True of guessing — but
+/// leaving them unset delegates the guess to NCCL, which on a machine with four
+/// RoCE ports chose the one that reaches nobody and died at `ibv_modify_qp`
+/// with `Connection timed out`, then took the process with it via
+/// `CUDA_ERROR_ILLEGAL_ADDRESS`.
+mod collective_binding {
+    use super::*;
+
+    #[test]
+    fn a_rank_pins_the_collective_to_the_rendezvous_link() {
+        let runner = Arc::new(RecordingRunner::new());
+        let svc = service(&runner, Ok(()));
+        let mut a = agreeing(&svc, 1);
+        a.master_addr = "10.0.0.1".to_owned(); // the fixture's shared /30
+
+        let (cmd, _) = svc.render(&a).expect("renders");
+        assert!(
+            cmd.contains("NCCL_SOCKET_IFNAME=enp1s0f0np0"),
+            "must name the interface carrying the rendezvous: {cmd}"
+        );
+        assert!(
+            cmd.contains("NCCL_IB_HCA=rocep1s0f0"),
+            "must name that interface's own RDMA device: {cmd}"
+        );
+        assert!(
+            !cmd.contains("rocep1s0f1"),
+            "the other port must not appear: {cmd}"
+        );
+    }
+
+    /// A solo launch has no collective, so pinning one would be noise that
+    /// also constrains a single-node server for no reason.
+    #[test]
+    fn a_solo_launch_pins_nothing() {
+        let recipe = atlasctl_core::registry::RegistrySet::builtin_only()
+            .resolve(&atlasctl_core::registry::RecipeRef::parse(
+                "qwen3.6-35b-a3b-fp8-bf16head",
+            ))
+            .expect("a shipped solo recipe");
+        let plan = atlasctl_core::docker::translate::translate(
+            &recipe,
+            &BTreeMap::new(),
+            &atlasctl_core::chain::UserConfig::default(),
+            &host(),
+            &atlasctl_core::docker::translate::Placement::Solo,
+            &atlasctl_core::docker::translate::LaunchContext {
+                profile: &ROOTLESS_V1,
+                devices: &NvidiaDevices,
+                collective: &atlasctl_core::docker::collective::NcclRoce,
+            },
+        )
+        .expect("translates");
+        assert!(!plan.docker.env.contains_key("NCCL_SOCKET_IFNAME"));
+        assert!(!plan.docker.env.contains_key("NCCL_IB_HCA"));
+    }
+
+    /// A routed rendezvous has no single local interface to name, and inventing
+    /// one would be exactly the guess this avoids.
+    #[test]
+    fn a_rendezvous_off_every_local_subnet_pins_nothing() {
+        let runner = Arc::new(RecordingRunner::new());
+        let svc = service(&runner, Ok(()));
+        let mut a = agreeing(&svc, 1);
+        a.master_addr = "203.0.113.7".to_owned();
+
+        let (cmd, _) = svc.render(&a).expect("renders");
+        assert!(!cmd.contains("NCCL_SOCKET_IFNAME"), "{cmd}");
+        assert!(!cmd.contains("NCCL_IB_HCA"), "{cmd}");
+    }
 }

@@ -162,9 +162,14 @@ pub fn plan(
         .iter()
         .find(|n| n.id == head)
         .ok_or(PlanError::HeadNotSelected)?;
-    let master = head_node
-        .preferred_address()
-        .ok_or_else(|| PlanError::NoUsableLink {
+    // Not simply the head's best link. A DGX Spark carries several
+    // point-to-point RoCE links, and `preferred_address` ranks by link *class*
+    // — so with two RoCE ports it returns whichever sorts first, which is a
+    // coin flip as to whether the workers are on it. Choosing wrong is not a
+    // slow cluster but a hung one: the workers sit at the collective barrier
+    // retrying a connection that will never complete.
+    let master =
+        rendezvous_address(head_node, selected).ok_or_else(|| PlanError::NoUsableLink {
             name: head_node.name.to_string(),
         })?;
 
@@ -233,6 +238,52 @@ pub fn new_epoch() -> String {
     })
 }
 
+/// Choose an address on the head that every worker shares a subnet with.
+///
+/// Preference order is the head's own — best link class first — so among
+/// addresses the workers can all reach, the fastest still wins. Only when no
+/// address is demonstrably shared does this fall back to the head's favourite,
+/// because a worker whose subnets are unknown (paired but never dialled, or
+/// running an older agent that does not report them) would otherwise make the
+/// launch impossible rather than merely uncertain. The workers re-check
+/// reachability at prepare, so a wrong guess is refused rather than hung.
+#[must_use]
+fn rendezvous_address<'a>(
+    head: &'a NodeDescriptor,
+    selected: &[&NodeDescriptor],
+) -> Option<&'a atlasctl_protocol::fleet::NodeAddress> {
+    let workers: Vec<&NodeDescriptor> = selected
+        .iter()
+        .copied()
+        .filter(|n| n.id != head.id)
+        .collect();
+
+    // Same filter and ordering as `preferred_address`, because sharing a
+    // subnet is a tiebreak between *usable* links, not a licence to promote an
+    // unusable one. Without this a docker bridge wins: every machine has one on
+    // the same private range, so it "shares a subnet" with everything, and the
+    // collective would be pointed at a local bridge that reaches no other node.
+    let shared = head
+        .addresses
+        .iter()
+        .filter(|a| a.class.usable_for_cluster() && a.prefix_len > 0)
+        .filter(|candidate| {
+            workers.iter().all(|w| {
+                w.addresses.iter().any(|a| {
+                    a.class.usable_for_cluster()
+                        && crate::rendezvous::shares_network(
+                            &candidate.addr,
+                            candidate.prefix_len,
+                            &a.addr,
+                        )
+                })
+            })
+        })
+        .max_by_key(|a| (a.class.rank(), a.speed_mbps.unwrap_or(0)));
+
+    shared.or_else(|| head.preferred_address())
+}
+
 /// What a worker says when asked to prepare.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
@@ -281,6 +332,15 @@ pub enum RefusalReason {
         /// Which recipe the outstanding reservation is for.
         recipe: String,
     },
+    /// The rendezvous address is on a link this node is not attached to.
+    ///
+    /// Separate from every other refusal because it is the one an operator can
+    /// act on directly, and because without it the failure is not a refusal at
+    /// all -- the rank starts, waits at the collective barrier, and retries
+    /// until somebody reads the logs.
+    #[error("{0}")]
+    RendezvousUnreachable(String),
+
     /// The container runtime is unavailable.
     #[error("the container runtime is not answering on this node")]
     DockerUnavailable,

@@ -35,6 +35,7 @@ fn roce(addr: &str) -> NodeAddress {
         addr: addr.to_owned(),
         class: LinkClass::Roce,
         speed_mbps: Some(200_000),
+        prefix_len: 30,
         rdma: true,
     }
 }

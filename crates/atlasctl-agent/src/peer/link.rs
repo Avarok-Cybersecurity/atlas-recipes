@@ -29,6 +29,19 @@ use std::time::Duration;
 /// How long to wait for a peer to answer before treating it as down.
 pub const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// What a peer said when it introduced itself.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Hello {
+    /// Its display name.
+    pub name: String,
+    /// Whether it can run a model.
+    pub can_launch: bool,
+    /// Its accelerator tag.
+    pub accelerator: String,
+    /// The addresses it is reachable on, with subnets.
+    pub addresses: Vec<atlasctl_protocol::fleet::NodeAddress>,
+}
+
 /// What a peer told us about itself over the authenticated channel.
 ///
 /// Distinct from a beacon: everything here was said by something holding the
@@ -47,6 +60,12 @@ pub struct PeerReport {
     pub vitals: Option<NodeVitals>,
     /// The class of the link we actually reached it over.
     pub link: LinkClass,
+    /// The addresses it says it is reachable on, with their subnets.
+    ///
+    /// Said over the authenticated channel by something holding the pinned
+    /// key, so it can be believed — unlike a beacon, which reports whatever
+    /// address the multicast arrived from and no subnet at all.
+    pub addresses: Vec<atlasctl_protocol::fleet::NodeAddress>,
 }
 
 /// Dial a pinned peer and complete the mutually authenticated handshake.
@@ -101,7 +120,11 @@ pub async fn dial(
 ///
 /// # Errors
 /// If the peer does not introduce itself back, or speaks another version.
-pub async fn exchange_hello<S>(tls: &mut S, addr: SocketAddr) -> Result<(String, bool, String)>
+pub async fn exchange_hello<S>(
+    tls: &mut S,
+    addr: SocketAddr,
+    local: &[atlasctl_protocol::fleet::NodeAddress],
+) -> Result<Hello>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -112,6 +135,7 @@ where
             name: crate::discovery::local_display_name().as_str().to_owned(),
             can_launch: true,
             accelerator: String::new(),
+            addresses: local.to_vec(),
         },
     )
     .await?;
@@ -126,12 +150,18 @@ where
             name,
             can_launch,
             accelerator,
+            addresses,
         } => {
             anyhow::ensure!(
                 version == PEER_PROTOCOL_VERSION,
                 "this node speaks peer protocol {PEER_PROTOCOL_VERSION}, {name} speaks {version}"
             );
-            Ok((name, can_launch, accelerator))
+            Ok(Hello {
+                name,
+                can_launch,
+                accelerator,
+                addresses,
+            })
         }
         other => bail!("expected a hello from {addr}, got {other:?}"),
     }
@@ -156,9 +186,10 @@ pub async fn query(
     addr: SocketAddr,
     expect: NodeId,
     link: LinkClass,
+    local: &[atlasctl_protocol::fleet::NodeAddress],
 ) -> Result<PeerReport> {
     let mut tls = dial(identity, pins, addr, expect).await?;
-    let (name, can_launch, accelerator) = exchange_hello(&mut tls, addr).await?;
+    let hello = exchange_hello(&mut tls, addr, local).await?;
 
     // Vitals are optional: an agent may be up and simply have nothing to say
     // about its hardware, which is not a failure.
@@ -170,11 +201,12 @@ pub async fn query(
 
     Ok(PeerReport {
         node: expect,
-        name,
-        can_launch,
-        accelerator,
+        name: hello.name,
+        can_launch: hello.can_launch,
+        accelerator: hello.accelerator,
         vitals,
         link,
+        addresses: hello.addresses,
     })
 }
 
@@ -192,6 +224,7 @@ pub async fn serve_query<S>(
     can_launch: bool,
     accelerator: &str,
     vitals: Option<NodeVitals>,
+    local: &[atlasctl_protocol::fleet::NodeAddress],
 ) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -209,6 +242,7 @@ where
             name: name.to_owned(),
             can_launch,
             accelerator: accelerator.to_owned(),
+            addresses: local.to_vec(),
         },
     )
     .await?;

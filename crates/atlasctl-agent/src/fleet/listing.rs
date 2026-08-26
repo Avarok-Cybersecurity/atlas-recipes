@@ -57,6 +57,12 @@ impl FleetView for LocalFleet {
                 // machine look unreachable-and-addressless.
                 addresses: report
                     .map(|r| {
+                        // What the peer said about its own links, when it said
+                        // anything: it is the only source that knows subnets,
+                        // and it came over the authenticated channel.
+                        if !r.addresses.is_empty() {
+                            return r.addresses.clone();
+                        }
                         // Reached and authenticated, so the link class is ours
                         // to state rather than a guess.
                         vec![NodeAddress {
@@ -64,6 +70,8 @@ impl FleetView for LocalFleet {
                             addr: pin.last_address.clone().unwrap_or_default(),
                             class: r.link,
                             speed_mbps: None,
+                            // A pin records a host address, never its subnet.
+                            prefix_len: 0,
                             rdma: matches!(
                                 r.link,
                                 atlasctl_protocol::fleet::LinkClass::Roce
@@ -82,6 +90,8 @@ impl FleetView for LocalFleet {
                                             addr: a.clone(),
                                             class: atlasctl_protocol::fleet::LinkClass::Unverified,
                                             speed_mbps: None,
+                                            // Last known host address; no subnet.
+                                            prefix_len: 0,
                                             rdma: false,
                                         }]
                                     })
@@ -189,6 +199,8 @@ fn addresses_of(beacon: &Beacon) -> Vec<NodeAddress> {
             addr: a.to_string(),
             class: atlasctl_protocol::fleet::LinkClass::Unverified,
             speed_mbps: None,
+            // A beacon carries observed host addresses, not interface subnets.
+            prefix_len: 0,
             rdma: false,
         })
         .collect()

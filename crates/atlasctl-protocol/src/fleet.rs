@@ -261,6 +261,20 @@ pub struct NodeAddress {
     pub iface: String,
     /// The address itself.
     pub addr: String,
+    /// Prefix length of the subnet it sits on.
+    ///
+    /// Kept, not discarded. A DGX Spark carries four RoCE ports on separate
+    /// point-to-point /30s, and which of them reaches a given peer is decided
+    /// entirely by this number — a host address alone cannot answer it. The
+    /// first version of this struct dropped the prefix on the grounds that a
+    /// peer address is a host address, and the result was a cluster that chose
+    /// a rendezvous address on a link the worker was not attached to and hung
+    /// at the NCCL barrier until somebody read the logs.
+    ///
+    /// Defaulted for the wire so an older peer that does not send it is
+    /// understood as "unknown subnet" rather than refused.
+    #[serde(default)]
+    pub prefix_len: u8,
     /// What kind of link this is.
     pub class: LinkClass,
     /// Negotiated speed in Mb/s, when the kernel reports one.

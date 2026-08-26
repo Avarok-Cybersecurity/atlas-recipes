@@ -49,28 +49,44 @@ fn read_trimmed(path: &Path) -> Option<String> {
 /// `rocep1s0f0 -> enp1s0f0np0`, which is exactly how a RoCE port is told apart
 /// from an ordinary NIC that happens to be fast.
 fn rdma_backed_interfaces() -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
+    rdma_devices_by_interface().into_keys().collect()
+}
+
+/// Which RDMA device backs each network interface.
+///
+/// The mapping, not just the set. NCCL is told *which* device to use, and on a
+/// machine with four RoCE ports the difference between `rocep1s0f0` and
+/// `rocep1s0f1` is the difference between a collective that runs and one that
+/// times out at `ibv_modify_qp`.
+pub fn rdma_devices_by_interface() -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
     let Ok(devices) = std::fs::read_dir(IB_DIR) else {
         return out;
     };
     for dev in devices.flatten() {
+        let Some(ibdev) = dev.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
         let net = dev.path().join("device").join("net");
         let Ok(entries) = std::fs::read_dir(net) else {
             continue;
         };
         for e in entries.flatten() {
             if let Some(name) = e.file_name().to_str() {
-                out.insert(name.to_owned());
+                out.insert(name.to_owned(), ibdev.clone());
             }
         }
     }
     out
 }
 
-/// IPv4 addresses per interface.
+/// IPv4 addresses per interface, each as `host/prefix`.
 ///
-/// The prefix length is dropped: a peer address is a host address, and keeping
-/// `/30` around would only invite someone to parse it again later.
+/// The prefix is kept. An earlier version dropped it — "a peer address is a
+/// host address" — and that is exactly the information needed to tell which of
+/// four point-to-point RoCE links reaches a given peer. Without it the head
+/// chose a rendezvous address on a link the worker was not attached to, and
+/// the cluster hung at the NCCL barrier.
 fn addresses_by_interface() -> Result<BTreeMap<String, Vec<String>>> {
     let out = Command::new("ip")
         .args(["-o", "-4", "addr", "show"])
@@ -89,10 +105,9 @@ fn addresses_by_interface() -> Result<BTreeMap<String, Vec<String>>> {
         else {
             continue;
         };
-        let host = addr.split('/').next().unwrap_or(addr);
         map.entry(iface.to_owned())
             .or_default()
-            .push(host.to_owned());
+            .push(addr.to_owned());
     }
     Ok(map)
 }

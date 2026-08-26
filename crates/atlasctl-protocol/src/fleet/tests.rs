@@ -100,6 +100,8 @@ fn addr(iface: &str, addr: &str, class: LinkClass, speed: Option<u32>) -> NodeAd
         class,
         speed_mbps: speed,
         rdma: matches!(class, LinkClass::Roce | LinkClass::InfiniBand),
+        // Point-to-point, like the RoCE links on a real Spark.
+        prefix_len: 30,
     }
 }
 

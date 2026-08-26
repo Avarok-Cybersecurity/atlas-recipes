@@ -133,6 +133,7 @@ fn spawn_peer_listener(
                     fleet.can_launch(),
                     "",
                     vitals,
+                    &fleet.local_addresses(),
                 )
                 .await
                 .is_err()
@@ -169,7 +170,16 @@ fn spawn_peer_poll(
                     continue;
                 };
                 let link = fleet.classify_peer_address(&addr);
-                match crate::peer::link::query(&identity, pins.clone(), sock, id, link).await {
+                match crate::peer::link::query(
+                    &identity,
+                    pins.clone(),
+                    sock,
+                    id,
+                    link,
+                    &fleet.local_addresses(),
+                )
+                .await
+                {
                     Ok(report) => {
                         fleet.record_report(report);
                         if let Some(node) = fleet.nodes().into_iter().find(|n| n.id == id) {

@@ -34,6 +34,18 @@ pub enum PeerFrame {
         can_launch: bool,
         /// Coarse accelerator tag.
         accelerator: String,
+        /// The addresses this node can be reached on, with their subnets.
+        ///
+        /// Only a node knows which links it is attached to, and a rendezvous
+        /// address must be one every rank can reach. A beacon cannot supply
+        /// this — it carries whatever address the multicast happened to arrive
+        /// from, with no subnet — so it comes over the authenticated channel
+        /// where it can be believed.
+        ///
+        /// Defaulted so a peer built before this field is understood as
+        /// "did not say" rather than refused.
+        #[serde(default)]
+        addresses: Vec<atlasctl_protocol::fleet::NodeAddress>,
     },
 
     /// Begin a pairing exchange. Carries the initiator's SPAKE2 message.

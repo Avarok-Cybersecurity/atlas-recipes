@@ -32,7 +32,10 @@ mod tests;
 pub struct RawIface {
     /// Interface name.
     pub name: String,
-    /// IPv4 addresses bound to it, without the prefix length.
+    /// IPv4 addresses bound to it, each as `host/prefix`.
+    ///
+    /// The prefix is kept because it is the only thing that says which of four
+    /// point-to-point RoCE links reaches a given peer.
     pub addrs: Vec<String>,
     /// Whether the kernel reports a carrier.
     pub carrier: bool,
@@ -82,6 +85,18 @@ pub fn classify(raw: &RawIface) -> LinkClass {
     LinkClass::Ethernet
 }
 
+/// Split `10.10.10.9/30` into its host and prefix.
+///
+/// A bare address means an unknown subnet, reported as `0` rather than guessed:
+/// claiming `/32` would say "shares a link with nothing", and claiming `/24`
+/// would say the opposite. Both are inventions; zero is the truth.
+fn split_prefix(raw: &str) -> (String, u8) {
+    match raw.split_once('/') {
+        Some((host, len)) => (host.to_owned(), len.parse().unwrap_or(0)),
+        None => (raw.to_owned(), 0),
+    }
+}
+
 /// Turn a raw interface table into the addresses a peer may be reached on.
 ///
 /// Drops anything with no address, no carrier, or a class that cannot carry a
@@ -94,12 +109,16 @@ pub fn usable_addresses(raws: &[RawIface]) -> Vec<NodeAddress> {
         .filter(|r| r.carrier)
         .flat_map(|r| {
             let class = classify(r);
-            r.addrs.iter().map(move |addr| NodeAddress {
-                iface: r.name.clone(),
-                addr: addr.clone(),
-                class,
-                speed_mbps: r.speed_mbps,
-                rdma: r.rdma,
+            r.addrs.iter().map(move |raw| {
+                let (host, prefix) = split_prefix(raw);
+                NodeAddress {
+                    iface: r.name.clone(),
+                    addr: host,
+                    class,
+                    speed_mbps: r.speed_mbps,
+                    rdma: r.rdma,
+                    prefix_len: prefix,
+                }
             })
         })
         .filter(|a| a.class.usable_for_cluster())

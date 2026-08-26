@@ -415,3 +415,45 @@ fn a_cluster_that_failed_to_settle_is_not_recorded_as_running() {
         "nothing is running, so there is nothing to stop"
     );
 }
+
+/// The gap the settle gate cannot close.
+///
+/// A rank that dies four minutes in — during model build — passed the
+/// five-second gate. Its peers then hold their GPUs indefinitely, waiting at a
+/// rendezvous that will never complete, and nothing notices.
+#[test]
+fn a_rank_that_dies_after_commit_tears_the_cluster_down() {
+    let log = new_log();
+    let (d, _) = driver(ready_rank(&log), transport(&log));
+    let (epoch, _, _) = d
+        .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .expect("prepares");
+    d.commit(&epoch).expect("commits");
+
+    // It was whole a moment ago.
+    assert!(d.supervise().is_none(), "a healthy cluster is left alone");
+
+    // Now rank 2 dies.
+    d.kill_for_test(node_id(2));
+    let why = d.supervise().expect("a dead rank must be noticed");
+    assert!(why.contains("spark-2"), "must name what died: {why}");
+
+    let c = calls(&log);
+    assert!(
+        c.contains(&"local.stop(head-container)".to_owned()),
+        "the survivors must be stopped: {c:?}"
+    );
+    assert!(
+        d.stop_cluster().is_err(),
+        "the cluster is gone, so there is nothing left to stop"
+    );
+}
+
+/// Supervising when nothing is running must not reach for the network.
+#[test]
+fn supervising_an_idle_agent_does_nothing() {
+    let log = new_log();
+    let (d, _) = driver(ready_rank(&log), transport(&log));
+    assert!(d.supervise().is_none());
+    assert!(calls(&log).is_empty(), "{:?}", calls(&log));
+}
