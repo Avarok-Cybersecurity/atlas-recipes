@@ -50,7 +50,7 @@ pub struct AgentState {
     ///
     /// `None` on an agent that cannot reach peers, which is answered plainly
     /// rather than by inventing a preview.
-    pub cluster: Option<Box<dyn crate::session::ClusterPreviewer>>,
+    pub cluster: Option<Box<dyn crate::session::ClusterControl>>,
     /// Fleet changes pushed to every authenticated session.
     ///
     /// A broadcast channel rather than a per-session queue: a slow tab must not

@@ -39,6 +39,22 @@ pub struct RankPrepare {
     pub reason: String,
 }
 
+/// One rank that started.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RankStarted {
+    /// Which node.
+    pub node: NodeId,
+    /// Its display name.
+    pub name: DisplayName,
+    /// Rank number.
+    pub rank: u16,
+    /// Container id on that machine.
+    pub container: String,
+    /// Where the API is, for rank 0. Worker ranks serve nothing and carry
+    /// `None` rather than a URL that would not answer.
+    pub endpoint: Option<String>,
+}
+
 /// Something that happened to the fleet.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "change", rename_all = "snake_case")]

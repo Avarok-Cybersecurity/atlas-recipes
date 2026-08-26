@@ -217,6 +217,22 @@ pub fn plan(
     })
 }
 
+/// A fresh epoch, so a prepare from one attempt can never authorize a commit
+/// from another.
+///
+/// Random rather than counted: a counter restarts at zero when the agent does,
+/// and a replayed commit from before the restart would then match a new prepare.
+#[must_use]
+pub fn new_epoch() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).expect("the OS must supply entropy");
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    })
+}
+
 /// What a worker says when asked to prepare.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case")]

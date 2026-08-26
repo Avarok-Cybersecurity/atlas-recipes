@@ -13,7 +13,7 @@
 //! to it.
 
 use crate::id::RecipeId;
-use crate::msg::fleet::{FleetEvent, RankPrepare, RankPreview};
+use crate::msg::fleet::{FleetEvent, RankPrepare, RankPreview, RankStarted};
 use crate::settings::{SettingError, SettingSpec, SettingValue};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -292,6 +292,16 @@ pub enum ServerMsg {
         ranks: Vec<RankPrepare>,
         /// Whether every rank accepted, and a commit may therefore proceed.
         may_commit: bool,
+    },
+
+    /// Every rank of a cluster started.
+    ClusterStarted {
+        /// Correlates the request.
+        id: u32,
+        /// Which prepare this commit consumed.
+        epoch: String,
+        /// Per-rank outcome, rank 0 first.
+        ranks: Vec<RankStarted>,
     },
 
     /// Something failed.

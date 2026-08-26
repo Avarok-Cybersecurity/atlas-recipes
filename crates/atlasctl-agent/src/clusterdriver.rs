@@ -1,0 +1,421 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+//! Driving a cluster launch from the head.
+//!
+//! The head plans — which machines, which ranks, which rendezvous address — and
+//! then asks. It does not render another machine's command, because it does not
+//! know that machine's recipe revision, flag table or hardware. Preview and
+//! execution therefore come from the same code on the same box, which is the
+//! only way a preview can be trusted to be what runs.
+//!
+//! Rank 0 is served locally for exactly the same reason: the head *is* the
+//! machine that would run rank 0. It goes through the identical [`RankService`]
+//! the peers expose, so there is no shorter, less-checked path for the machine
+//! that happens to be holding the plan.
+//!
+//! ## Why two phases
+//!
+//! A single-phase launch has no way to fail cleanly. Start ranks one at a time
+//! and the third machine's refusal leaves two containers running half a
+//! cluster, waiting forever on a rendezvous that will never complete — and the
+//! operator sees a hang, not an error. So every rank validates and reserves
+//! first, and nothing starts until all of them have said yes.
+//!
+//! Both phases roll back. A refusal releases every reservation already taken; a
+//! failed commit stops every rank already started, including rank 0. The
+//! invariant is that a cluster is either whole or absent, never partial.
+
+use anyhow::Result;
+use crate::cluster::{ClusterPlan, PrepareReply, new_epoch, plan};
+use crate::fleet::FleetView;
+use crate::rank::RankService;
+use crate::session::ClusterControl;
+use crate::transport::RankTransport;
+use atlasctl_protocol::RecipeId;
+use atlasctl_protocol::fleet::{DisplayName, NodeDescriptor, NodeId};
+use atlasctl_protocol::msg::fleet::{RankPrepare, RankPreview, RankStarted};
+use atlasctl_protocol::settings::SettingValue;
+use std::collections::BTreeMap;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+
+/// One rank, resolved to somewhere reachable.
+///
+/// Built before any rank is asked anything, so a machine that has left the
+/// fleet or has no usable link fails the whole attempt while it is still free
+/// to fail — rather than half way through, with reservations already held.
+struct Target {
+    assignment: crate::cluster::RankAssignment,
+    /// Where to reach it, or `None` when it is this machine.
+    ///
+    /// Recorded rather than re-derived, so commit dials the address prepare
+    /// used instead of re-resolving and possibly reaching a different machine.
+    addr: Option<SocketAddr>,
+    name: DisplayName,
+}
+
+/// A prepare that has been accepted and is waiting to be committed.
+struct Pending {
+    epoch: String,
+    port: u16,
+    targets: Vec<Target>,
+}
+
+/// Plans a cluster and drives it across the fleet.
+pub struct ClusterDriver {
+    fleet: Arc<dyn FleetView>,
+    /// This machine, when it is one of the ranks.
+    rank: Arc<dyn RankService>,
+    /// Every other machine.
+    transport: Arc<dyn RankTransport>,
+    peer_port: u16,
+    pending: Mutex<Option<Pending>>,
+}
+
+impl std::fmt::Debug for ClusterDriver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClusterDriver").finish_non_exhaustive()
+    }
+}
+
+impl ClusterDriver {
+    /// Build a driver.
+    #[must_use]
+    pub fn new(
+        fleet: Arc<dyn FleetView>,
+        rank: Arc<dyn RankService>,
+        transport: Arc<dyn RankTransport>,
+        peer_port: u16,
+    ) -> Self {
+        Self {
+            fleet,
+            rank,
+            transport,
+            peer_port,
+            pending: Mutex::new(None),
+        }
+    }
+
+    /// Resolve the selection, plan, and pin every rank to a reachable address.
+    ///
+    /// Everything that can fail without side effects fails here: an unknown
+    /// recipe, a machine that left the fleet, a machine with no usable link.
+    /// By the time a rank is asked anything, the only remaining failures are
+    /// that rank's own.
+    fn resolve(
+        &self,
+        recipe: &RecipeId,
+        nodes: &[NodeId],
+        head: NodeId,
+        settings: &BTreeMap<String, SettingValue>,
+        epoch: String,
+    ) -> Result<Pending, String> {
+        let all = self.fleet.nodes();
+        let selected: Vec<NodeDescriptor> = nodes
+            .iter()
+            .filter_map(|id| all.iter().find(|n| n.id == *id).cloned())
+            .collect();
+        if selected.len() != nodes.len() {
+            return Err("one of those machines is not in this fleet".to_owned());
+        }
+
+        // The head states the revision it intends, and every rank compares it
+        // against its own. Sending nothing would make the comparison vacuous,
+        // so an unknown recipe fails here rather than launching unchecked.
+        let hash = self
+            .rank
+            .content_hash(recipe.as_str())
+            .map_err(|e| format!("{e:#}"))?;
+
+        // The recipe's own node count decides how many machines are required;
+        // the page cannot widen it by selecting more.
+        let required = u32::try_from(nodes.len()).unwrap_or(u32::MAX);
+        let refs: Vec<&NodeDescriptor> = selected.iter().collect();
+        let plan: ClusterPlan = plan(
+            recipe.as_str(),
+            &hash,
+            required,
+            &refs,
+            head,
+            settings,
+            epoch.clone(),
+        )
+        .map_err(|e| e.to_string())?;
+
+        let mut targets = Vec::with_capacity(plan.ranks.len());
+        for assignment in plan.ranks {
+            let node = selected
+                .iter()
+                .find(|n| n.id == assignment.node)
+                .ok_or_else(|| "the plan named a machine that left the fleet".to_owned())?;
+            targets.push(Target {
+                addr: self.address_of(node)?,
+                name: node.name.clone(),
+                assignment,
+            });
+        }
+
+        Ok(Pending {
+            port: serve_port(&targets),
+            epoch,
+            targets,
+        })
+    }
+
+    /// The link warning for a selection, computed the same way the plan does.
+    fn link_warning(
+        &self,
+        recipe: &RecipeId,
+        nodes: &[NodeId],
+        head: NodeId,
+        settings: &BTreeMap<String, SettingValue>,
+    ) -> Option<String> {
+        let all = self.fleet.nodes();
+        let selected: Vec<NodeDescriptor> = nodes
+            .iter()
+            .filter_map(|id| all.iter().find(|n| n.id == *id).cloned())
+            .collect();
+        let refs: Vec<&NodeDescriptor> = selected.iter().collect();
+        let hash = self.rank.content_hash(recipe.as_str()).ok()?;
+        plan(
+            recipe.as_str(),
+            &hash,
+            u32::try_from(nodes.len()).unwrap_or(u32::MAX),
+            &refs,
+            head,
+            settings,
+            "preview".to_owned(),
+        )
+        .ok()?
+        .link_warning
+    }
+
+    /// Where to reach a rank, or `None` when it is this machine.
+    fn address_of(&self, node: &NodeDescriptor) -> Result<Option<SocketAddr>, String> {
+        if node.is_local {
+            return Ok(None);
+        }
+        let addr = node
+            .preferred_address()
+            .ok_or_else(|| format!("{} has no usable network link", node.name))?;
+        format!("{}:{}", addr.addr, self.peer_port)
+            .parse()
+            .map(Some)
+            .map_err(|_| format!("{} has an address we cannot dial", node.name))
+    }
+
+    /// Release every reservation held for this attempt, ignoring failures.
+    ///
+    /// Failures are ignored on purpose: this runs when something has already
+    /// gone wrong, and a second failure must not replace the reason the
+    /// operator needs to read. A reservation left behind is released by that
+    /// machine's next prepare regardless.
+    fn roll_back(&self, epoch: &str, targets: &[&Target]) {
+        for t in targets {
+            match t.addr {
+                None => self.rank.abort(epoch),
+                Some(addr) => self.transport.abort(t.assignment.node, addr, epoch),
+            }
+        }
+    }
+}
+
+impl ClusterControl for ClusterDriver {
+    fn preview(
+        &self,
+        recipe: &RecipeId,
+        nodes: &[NodeId],
+        head: NodeId,
+        settings: &BTreeMap<String, SettingValue>,
+    ) -> Result<(Vec<RankPreview>, Option<String>), String> {
+        // A preview reserves nothing, so it needs no epoch of its own.
+        let pending = self.resolve(recipe, nodes, head, settings, "preview".to_owned())?;
+
+        let mut out = Vec::with_capacity(pending.targets.len());
+        for t in &pending.targets {
+            let (command, _unmapped) = match t.addr {
+                None => self
+                    .rank
+                    .render(&t.assignment)
+                    .map_err(|e| format!("{}: {e:#}", t.name))?,
+                Some(addr) => self
+                    .transport
+                    .preview(t.assignment.node, addr, &t.assignment)
+                    .map_err(|e| format!("{}: {e:#}", t.name))?,
+            };
+            out.push(RankPreview {
+                node: t.assignment.node,
+                name: t.name.clone(),
+                rank: t.assignment.rank,
+                master_addr: t.assignment.master_addr.clone(),
+                command,
+            });
+        }
+        Ok((out, self.link_warning(recipe, nodes, head, settings)))
+    }
+
+    fn prepare(
+        &self,
+        recipe: &RecipeId,
+        nodes: &[NodeId],
+        head: NodeId,
+        settings: &BTreeMap<String, SettingValue>,
+    ) -> Result<(String, Vec<RankPrepare>, bool), String> {
+        let epoch = new_epoch();
+        let pending = self.resolve(recipe, nodes, head, settings, epoch.clone())?;
+
+        let mut answers = Vec::with_capacity(pending.targets.len());
+        let mut accepted: Vec<&Target> = Vec::new();
+        for t in &pending.targets {
+            let reply = match t.addr {
+                None => self.rank.prepare(&epoch, &t.assignment),
+                Some(addr) => {
+                    self.transport
+                        .prepare(t.assignment.node, addr, &epoch, &t.assignment)
+                }
+            };
+
+            let prepared = matches!(reply, PrepareReply::Prepared);
+            if prepared {
+                accepted.push(t);
+            }
+            answers.push(RankPrepare {
+                node: t.assignment.node,
+                name: t.name.clone(),
+                rank: t.assignment.rank,
+                prepared,
+                reason: match reply {
+                    PrepareReply::Prepared => String::new(),
+                    PrepareReply::Refused { reason } => reason,
+                },
+            });
+        }
+
+        let may_commit = answers.iter().all(|r| r.prepared);
+        if may_commit {
+            *self.pending.lock().expect("pending lock poisoned") = Some(pending);
+        } else {
+            // Nothing has started, but reservations are held. Release them now
+            // rather than leaving those machines unable to launch until each is
+            // prepared again.
+            self.roll_back(&epoch, &accepted);
+        }
+        Ok((epoch, answers, may_commit))
+    }
+
+    fn commit(&self, epoch: &str) -> Result<Vec<RankStarted>, String> {
+        // Taken, not borrowed: a commit consumes its prepare, so a replayed
+        // commit starts nothing a second time.
+        let pending = {
+            let mut slot = self.pending.lock().expect("pending lock poisoned");
+            match slot.as_ref() {
+                Some(p) if p.epoch == epoch => slot.take().expect("just matched"),
+                Some(p) => {
+                    return Err(format!(
+                        "this agent is holding a prepare for {}, not {epoch}",
+                        p.epoch
+                    ));
+                }
+                None => return Err(format!("no prepare is outstanding for {epoch}")),
+            }
+        };
+
+        let mut started = Vec::with_capacity(pending.targets.len());
+        for (i, t) in pending.targets.iter().enumerate() {
+            let result = match t.addr {
+                None => self.rank.commit(epoch).map_err(|e| format!("{e:#}")),
+                Some(addr) => self
+                    .transport
+                    .commit(t.assignment.node, addr, epoch)
+                    .map_err(|e| format!("{e:#}")),
+            };
+
+            match result {
+                Ok(container) => started.push(RankStarted {
+                    node: t.assignment.node,
+                    name: t.name.clone(),
+                    rank: t.assignment.rank,
+                    container,
+                    // Only rank 0 serves the API. A worker's URL would not
+                    // answer, and offering one would cost the operator time.
+                    endpoint: (t.assignment.rank == 0).then(|| {
+                        format!("http://{}:{}", t.assignment.master_addr, pending.port)
+                    }),
+                }),
+                Err(reason) => {
+                    // A half-started cluster waits forever on a rendezvous that
+                    // will never complete, and the operator sees a hang rather
+                    // than an error. Stop what started and release what did
+                    // not, then say which machine refused and why.
+                    let done: Vec<&Target> = pending.targets[..i].iter().collect();
+                    self.stop_started(&started, &done);
+                    let rest: Vec<&Target> = pending.targets[i..].iter().collect();
+                    self.roll_back(epoch, &rest);
+                    return Err(format!("{} could not start: {reason}", t.name));
+                }
+            }
+        }
+        Ok(started)
+    }
+
+    fn abort(&self, epoch: &str) {
+        let taken = {
+            let mut slot = self.pending.lock().expect("pending lock poisoned");
+            match slot.as_ref() {
+                // Only the named prepare: an abort for a stale epoch arriving
+                // late must not release a prepare made since.
+                Some(p) if p.epoch == epoch => slot.take(),
+                _ => None,
+            }
+        };
+        if let Some(p) = taken {
+            let all: Vec<&Target> = p.targets.iter().collect();
+            self.roll_back(epoch, &all);
+        }
+    }
+}
+
+impl ClusterDriver {
+    /// Stop the ranks that already started, so a failed commit leaves nothing
+    /// running. Failures are ignored for the same reason rollback ignores them:
+    /// the operator needs the original error, not this one.
+    fn stop_started(&self, started: &[RankStarted], targets: &[&Target]) {
+        for r in started {
+            let Some(t) = targets.iter().find(|t| t.assignment.node == r.node) else {
+                continue;
+            };
+            match t.addr {
+                None => {
+                    let _ = self.rank.stop(&r.container);
+                }
+                Some(addr) => self.transport.stop(t.assignment.node, addr, &r.container),
+            }
+        }
+    }
+}
+
+/// The port rank 0 will serve on, for the endpoint shown to the operator.
+///
+/// Read from rank 0's own settings, so it reflects what was actually planned
+/// rather than a guess made at display time.
+fn serve_port(targets: &[Target]) -> u16 {
+    targets
+        .iter()
+        .find(|t| t.assignment.rank == 0)
+        .and_then(|t| match t.assignment.settings.get("port") {
+            Some(SettingValue::Int(p)) => u16::try_from(*p).ok(),
+            _ => None,
+        })
+        .unwrap_or(DEFAULT_SERVE_PORT)
+}
+
+/// The port a recipe serves on when it does not say otherwise.
+///
+/// Not a silent fallback: it mirrors the recipe schema's own default, and it
+/// only ever decorates a URL shown to a human — nothing is launched from it.
+const DEFAULT_SERVE_PORT: u16 = 8000;
+
+#[cfg(test)]
+mod cases;
+#[cfg(test)]
+mod tests;

@@ -6,6 +6,7 @@
 
 pub mod cluster;
 pub mod daemon;
+pub mod clusterdriver;
 pub mod discovery;
 pub mod fabric;
 pub mod fleet;
@@ -13,11 +14,13 @@ pub mod guard;
 pub mod identity;
 pub mod launcher;
 pub mod pairing;
+pub mod rank;
 pub mod peer;
 pub mod server;
 pub mod session;
 pub mod telemetry;
 pub mod token;
+pub mod transport;
 
 /// Port the browser control channel listens on.
 pub const DEFAULT_PORT: u16 = 34333;

@@ -111,4 +111,68 @@ impl Session<'_> {
             )],
         }
     }
+
+    /// Ask every selected node to validate and reserve. Nothing starts.
+    pub(super) fn prepare_cluster(
+        &self,
+        id: u32,
+        recipe: &RecipeId,
+        nodes: &[NodeId],
+        head: NodeId,
+        settings: &BTreeMap<String, SettingValue>,
+    ) -> Vec<ServerMsg> {
+        let Some(cluster) = self.deps.cluster else {
+            return vec![err(Some(id), AgentError::NotReady)];
+        };
+        match cluster.prepare(recipe, nodes, head, settings) {
+            Ok((epoch, ranks, may_commit)) => vec![ServerMsg::ClusterPrepared {
+                id,
+                epoch,
+                ranks,
+                may_commit,
+            }],
+            Err(reason) => vec![err(
+                Some(id),
+                AgentError::NotLaunchable {
+                    recipe: recipe.clone(),
+                    reason,
+                },
+            )],
+        }
+    }
+
+    /// Start what every rank prepared under this epoch.
+    pub(super) fn commit_cluster(&self, id: u32, epoch: &str) -> Vec<ServerMsg> {
+        let Some(cluster) = self.deps.cluster else {
+            return vec![err(Some(id), AgentError::NotReady)];
+        };
+        match cluster.commit(epoch) {
+            Ok(ranks) => vec![ServerMsg::ClusterStarted {
+                id,
+                epoch: epoch.to_owned(),
+                ranks,
+            }],
+            // LaunchFailed rather than NotLaunchable: the plan was accepted by
+            // every rank, so this is an execution failure, and by the time it
+            // is reported every rank that started has been stopped again.
+            Err(detail) => vec![err(Some(id), AgentError::LaunchFailed { detail })],
+        }
+    }
+
+    /// Abandon a prepare, releasing every reservation.
+    ///
+    /// Answered with the same shape as a prepare that nobody accepted, so the
+    /// page has one code path for "this launch is not going to happen".
+    pub(super) fn abort_cluster(&self, id: u32, epoch: &str) -> Vec<ServerMsg> {
+        let Some(cluster) = self.deps.cluster else {
+            return vec![err(Some(id), AgentError::NotReady)];
+        };
+        cluster.abort(epoch);
+        vec![ServerMsg::ClusterPrepared {
+            id,
+            epoch: epoch.to_owned(),
+            ranks: Vec::new(),
+            may_commit: false,
+        }]
+    }
 }

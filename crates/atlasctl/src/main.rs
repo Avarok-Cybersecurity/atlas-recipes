@@ -5,10 +5,10 @@
 //! `atlasctl` — launch Atlas inference recipes.
 
 mod cli;
-mod clusterpreview;
+mod peertransport;
 mod commands;
 mod hostinfo;
-mod rankrender;
+mod rankservice;
 mod validate;
 
 use anyhow::Result;

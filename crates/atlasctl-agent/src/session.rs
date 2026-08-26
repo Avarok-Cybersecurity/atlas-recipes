@@ -48,7 +48,7 @@ pub struct SessionDeps<'a> {
     ///
     /// `None` means cluster launches are unavailable on this agent, which is
     /// answered plainly rather than by pretending.
-    pub cluster: Option<&'a dyn ClusterPreviewer>,
+    pub cluster: Option<&'a dyn ClusterControl>,
 }
 
 /// Asks every rank of a planned cluster what it would run.
@@ -56,8 +56,8 @@ pub struct SessionDeps<'a> {
 /// A trait so the session stays transport-free: the preview needs to reach
 /// other machines, and a session that opened sockets itself could not be tested
 /// without them.
-pub trait ClusterPreviewer: Send + Sync {
-    /// Plan the launch and collect each rank's own rendering.
+pub trait ClusterControl: Send + Sync {
+    /// Plan the launch and collect each rank's own rendering. Reserves nothing.
     ///
     /// # Errors
     /// If the plan is impossible, or a rank refuses or cannot be reached.
@@ -67,13 +67,36 @@ pub trait ClusterPreviewer: Send + Sync {
         nodes: &[atlasctl_protocol::fleet::NodeId],
         head: atlasctl_protocol::fleet::NodeId,
         settings: &BTreeMap<String, SettingValue>,
-    ) -> Result<
-        (
-            Vec<atlasctl_protocol::msg::fleet::RankPreview>,
-            Option<String>,
-        ),
-        String,
-    >;
+    ) -> Result<(Vec<atlasctl_protocol::msg::fleet::RankPreview>, Option<String>), String>;
+
+    /// Ask every rank to validate and reserve. Nothing starts.
+    ///
+    /// Returns the epoch a later commit must quote, each rank's answer, and
+    /// whether a commit may proceed. A rank refusing is a normal outcome
+    /// reported in the answers, not an error.
+    ///
+    /// # Errors
+    /// If the plan itself is impossible, which is before any rank was asked.
+    fn prepare(
+        &self,
+        recipe: &RecipeId,
+        nodes: &[atlasctl_protocol::fleet::NodeId],
+        head: atlasctl_protocol::fleet::NodeId,
+        settings: &BTreeMap<String, SettingValue>,
+    ) -> Result<(String, Vec<atlasctl_protocol::msg::fleet::RankPrepare>, bool), String>;
+
+    /// Start what every rank prepared under this epoch.
+    ///
+    /// # Errors
+    /// If no such prepare is outstanding, or a rank fails to start — in which
+    /// case every rank that did start has already been stopped.
+    fn commit(
+        &self,
+        epoch: &str,
+    ) -> Result<Vec<atlasctl_protocol::msg::fleet::RankStarted>, String>;
+
+    /// Abandon a prepare, releasing every reservation.
+    fn abort(&self, epoch: &str);
 }
 
 /// A single client connection.
@@ -207,15 +230,27 @@ impl<'a> Session<'a> {
                 },
             ) => self.preview_cluster(id, &recipe, &nodes, head, &settings),
 
-            // Prepare and commit are not served yet. Refusing plainly is the
-            // honest answer: a prepare that pretended to reserve would leave an
-            // operator believing a cluster was ready to start.
+            // Two phases, because a single-phase launch cannot fail cleanly:
+            // the third machine's refusal would leave two containers waiting
+            // forever on a rendezvous that will never complete.
             (
                 Phase::Ready,
-                ClientMsg::PrepareCluster { id, .. }
-                | ClientMsg::CommitCluster { id, .. }
-                | ClientMsg::AbortCluster { id, .. },
-            ) => vec![err(Some(id), AgentError::NotReady)],
+                ClientMsg::PrepareCluster {
+                    id,
+                    recipe,
+                    nodes,
+                    head,
+                    settings,
+                },
+            ) => self.prepare_cluster(id, &recipe, &nodes, head, &settings),
+
+            (Phase::Ready, ClientMsg::CommitCluster { id, epoch }) => {
+                self.commit_cluster(id, &epoch)
+            }
+
+            (Phase::Ready, ClientMsg::AbortCluster { id, epoch }) => {
+                self.abort_cluster(id, &epoch)
+            }
 
             (Phase::Closed, _) => Vec::new(),
         }

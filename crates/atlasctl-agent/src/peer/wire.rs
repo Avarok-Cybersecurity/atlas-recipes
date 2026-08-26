@@ -115,10 +115,41 @@ pub enum PeerFrame {
         epoch: String,
     },
 
+    /// The rank started, and this is its container.
+    Committed {
+        /// Which prepare.
+        epoch: String,
+        /// Container id on that machine.
+        container: String,
+    },
+
+    /// A reservation was released. Acknowledged rather than answered with a
+    /// result, so a failure to release cannot mask whatever caused the
+    /// rollback that asked for it.
+    Aborted {
+        /// Which prepare.
+        epoch: String,
+    },
+
     /// Release a reservation without starting anything.
     Abort {
         /// Which prepare.
         epoch: String,
+    },
+
+    /// Stop a container this peer started as a rank.
+    ///
+    /// Names a container rather than a recipe, so a head can only stop what it
+    /// was told about — not an unrelated workload the operator is running.
+    StopRank {
+        /// Container id, as returned by the commit that started it.
+        container: String,
+    },
+
+    /// The rank was stopped, or was already not running.
+    RankStopped {
+        /// Which container.
+        container: String,
     },
 
     /// Periodic vitals, once paired.

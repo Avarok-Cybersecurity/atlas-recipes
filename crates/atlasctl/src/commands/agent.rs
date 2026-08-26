@@ -139,13 +139,15 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         .enable_all()
         .build()
         .context("starting the async runtime")?;
-    let renderer: Arc<dyn atlasctl_agent::daemon::RankRenderer> =
-        Arc::new(crate::rankrender::LocalRankRenderer::new(
+    let renderer: Arc<dyn atlasctl_agent::rank::RankService> =
+        Arc::new(crate::rankservice::LocalRankService::new(
             crate::commands::registry_set()?,
             hostinfo::snapshot()?,
             &ROOTLESS_V1,
             Box::new(NvidiaDevices),
             Box::new(atlasctl_core::docker::collective::NcclRoce),
+            Arc::clone(&runner),
+            can_launch.clone(),
         ));
 
     let state = Arc::new(AgentState {
@@ -161,13 +163,15 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         port: args.port,
         allow_dev_origins: args.dev_origins,
         fleet: Some(Box::new(FleetHandle(Arc::clone(&fleet)))),
-        cluster: Some(Box::new(crate::clusterpreview::PeerClusterPreviewer::new(
-            Arc::clone(&fleet),
-            Arc::clone(&identity),
-            pins.clone(),
+        cluster: Some(Box::new(atlasctl_agent::clusterdriver::ClusterDriver::new(
+            Arc::clone(&fleet) as Arc<dyn atlasctl_agent::fleet::FleetView>,
             Arc::clone(&renderer),
+            Arc::new(crate::peertransport::PeerTransport::new(
+                Arc::clone(&identity),
+                pins.clone(),
+                rt.handle().clone(),
+            )),
             atlasctl_agent::peer::DEFAULT_PEER_PORT,
-            rt.handle().clone(),
         ))),
         events: events.clone(),
     });
