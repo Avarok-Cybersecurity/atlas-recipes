@@ -209,6 +209,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         )),
         token: tok.clone().unwrap_or_default(),
         can_launch: can_launch.clone(),
+        joining: Some(Arc::clone(&joining)),
         port: args.port,
         allow_dev_origins: args.dev_origins,
         fleet: Some(Box::new(FleetHandle(Arc::clone(&fleet)))),

@@ -51,6 +51,11 @@ pub struct SessionDeps<'a> {
     pub cluster: Option<&'a dyn ClusterControl>,
     /// Sampling a running launch, when this agent can.
     pub telemetry: Option<&'a dyn LaunchTelemetry>,
+    /// The window in which one new machine may join.
+    ///
+    /// `None` on an agent that cannot take members — there is nothing to open,
+    /// and saying so is better than minting a code nothing will honour.
+    pub joining: Option<&'a crate::joining::JoinWindow>,
 }
 
 /// Asks every rank of a planned cluster what it would run.
@@ -250,6 +255,8 @@ impl<'a> Session<'a> {
             (Phase::Ready, ClientMsg::WatchFleet { id, vitals: _ }) => self.nodes(id),
             (Phase::Ready, ClientMsg::PairPeer { id, node, code }) => self.pair(id, node, &code),
             (Phase::Ready, ClientMsg::UnpairPeer { id, node }) => self.unpair(id, node),
+            (Phase::Ready, ClientMsg::MintJoinCode { id }) => self.mint_join(id),
+            (Phase::Ready, ClientMsg::RevokeJoinCode { id }) => self.revoke_join(id),
 
             // A preview is rendered by each rank in turn, on the machine that
             // would run it — never invented here. The head does not know what
