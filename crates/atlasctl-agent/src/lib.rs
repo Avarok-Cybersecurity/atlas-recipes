@@ -7,6 +7,7 @@
 pub mod cluster;
 pub mod discovery;
 pub mod fabric;
+pub mod fleet;
 pub mod guard;
 pub mod identity;
 pub mod launcher;

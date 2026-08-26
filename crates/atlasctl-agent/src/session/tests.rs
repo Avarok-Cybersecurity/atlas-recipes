@@ -47,6 +47,7 @@ impl Fixture {
             launcher: &self.launcher,
             token: TOKEN,
             can_launch: self.can_launch.clone(),
+            fleet: None,
         });
         s
     }
@@ -74,6 +75,7 @@ fn the_agent_speaks_first_with_a_version_range() {
         launcher: &f.launcher,
         token: TOKEN,
         can_launch: Ok(()),
+        fleet: None,
     });
     assert!(matches!(welcome, ServerMsg::Welcome { .. }));
 }

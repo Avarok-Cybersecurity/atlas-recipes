@@ -41,6 +41,11 @@ pub struct AgentState {
     pub port: u16,
     /// Whether development origins are accepted.
     pub allow_dev_origins: bool,
+    /// What this agent knows about other machines.
+    ///
+    /// `None` for a single-node agent, which is a normal configuration rather
+    /// than a degraded one.
+    pub fleet: Option<Box<dyn crate::fleet::FleetView>>,
 }
 
 /// Build the router.
@@ -114,6 +119,7 @@ async fn run_session(mut socket: ws::WebSocket, state: Arc<AgentState>) {
         launcher: state.launcher.as_ref(),
         token: &state.token,
         can_launch: state.can_launch.clone(),
+        fleet: state.fleet.as_deref(),
     });
 
     if send(&mut socket, &welcome).await.is_err() {
