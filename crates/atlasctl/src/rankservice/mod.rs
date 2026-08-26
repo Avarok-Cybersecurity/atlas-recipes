@@ -224,11 +224,13 @@ impl LocalRankService {
         else {
             return Vec::new();
         };
-        let mut out = vec![("NCCL_SOCKET_IFNAME".to_owned(), iface.clone())];
-        if let Some(dev) = self.rdma_devices.get(&iface) {
-            out.push(("NCCL_IB_HCA".to_owned(), dev.clone()));
-        }
-        out
+        // Which variables carry this is the collective backend's business.
+        // Naming them here would put a vendor's vocabulary in a module that is
+        // supposed to have none, which is how the abstraction erodes.
+        self.collective
+            .bind_interface(&iface, self.rdma_devices.get(&iface).map(String::as_str))
+            .into_iter()
+            .collect()
     }
 
     /// Whether this machine can reach the rendezvous address.

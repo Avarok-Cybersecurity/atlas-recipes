@@ -19,6 +19,19 @@ pub trait CollectiveEnv: Send + Sync {
     /// Solo launches never call this: a single rank has nobody to rendezvous
     /// with, and injecting fabric tuning would be noise at best.
     fn cluster_env(&self) -> BTreeMap<String, String>;
+
+    /// Pin the collective to one link, named the way this backend names it.
+    ///
+    /// The caller supplies an interface and, when there is one, the RDMA device
+    /// behind it — both read from the system, neither guessed. Which variables
+    /// carry that is the backend's business: only it knows whether the answer
+    /// is `NCCL_*`, `RCCL_*`, `GLOO_*` or nothing at all, and putting those
+    /// names in the caller is how a vendor-neutral module stops being one.
+    ///
+    /// Empty when the link cannot be identified — a routed rendezvous has no
+    /// single local interface, and naming one would be the guess this exists
+    /// to avoid.
+    fn bind_interface(&self, iface: &str, rdma_device: Option<&str>) -> BTreeMap<String, String>;
 }
 
 /// NCCL over RoCEv2, tuned for GB10-class nodes.
@@ -32,9 +45,28 @@ pub trait CollectiveEnv: Send + Sync {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NcclRoce;
 
+impl NcclRoce {
+    /// Interface selector.
+    const SOCKET_IFNAME: &'static str = "NCCL_SOCKET_IFNAME";
+    /// RDMA device selector.
+    const IB_HCA: &'static str = "NCCL_IB_HCA";
+}
+
 impl CollectiveEnv for NcclRoce {
     fn name(&self) -> &'static str {
         "nccl-roce"
+    }
+
+    fn bind_interface(&self, iface: &str, rdma_device: Option<&str>) -> BTreeMap<String, String> {
+        if iface.is_empty() {
+            return BTreeMap::new();
+        }
+        let mut out = BTreeMap::new();
+        out.insert(Self::SOCKET_IFNAME.to_owned(), iface.to_owned());
+        if let Some(dev) = rdma_device {
+            out.insert(Self::IB_HCA.to_owned(), dev.to_owned());
+        }
+        out
     }
 
     fn cluster_env(&self) -> BTreeMap<String, String> {
@@ -74,6 +106,10 @@ pub struct NoCollectiveEnv;
 impl CollectiveEnv for NoCollectiveEnv {
     fn name(&self) -> &'static str {
         "none"
+    }
+
+    fn bind_interface(&self, _: &str, _: Option<&str>) -> BTreeMap<String, String> {
+        BTreeMap::new()
     }
 
     fn cluster_env(&self) -> BTreeMap<String, String> {
