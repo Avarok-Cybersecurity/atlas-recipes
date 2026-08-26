@@ -49,6 +49,8 @@ pub struct SessionDeps<'a> {
     /// `None` means cluster launches are unavailable on this agent, which is
     /// answered plainly rather than by pretending.
     pub cluster: Option<&'a dyn ClusterControl>,
+    /// Sampling a running launch, when this agent can.
+    pub telemetry: Option<&'a dyn LaunchTelemetry>,
 }
 
 /// Asks every rank of a planned cluster what it would run.
@@ -272,6 +274,8 @@ impl<'a> Session<'a> {
 
             (Phase::Ready, ClientMsg::StopCluster { id }) => self.stop_cluster(id),
 
+            (Phase::Ready, ClientMsg::LaunchStats { id, recipe }) => self.launch_stats(id, &recipe),
+
             (Phase::Closed, _) => Vec::new(),
         }
     }
@@ -466,6 +470,8 @@ fn err(id: Option<u32>, error: AgentError) -> ServerMsg {
 }
 
 mod fleet;
+pub mod telemetry;
+pub use telemetry::LaunchTelemetry;
 
 #[cfg(test)]
 mod tests;

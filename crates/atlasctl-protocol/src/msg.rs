@@ -165,6 +165,18 @@ pub enum ClientMsg {
         id: u32,
     },
 
+    /// Ask how a running launch is doing.
+    ///
+    /// Polled rather than streamed. A sample is a difference between two
+    /// scrapes, so the page asking sets the window it gets — and a page that
+    /// stops asking costs the agent nothing, which a stream would not.
+    LaunchStats {
+        /// Correlates the reply.
+        id: u32,
+        /// Which launch.
+        recipe: RecipeId,
+    },
+
     /// Ask what is running.
     Status {
         /// Correlates the reply.
@@ -323,6 +335,18 @@ pub enum ServerMsg {
         ranks: Vec<RankStarted>,
     },
 
+    /// How a running launch is doing.
+    Stats {
+        /// Correlates the request.
+        id: u32,
+        /// Which launch.
+        recipe: RecipeId,
+        /// The reading. Every field is optional: absent means the engine does
+        /// not report it, or that there is not yet a second sample to
+        /// difference against — never zero.
+        stats: crate::msg::LaunchReading,
+    },
+
     /// Something failed.
     Error {
         /// Correlation id, when the failure answers a request.
@@ -347,6 +371,34 @@ pub struct RecipeInfo {
     pub reason: Option<String>,
     /// Settings the recipe sets, as launch defaults.
     pub defaults: BTreeMap<String, SettingValue>,
+}
+
+/// One reading of a running launch.
+///
+/// Every field optional, and absent is never zero: a dashboard that renders
+/// 0 tok/s for "not measured yet" teaches an operator to distrust it, and the
+/// one time throughput really is zero they will not believe the number.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LaunchReading {
+    /// Requests served since the engine started.
+    pub requests_total: Option<f64>,
+    /// Requests in flight.
+    pub requests_active: Option<f64>,
+    /// Generated tokens per second over the sampling window.
+    pub decode_tokens_per_s: Option<f64>,
+    /// Prompt tokens per second over the sampling window.
+    pub prompt_tokens_per_s: Option<f64>,
+    /// Median time to first token, seconds.
+    pub ttft_p50_s: Option<f64>,
+    /// 90th percentile time to first token, seconds.
+    pub ttft_p90_s: Option<f64>,
+    /// Share of drafted tokens accepted, 0..1.
+    pub accept_rate: Option<f64>,
+    /// Share of prefix-cache lookups that hit, 0..1.
+    pub prefix_hit_rate: Option<f64>,
+    /// Seconds the rates cover, so the page can say how fresh they are rather
+    /// than implying they are instantaneous.
+    pub window_s: Option<f64>,
 }
 
 /// A launch currently running.

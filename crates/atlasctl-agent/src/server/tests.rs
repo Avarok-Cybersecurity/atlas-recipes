@@ -16,6 +16,7 @@ fn state(port: u16) -> Arc<AgentState> {
         can_launch: Ok(()),
         fleet: None,
         cluster: None,
+        telemetry: None,
         events: tokio::sync::broadcast::channel(8).0,
         port,
         allow_dev_origins: false,

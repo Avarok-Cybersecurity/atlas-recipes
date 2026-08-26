@@ -49,6 +49,7 @@ impl Fixture {
             can_launch: self.can_launch.clone(),
             fleet: None,
             cluster: None,
+            telemetry: None,
         });
         s
     }
@@ -78,6 +79,7 @@ fn the_agent_speaks_first_with_a_version_range() {
         can_launch: Ok(()),
         fleet: None,
         cluster: None,
+        telemetry: None,
     });
     assert!(matches!(welcome, ServerMsg::Welcome { .. }));
 }

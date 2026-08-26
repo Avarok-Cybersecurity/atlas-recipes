@@ -13,6 +13,7 @@ pub mod fleet;
 pub mod guard;
 pub mod identity;
 pub mod launcher;
+pub mod launchstats;
 pub mod pairing;
 pub mod peer;
 pub mod rank;

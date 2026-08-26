@@ -153,7 +153,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     let state = Arc::new(AgentState {
         registry: crate::commands::registry_set()?,
         launcher: Box::new(DockerLauncher::new(
-            runner,
+            Arc::clone(&runner),
             hostinfo::snapshot()?,
             &ROOTLESS_V1,
             Box::new(NvidiaDevices),
@@ -163,6 +163,12 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         port: args.port,
         allow_dev_origins: args.dev_origins,
         fleet: Some(Box::new(FleetHandle(Arc::clone(&fleet)))),
+        telemetry: Some(Box::new(crate::launchtelemetry::LocalLaunchTelemetry::new(
+            Arc::clone(&runner),
+            atlasctl_agent::launchstats::LaunchSampler::new(Box::new(
+                crate::httpscrape::HttpScraper,
+            )),
+        ))),
         cluster: Some(Box::new(atlasctl_agent::clusterdriver::ClusterDriver::new(
             Arc::clone(&fleet) as Arc<dyn atlasctl_agent::fleet::FleetView>,
             Arc::clone(&renderer),
