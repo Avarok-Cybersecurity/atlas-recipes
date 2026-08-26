@@ -42,6 +42,19 @@ pub trait RankService: Send + Sync {
     /// If this machine does not have the recipe.
     fn content_hash(&self, recipe: &str) -> Result<String>;
 
+    /// The port this recipe serves on here, before any operator override.
+    ///
+    /// `None` when the recipe does not pin one, which is not an error — it
+    /// means the serving runtime's own default applies, and this agent does
+    /// not know that number.
+    ///
+    /// Asked of the machine rather than assumed, for the same reason the
+    /// content hash is: the answer lives in that machine's copy of the recipe.
+    ///
+    /// # Errors
+    /// If this machine does not have the recipe.
+    fn recipe_port(&self, recipe: &str) -> Result<Option<u16>>;
+
     /// Validate and reserve, starting nothing.
     ///
     /// A refusal here is the normal way a cluster launch fails, and the reason

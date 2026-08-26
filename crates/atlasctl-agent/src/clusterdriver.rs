@@ -462,6 +462,8 @@ impl ClusterDriver {
 #[cfg(test)]
 mod cases;
 #[cfg(test)]
+mod teardown;
+#[cfg(test)]
 mod tests;
 
 mod plan;
