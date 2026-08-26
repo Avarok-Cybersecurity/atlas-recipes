@@ -18,6 +18,15 @@ pub trait LaunchTelemetry: Send + Sync {
     /// If the model is not answering — the ordinary state of one still loading
     /// its weights, which the page shows as "loading" rather than as a fault.
     fn sample(&self, recipe: &RecipeId) -> Result<atlasctl_protocol::msg::LaunchReading, String>;
+
+    /// The tail of a launch's log.
+    ///
+    /// Read for diagnosis only: every number this project shows comes from the
+    /// engine's `/metrics`, and nothing is parsed out of log text.
+    ///
+    /// # Errors
+    /// If there is no container for that recipe.
+    fn logs(&self, recipe: &RecipeId, lines: u32) -> Result<crate::logs::LogTail, String>;
 }
 
 impl Session<'_> {
@@ -35,6 +44,29 @@ impl Session<'_> {
             // NotLaunchable rather than LaunchFailed: a model that has not
             // finished loading is not answering yet, and calling that a launch
             // failure would send an operator looking for a crash.
+            Err(reason) => vec![err(
+                Some(id),
+                AgentError::NotLaunchable {
+                    recipe: recipe_id.clone(),
+                    reason,
+                },
+            )],
+        }
+    }
+
+    /// The tail of a launch's log.
+    pub(super) fn launch_logs(&self, id: u32, recipe_id: &RecipeId, lines: u32) -> Vec<ServerMsg> {
+        let Some(telemetry) = self.deps.telemetry else {
+            return vec![err(Some(id), AgentError::NotReady)];
+        };
+        match telemetry.logs(recipe_id, crate::logs::clamp_lines(lines)) {
+            Ok(tail) => vec![ServerMsg::Logs {
+                id,
+                recipe: recipe_id.clone(),
+                container: tail.container,
+                lines: tail.lines,
+                running: tail.running,
+            }],
             Err(reason) => vec![err(
                 Some(id),
                 AgentError::NotLaunchable {

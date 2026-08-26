@@ -276,6 +276,10 @@ impl<'a> Session<'a> {
 
             (Phase::Ready, ClientMsg::LaunchStats { id, recipe }) => self.launch_stats(id, &recipe),
 
+            (Phase::Ready, ClientMsg::LaunchLogs { id, recipe, lines }) => {
+                self.launch_logs(id, &recipe, lines)
+            }
+
             (Phase::Closed, _) => Vec::new(),
         }
     }

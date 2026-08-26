@@ -10,6 +10,7 @@
 //! be wrong.
 
 use atlasctl_agent::launchstats::LaunchSampler;
+use atlasctl_agent::logs::{LogTail, sanitize};
 use atlasctl_agent::session::LaunchTelemetry;
 use atlasctl_core::docker::translate::LABEL_RECIPE;
 use atlasctl_core::io::ProcessRunner;
@@ -47,25 +48,40 @@ impl LocalLaunchTelemetry {
         }
     }
 
-    /// The port a running launch is actually serving on.
-    fn port_of(&self, recipe: &str) -> Result<u16, String> {
-        let out = self
-            .runner
-            .run(&[
-                "docker".into(),
-                "ps".into(),
-                "--filter".into(),
-                format!("label={LABEL_RECIPE}={recipe}"),
-                "--format".into(),
-                "{{.Names}}".into(),
-            ])
-            .map_err(|e| format!("{e:#}"))?;
-        let name = out
+    /// The container for a recipe, running or not.
+    ///
+    /// `-a`, deliberately: a launch that died is exactly the one whose log an
+    /// operator wants, and listing only running containers would answer "no
+    /// such launch" at the moment the question matters most.
+    fn container_of(&self, recipe: &str, include_stopped: bool) -> Result<(String, bool), String> {
+        let mut argv = vec!["docker".to_owned(), "ps".to_owned()];
+        if include_stopped {
+            argv.push("-a".to_owned());
+        }
+        argv.extend([
+            "--filter".to_owned(),
+            format!("label={LABEL_RECIPE}={recipe}"),
+            "--format".to_owned(),
+            "{{.Names}}\t{{.State}}".to_owned(),
+        ]);
+        let out = self.runner.run(&argv).map_err(|e| format!("{e:#}"))?;
+        let line = out
             .stdout
             .lines()
             .map(str::trim)
             .find(|l| !l.is_empty())
-            .ok_or_else(|| format!("{recipe} is not running on this machine"))?;
+            .ok_or_else(|| format!("{recipe} has not been launched on this machine"))?;
+        let (name, state) = line.split_once('\t').unwrap_or((line, ""));
+        Ok((name.to_owned(), state == "running"))
+    }
+
+    /// The port a running launch is actually serving on.
+    fn port_of(&self, recipe: &str) -> Result<u16, String> {
+        let (name, running) = self.container_of(recipe, false)?;
+        if !running {
+            return Err(format!("{recipe} is not running on this machine"));
+        }
+        let name = name.as_str();
 
         let args = self
             .runner
@@ -123,6 +139,32 @@ impl LaunchTelemetry for LocalLaunchTelemetry {
             accept_rate: s.accept_rate,
             prefix_hit_rate: s.prefix_hit_rate,
             window_s: s.window_s,
+        })
+    }
+
+    fn logs(&self, recipe: &RecipeId, lines: u32) -> Result<LogTail, String> {
+        let (container, running) = self.container_of(recipe.as_str(), true)?;
+        let out = self
+            .runner
+            .run(&[
+                "docker".into(),
+                "logs".into(),
+                "--tail".into(),
+                lines.to_string(),
+                container.clone(),
+            ])
+            .map_err(|e| format!("{e:#}"))?;
+        // The engine writes to stderr as well as stdout, and the interesting
+        // half of a failed start is usually the stderr half.
+        let both = format!("{}{}", out.stdout, out.stderr);
+        Ok(LogTail {
+            container,
+            lines: both
+                .lines()
+                .map(sanitize)
+                .filter(|l| !l.trim().is_empty())
+                .collect(),
+            running,
         })
     }
 }

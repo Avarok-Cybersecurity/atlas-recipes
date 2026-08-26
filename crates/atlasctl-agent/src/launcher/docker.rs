@@ -52,7 +52,7 @@ impl DockerLauncher {
             devices: self.devices.as_ref(),
             collective: &NcclRoce,
         };
-        translate(
+        let mut plan = translate(
             recipe,
             overrides,
             &UserConfig::new(),
@@ -64,7 +64,15 @@ impl DockerLauncher {
             recipe: RecipeId::parse(&recipe.name)
                 .unwrap_or_else(|_| RecipeId::parse("unknown").expect("literal is a valid id")),
             reason: e.to_string(),
-        })
+        })?;
+        // The agent removes a container by name before it starts one, and on
+        // stop, so it owns this lifecycle already. Auto-remove therefore buys
+        // nothing and costs the only evidence there is: a rank that dies takes
+        // its logs with it, and the operator's next question is always "why".
+        // That happened for real -- a rank died a second after starting and the
+        // container was gone before anyone could read it.
+        plan.docker.auto_remove = false;
+        Ok(plan)
     }
 }
 
