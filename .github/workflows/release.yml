@@ -354,10 +354,33 @@ jobs:
             | python3 -c "import json,sys;print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='atlasctl'))")
           # atlasctl publishes last, so its presence means the whole workspace
           # went out. Makes a re-run after a fully successful publish a no-op.
-          if curl -fsSL "https://crates.io/api/v1/crates/atlasctl/$version" >/dev/null 2>&1; then
-            echo "atlasctl $version already published; workspace is already out"
-            exit 0
-          fi
+          #
+          # The User-Agent is REQUIRED, not politeness. crates.io answers a bare
+          # `curl` with 403 under its API data access policy, so this check used
+          # to fail every time and the guard never fired once: a re-run always
+          # fell through to `cargo publish`, which then died on the first crate
+          # that already existed, and `verify-published` reported the release
+          # had not shipped when in fact it had. That is exactly what v0.2.0 did.
+          ua='atlasctl-release (+https://github.com/Avarok-Cybersecurity/atlas-recipes)'
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -A "$ua" \
+                   "https://crates.io/api/v1/crates/atlasctl/$version" || echo 000)
+          case "$code" in
+            200)
+              echo "atlasctl $version already published; workspace is already out"
+              exit 0
+              ;;
+            404)
+              echo "atlasctl $version is not on crates.io yet; publishing"
+              ;;
+            *)
+              # Neither "there" nor "not there". Publishing anyway is safe —
+              # crates.io refuses a duplicate — but say why the guard could not
+              # answer, so a 403 like the one above is visible next time rather
+              # than silently turning every re-run into a failure.
+              echo "::warning::crates.io answered $code for the published-version check; \
+              proceeding, and a duplicate will be refused by the registry"
+              ;;
+          esac
           cargo publish --workspace --locked
 
   wheels:
