@@ -2,7 +2,7 @@
 [package]
 name = "atlasctl-core"
 description = "Recipe model and deterministic recipe-to-docker translation for atlasctl."
-version = "0.1.3"
+version = "0.1.4"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
