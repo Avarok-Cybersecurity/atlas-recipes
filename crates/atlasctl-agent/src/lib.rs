@@ -4,11 +4,13 @@
 
 //! The local agent: lets the Atlas website launch recipes on this machine.
 
+pub mod cluster;
 pub mod discovery;
 pub mod fabric;
 pub mod guard;
 pub mod identity;
 pub mod launcher;
+pub mod pairing;
 pub mod peer;
 pub mod server;
 pub mod session;
