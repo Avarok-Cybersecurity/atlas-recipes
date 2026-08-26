@@ -6,10 +6,10 @@ use atlasctl_protocol::fleet::{LinkClass, Metric};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
-struct Tmp(PathBuf);
+pub(super) struct Tmp(pub(super) PathBuf);
 
 impl Tmp {
-    fn new(tag: &str) -> Self {
+    pub(super) fn new(tag: &str) -> Self {
         let mut p = std::env::temp_dir();
         p.push(format!(
             "atlasctl-fleet-{tag}-{}-{}",
@@ -40,7 +40,7 @@ fn roce(addr: &str) -> NodeAddress {
     }
 }
 
-fn fleet_at(dir: &Path) -> LocalFleet {
+pub(super) fn fleet_at(dir: &Path) -> LocalFleet {
     LocalFleet::new(
         Identity::generate(),
         PinStore::new(dir),
@@ -51,7 +51,7 @@ fn fleet_at(dir: &Path) -> LocalFleet {
     )
 }
 
-fn beacon(id: NodeId, name: &str, can_launch: bool) -> Beacon {
+pub(super) fn beacon(id: NodeId, name: &str, can_launch: bool) -> Beacon {
     Beacon {
         id,
         name: DisplayName::new(name),
@@ -202,12 +202,35 @@ fn a_beacon_claiming_it_cannot_launch_is_taken_at_its_word() {
     assert!(!peer.launchability.can_launch);
 }
 
+/// OS travels on the authenticated channel and nowhere else. A machine we
+/// have only *seen* has told us nothing about itself we can believe, and the
+/// interface must show a blank rather than a guess.
+#[test]
+fn a_discovered_node_reports_no_operating_system() {
+    let t = Tmp::new("osdisc");
+    let f = fleet_at(&t.0);
+    f.observe(beacon(NodeId::from_bytes([4; 32]), "stranger", true));
+    let peer = f.nodes().into_iter().find(|n| !n.is_local).expect("listed");
+    assert_eq!(peer.os, "", "a beacon must not be able to claim an OS");
+}
+
+/// And this machine does report its own, because it is the one thing here we
+/// know first-hand.
+#[test]
+fn the_local_node_reports_its_operating_system() {
+    let t = Tmp::new("oslocal");
+    let f = fleet_at(&t.0);
+    let me = f.nodes().into_iter().find(|n| n.is_local).expect("local");
+    assert!(!me.os.is_empty(), "this machine knows what it is running");
+}
+
 fn report(id: NodeId, name: &str, can_launch: bool) -> crate::peer::link::PeerReport {
     crate::peer::link::PeerReport {
         node: id,
         name: name.to_owned(),
         can_launch,
         accelerator: "GB10".to_owned(),
+        os: "Linux".to_owned(),
         vitals: None,
         link: LinkClass::Roce,
         addresses: vec![roce("10.10.10.10")],
@@ -302,26 +325,6 @@ fn pairing_a_node_that_was_never_seen_is_refused() {
         .pair(NodeId::from_bytes([4; 32]), "12345678")
         .expect_err("cannot pair with something that is not there");
     assert!(err.to_string().contains("not visible"));
-}
-
-#[test]
-fn pairing_refuses_rather_than_writing_a_pin_it_cannot_justify() {
-    // Until the peer channel carries the ceremony, pairing must fail loudly.
-    // A pin written without a key exchange would mean nothing while looking
-    // exactly like one that means everything.
-    let t = Tmp::new("nochannel");
-    let f = fleet_at(&t.0);
-    let node = NodeId::from_bytes([6; 32]);
-    f.observe(beacon(node, "spark-43fa", true));
-
-    let err = f
-        .pair(node, "13572468")
-        .expect_err("must not fake a pairing");
-    assert!(err.to_string().contains("peer channel"));
-    assert!(
-        !PinStore::new(&t.0).is_pinned(node).expect("reads"),
-        "a failed pairing must leave no trust behind"
-    );
 }
 
 #[test]

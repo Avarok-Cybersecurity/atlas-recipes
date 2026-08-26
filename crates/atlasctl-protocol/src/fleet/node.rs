@@ -224,6 +224,14 @@ pub struct NodeDescriptor {
     pub agent_version: String,
     /// Coarse accelerator description, for display.
     pub accelerator: String,
+    /// Operating system, for display: `Linux`, `macOS`, `Windows`.
+    ///
+    /// Defaulted so a peer built before this field is understood as "did not
+    /// say" rather than refused. Deliberately coarse and deliberately absent
+    /// from the mDNS beacon: a kernel version on an unauthenticated broadcast
+    /// is a shopping list for anyone listening.
+    #[serde(default)]
+    pub os: String,
     /// Latest vitals, when the node has reported any.
     pub vitals: Option<NodeVitals>,
     /// Active alerts.

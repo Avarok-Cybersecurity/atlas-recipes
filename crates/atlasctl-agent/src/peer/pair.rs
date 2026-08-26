@@ -85,6 +85,7 @@ where
         name: crate::discovery::local_display_name().as_str().to_owned(),
         can_launch: true,
         accelerator: String::new(),
+        os: crate::discovery::local_os(),
         // Pairing is about identity, not topology; addresses are exchanged on
         // the authenticated channel once there is a pin to believe them under.
         addresses: Vec::new(),

@@ -6,9 +6,12 @@
 
 mod cli;
 mod commands;
+mod configdir;
 mod hostinfo;
 mod httpscrape;
+mod joinarg;
 mod launchtelemetry;
+mod peerpairing;
 mod peertransport;
 mod rankservice;
 mod service;
@@ -35,6 +38,13 @@ fn main() -> std::process::ExitCode {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    // Applied before any command runs, so every path that resolves the config
+    // directory — including the ones inside the agent library, which never see
+    // the CLI — agrees on where state lives. One resolution order, one answer.
+    if let Some(dir) = &cli.config_dir {
+        // SAFETY: single-threaded here; nothing has been spawned yet.
+        unsafe { std::env::set_var(configdir::DIR_ENV, dir) };
+    }
     match cli.command {
         Command::Recipe(RecipeCmd::List(a)) | Command::List(a) => commands::recipe::list(&a),
         Command::Recipe(RecipeCmd::Show(a)) | Command::Show(a) => commands::recipe::show(&a),
@@ -50,7 +60,7 @@ fn run() -> Result<()> {
         Command::Agent(AgentCmd::Run(a)) => commands::agent::run(&a),
         Command::Agent(AgentCmd::Token(a)) => commands::agent::token(&a),
         Command::Agent(AgentCmd::Status) => commands::agent::status(),
-        Command::Agent(AgentCmd::Pair(a)) => commands::agent::pair(&a),
+        Command::Agent(AgentCmd::Pair(a)) => commands::agentpair::pair(&a),
         Command::Agent(AgentCmd::Install(a)) => commands::service::install(&a),
         Command::Agent(AgentCmd::Uninstall) => commands::service::uninstall(),
         Command::Peer(PeerCmd::List) => commands::peer::list(),

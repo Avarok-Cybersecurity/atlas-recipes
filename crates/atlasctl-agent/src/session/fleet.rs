@@ -26,6 +26,64 @@ impl Session<'_> {
         vec![ServerMsg::Nodes { id, nodes }]
     }
 
+    /// Open a window in which one new machine may join.
+    ///
+    /// The addresses go out with the code because the joining machine has to
+    /// dial back and cannot discover this one — it is not paired yet, and a
+    /// beacon is not something to build a command on.
+    pub(super) fn mint_join(&mut self, id: u32) -> Vec<ServerMsg> {
+        let Some(joining) = self.deps.joining else {
+            return vec![err(Some(id), AgentError::NotReady)];
+        };
+        match joining.mint() {
+            Ok(code) => vec![ServerMsg::JoinInvitation {
+                id,
+                code: Some(code),
+                addresses: self.dialable_addresses(),
+                expires_in_s: crate::joining::JOIN_TTL.as_secs(),
+            }],
+            // The only way minting fails is a poisoned lock, which is this
+            // agent being broken rather than the request being wrong.
+            Err(_) => vec![err(Some(id), AgentError::NotReady)],
+        }
+    }
+
+    /// Close an outstanding window. Answering with no code is how the page
+    /// learns it is shut.
+    pub(super) fn revoke_join(&mut self, id: u32) -> Vec<ServerMsg> {
+        if let Some(joining) = self.deps.joining {
+            joining.revoke();
+        }
+        vec![ServerMsg::JoinInvitation {
+            id,
+            code: None,
+            addresses: Vec::new(),
+            expires_in_s: 0,
+        }]
+    }
+
+    /// Where a joining machine should dial this one, best link first.
+    ///
+    /// Loopback and virtual links are excluded: they are reachable from here
+    /// and from nowhere else, so putting one in an invitation produces a
+    /// command that cannot work.
+    fn dialable_addresses(&self) -> Vec<String> {
+        let Some(fleet) = self.deps.fleet else {
+            return Vec::new();
+        };
+        let mut addrs: Vec<_> = fleet
+            .nodes()
+            .into_iter()
+            .find(|n| n.is_local)
+            .map(|n| n.addresses)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| a.class.usable_for_cluster())
+            .collect();
+        addrs.sort_by_key(|a| std::cmp::Reverse(a.class.rank()));
+        addrs.into_iter().map(|a| a.addr).collect()
+    }
+
     pub(super) fn pair(&mut self, id: u32, node: NodeId, code: &str) -> Vec<ServerMsg> {
         let Some(fleet) = self.deps.fleet else {
             return vec![err(Some(id), AgentError::NotReady)];

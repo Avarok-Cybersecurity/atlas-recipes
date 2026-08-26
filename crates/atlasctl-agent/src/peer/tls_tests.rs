@@ -85,6 +85,127 @@ async fn handshake(
     Ok(())
 }
 
+/// Same as `handshake`, but the listener uses the join-window gate rather than
+/// refusing every unpinned peer outright.
+async fn handshake_while(
+    server: &Identity,
+    server_pins: PinStore,
+    client: &Identity,
+    client_pins: PinStore,
+    gate: Arc<dyn Fn() -> bool + Send + Sync>,
+) -> anyhow::Result<()> {
+    let scfg = server_config(server, PinnedPeerVerifier::while_joining(server_pins, gate))?;
+    // The joining side has a code, not a pin, so it accepts an unpinned server.
+    let ccfg = client_config(client, PinnedPeerVerifier::pairing(client_pins))?;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let acceptor = TlsAcceptor::from(Arc::new(scfg));
+
+    let server_side = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await?;
+        let mut tls = acceptor.accept(tcp).await?;
+        tls.write_all(b"ok").await?;
+        tls.flush().await?;
+        Ok::<_, anyhow::Error>(())
+    });
+
+    let connector = TlsConnector::from(Arc::new(ccfg));
+    let tcp = TcpStream::connect(addr).await?;
+    let name = rustls::pki_types::ServerName::try_from("peer.atlas.invalid")?.to_owned();
+    let mut tls = connector.connect(name, tcp).await?;
+    let mut buf = [0u8; 2];
+    tls.read_exact(&mut buf).await?;
+    anyhow::ensure!(&buf == b"ok");
+    server_side.await??;
+    Ok(())
+}
+
+/// A machine being onboarded is unpinned by definition, so the listener has to
+/// let it reach the ceremony — but only while a human has a join code
+/// outstanding.
+#[tokio::test]
+async fn an_unpinned_agent_is_admitted_while_a_join_is_pending() {
+    let ta = Tmp::new("ja");
+    let tb = Tmp::new("jb");
+    let joining = Identity::generate();
+    let host = Identity::generate();
+
+    handshake_while(
+        &host,
+        PinStore::new(&tb.0),
+        &joining,
+        PinStore::new(&ta.0),
+        Arc::new(|| true),
+    )
+    .await
+    .expect("a pending join must admit an unpinned peer");
+}
+
+/// And the window is the whole point: with no code outstanding the stranger is
+/// refused during the handshake, so for all the time nobody is onboarding —
+/// which is almost all of it — an unpaired machine reaches no further than
+/// rustls' ClientHello handling.
+#[tokio::test]
+async fn the_same_agent_is_refused_once_the_window_closes() {
+    let ta = Tmp::new("jc");
+    let tb = Tmp::new("jd");
+    let joining = Identity::generate();
+    let host = Identity::generate();
+
+    let err = handshake_while(
+        &host,
+        PinStore::new(&tb.0),
+        &joining,
+        PinStore::new(&ta.0),
+        Arc::new(|| false),
+    )
+    .await
+    .expect_err("no pending join must mean no session");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("not paired") || msg.contains("certificate") || msg.contains("alert"),
+        "unexpected failure: {msg}"
+    );
+}
+
+/// The gate is read per handshake, not captured once, or a code that has been
+/// used or expired would keep letting strangers in.
+#[tokio::test]
+async fn the_gate_is_consulted_on_every_handshake() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let open = Arc::new(AtomicBool::new(true));
+    let g = Arc::clone(&open);
+    let gate: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || g.load(Ordering::SeqCst));
+
+    let ta = Tmp::new("je");
+    let tb = Tmp::new("jf");
+    let joining = Identity::generate();
+    let host = Identity::generate();
+
+    handshake_while(
+        &host,
+        PinStore::new(&tb.0),
+        &joining,
+        PinStore::new(&ta.0),
+        Arc::clone(&gate),
+    )
+    .await
+    .expect("open");
+
+    open.store(false, Ordering::SeqCst);
+
+    handshake_while(
+        &host,
+        PinStore::new(&tb.0),
+        &joining,
+        PinStore::new(&ta.0),
+        gate,
+    )
+    .await
+    .expect_err("the same verifier must refuse once the window has closed");
+}
+
 #[test]
 fn the_certificate_carries_the_identity_key_so_pinning_a_key_pins_the_node() {
     let me = Identity::generate();

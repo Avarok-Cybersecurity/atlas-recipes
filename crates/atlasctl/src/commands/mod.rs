@@ -3,6 +3,7 @@
 //! Command implementations.
 
 pub mod agent;
+pub mod agentpair;
 pub mod doctor;
 pub mod lifecycle;
 pub mod peer;

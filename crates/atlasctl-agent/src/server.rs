@@ -37,6 +37,8 @@ pub struct AgentState {
     pub token: String,
     /// Whether this machine can run a recipe, and why not if it cannot.
     pub can_launch: Result<(), String>,
+    /// The window in which one new machine may join, when this agent has one.
+    pub joining: Option<Arc<crate::joining::JoinWindow>>,
     /// Port we are listening on, for the Host check.
     pub port: u16,
     /// Whether development origins are accepted.
@@ -136,6 +138,7 @@ async fn run_session(mut socket: ws::WebSocket, state: Arc<AgentState>) {
         fleet: state.fleet.as_deref(),
         cluster: state.cluster.as_deref(),
         telemetry: state.telemetry.as_deref(),
+        joining: state.joining.as_deref(),
     });
 
     if send(&mut socket, &welcome).await.is_err() {

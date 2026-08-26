@@ -69,6 +69,7 @@ pub fn spawn_peer_work(
     events: broadcast::Sender<ServerMsg>,
     peer_port: u16,
     rank: Arc<dyn RankService>,
+    joining: Arc<crate::joining::JoinWindow>,
 ) {
     spawn_peer_listener(
         Arc::clone(&fleet),
@@ -76,6 +77,7 @@ pub fn spawn_peer_work(
         pins.clone(),
         peer_port,
         rank,
+        joining,
     );
     spawn_peer_poll(fleet, identity, pins, events, peer_port);
 }
@@ -87,13 +89,21 @@ fn spawn_peer_listener(
     pins: crate::identity::PinStore,
     port: u16,
     rank: Arc<dyn RankService>,
+    joining: Arc<crate::joining::JoinWindow>,
 ) {
     tokio::spawn(async move {
-        // Pinned-only: an unpaired agent is refused during the handshake, so
-        // nothing past this point has an authorization decision to make.
+        // Pinned peers always; a stranger only while a human has a join code
+        // outstanding. Decided during the handshake, so for all the time nobody
+        // is onboarding an unpaired agent reaches no further than rustls'
+        // ClientHello handling — which was the property `pinned` gave
+        // unconditionally, and is the only thing being traded here.
+        let gate = {
+            let w = Arc::clone(&joining);
+            Arc::new(move || w.is_open()) as Arc<dyn Fn() -> bool + Send + Sync>
+        };
         let cfg = match crate::peer::tls::server_config(
             &identity,
-            crate::peer::tls::PinnedPeerVerifier::pinned(pins, None),
+            crate::peer::tls::PinnedPeerVerifier::while_joining(pins.clone(), gate),
         ) {
             Ok(c) => c,
             Err(e) => {
@@ -120,18 +130,34 @@ fn spawn_peer_listener(
             let acceptor = acceptor.clone();
             let fleet = Arc::clone(&fleet);
             let rank = Arc::clone(&rank);
+            let joining = Arc::clone(&joining);
+            let pins = pins.clone();
+            let identity = Arc::clone(&identity);
             tokio::spawn(async move {
                 let Ok(mut tls) = acceptor.accept(tcp).await else {
                     // An unpaired caller failing the handshake is the system
                     // working, not an incident worth logging.
                     return;
                 };
+
+                // Who got in? The verifier admitted either a pinned peer or,
+                // inside a join window, a stranger. Those are different
+                // conversations and must not share a code path: a stranger may
+                // pair and nothing else.
+                let peer = peer_of(&tls);
+                let pinned = peer.is_some_and(|id| pins.is_pinned(id).unwrap_or(false));
+                if !pinned {
+                    serve_join(&mut tls, &identity, &pins, &joining, &fleet).await;
+                    return;
+                }
+
                 let vitals = fleet.local_vitals_and_id().map(|(_, v)| v);
                 if crate::peer::link::serve_query(
                     &mut tls,
                     crate::discovery::local_display_name().as_str(),
                     fleet.can_launch(),
                     "",
+                    &crate::discovery::local_os(),
                     vitals,
                     &fleet.local_addresses(),
                 )
@@ -147,6 +173,77 @@ fn spawn_peer_listener(
             });
         }
     });
+}
+
+/// The identity behind an accepted connection, if it presented one.
+fn peer_of<S>(
+    tls: &tokio_rustls::server::TlsStream<S>,
+) -> Option<atlasctl_protocol::fleet::NodeId> {
+    let (_, conn) = tls.get_ref();
+    let cert = conn.peer_certificates().and_then(<[_]>::first)?;
+    crate::peer::tls::peer_identity(cert).ok().map(|(id, _)| id)
+}
+
+/// Serve a machine that is not pinned: it may pair, and nothing else.
+///
+/// Reached only inside a join window, because that is what let it complete a
+/// handshake at all. A failure here is ordinary — a mistyped digit, a dropped
+/// connection — and is charged against the window's attempt budget rather than
+/// logged as an incident.
+async fn serve_join<S>(
+    tls: &mut tokio_rustls::server::TlsStream<S>,
+    identity: &crate::identity::Identity,
+    pins: &crate::identity::PinStore,
+    joining: &crate::joining::JoinWindow,
+    fleet: &crate::fleet::LocalFleet,
+) where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let Some(code) = joining.peek() else {
+        // The window closed between the handshake and here.
+        return;
+    };
+    let Some(peer) = peer_of(tls) else {
+        return;
+    };
+    let binding = {
+        let (_, conn) = tls.get_ref();
+        match crate::pairing::binding_from_server(conn) {
+            Ok(b) => b,
+            Err(_) => return,
+        }
+    };
+
+    match crate::peer::pair::run(
+        tls,
+        crate::peer::pair::Role::Responder,
+        identity,
+        peer,
+        &code,
+        binding,
+    )
+    .await
+    {
+        Ok(paired) => {
+            // Single use: the invitation is spent whether or not the pin
+            // write below succeeds, because the code has now been seen on the
+            // wire by whoever answered.
+            joining.consume();
+            let _ = crate::fleet::record_pairing(
+                pins,
+                paired.node,
+                &paired.public_key,
+                atlasctl_protocol::fleet::DisplayName::new(&paired.name),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs()),
+                None,
+            );
+            let _ = fleet;
+            eprintln!("paired with {} ({})", paired.name, paired.node.short());
+        }
+        Err(_) => joining.attempt_failed(),
+    }
 }
 
 /// Ask each paired peer how it is.

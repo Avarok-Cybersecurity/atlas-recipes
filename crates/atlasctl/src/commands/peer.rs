@@ -12,10 +12,7 @@ use anyhow::{Context, Result, bail};
 use atlasctl_agent::discovery::resolve_manual;
 use atlasctl_agent::identity::{Identity, PinStore};
 use atlasctl_agent::peer::DEFAULT_PEER_PORT;
-use atlasctl_agent::peer::pair::{Role, run};
-use atlasctl_agent::peer::tls::{PinnedPeerVerifier, client_config, peer_identity};
 use atlasctl_protocol::fleet::{DisplayName, NodeId};
-use std::sync::Arc;
 
 /// List trusted machines.
 ///
@@ -64,41 +61,14 @@ pub fn add(args: &PeerAddArgs) -> Result<()> {
         .build()
         .context("starting a runtime")?;
 
-    let paired = runtime.block_on(async {
-        // Pairing mode: the peer is not pinned yet by definition, so the
-        // certificate cannot be what authenticates it. The code does.
-        let cfg = client_config(&identity, PinnedPeerVerifier::pairing(pins.clone()))?;
-        let connector = tokio_rustls::TlsConnector::from(Arc::new(cfg));
-        let tcp = tokio::net::TcpStream::connect(addr)
-            .await
-            .with_context(|| format!("connecting to {addr}"))?;
-        let name = rustls::pki_types::ServerName::try_from("peer.atlas.invalid")
-            .context("building a server name")?
-            .to_owned();
-        let mut tls = connector
-            .connect(name, tcp)
-            .await
-            .context("TLS handshake")?;
-
-        let (_, conn) = tls.get_ref();
-        let cert = conn
-            .peer_certificates()
-            .and_then(<[_]>::first)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("the other machine sent no certificate"))?;
-        let (peer_id, _) = peer_identity(&cert)?;
-        let binding = atlasctl_agent::pairing::binding_from_client(conn)?;
-
-        run(
-            &mut tls,
-            Role::Initiator,
-            &identity,
-            peer_id,
-            &args.code,
-            binding,
-        )
-        .await
-    })?;
+    // The same function the browser-driven path calls. Two implementations of
+    // a pairing ceremony is one implementation nobody audits.
+    let paired = runtime.block_on(atlasctl_agent::peer::join::dial_and_pair(
+        &identity,
+        pins.clone(),
+        addr,
+        &args.code,
+    ))?;
 
     println!();
     println!("  Verification words:  {}", paired.verification);

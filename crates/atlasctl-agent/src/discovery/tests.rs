@@ -117,3 +117,27 @@ fn a_manually_typed_peer_resolves_with_and_without_a_port() {
     assert_eq!(without[0].port(), 34334);
     assert!(resolve_manual("no-such-host.invalid", 34334).is_err());
 }
+
+/// The TXT record is an unauthenticated broadcast. It deliberately carries no
+/// operating system, no agent version and no recipe inventory: those are a
+/// shopping list for anyone listening, and none of them is needed to draw a
+/// grey node on a graph.
+#[test]
+fn the_beacon_advertises_nothing_a_stranger_could_shop_from() {
+    let b = Beacon {
+        id: NodeId::from_bytes([1; 32]),
+        name: DisplayName::new("spark-256a"),
+        peer_port: 34334,
+        addresses: Vec::new(),
+        can_launch: true,
+        accelerator: "GB10".to_owned(),
+    };
+    let txt = b.txt_properties();
+    let keys: Vec<&str> = txt.iter().map(|(k, _)| k.as_str()).collect();
+    for forbidden in ["os", "version", "agent_version", "recipes", "browser_port"] {
+        assert!(
+            !keys.contains(&forbidden),
+            "the beacon must not carry {forbidden}: {keys:?}"
+        );
+    }
+}

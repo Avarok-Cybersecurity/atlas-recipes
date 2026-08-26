@@ -192,6 +192,28 @@ pub fn local_display_name() -> DisplayName {
     DisplayName::new(&raw)
 }
 
+/// This machine's operating system, coarsely, for display.
+///
+/// A name and nothing more — no version, no kernel build. It exists so an
+/// operator can tell their laptop from their Spark in a list, which needs one
+/// word; anything finer would be fingerprinting material travelling between
+/// machines for no operational gain.
+#[must_use]
+pub fn local_os() -> String {
+    if cfg!(target_os = "linux") {
+        "Linux"
+    } else if cfg!(target_os = "macos") {
+        "macOS"
+    } else if cfg!(target_os = "windows") {
+        "Windows"
+    } else {
+        // Named rather than guessed: an unknown platform saying "Linux" would
+        // send someone debugging in the wrong direction.
+        "unknown"
+    }
+    .to_owned()
+}
+
 /// Resolve a `host` or `host:port` the user typed into addresses to try.
 ///
 /// # Errors

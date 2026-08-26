@@ -51,6 +51,11 @@ pub struct SessionDeps<'a> {
     pub cluster: Option<&'a dyn ClusterControl>,
     /// Sampling a running launch, when this agent can.
     pub telemetry: Option<&'a dyn LaunchTelemetry>,
+    /// The window in which one new machine may join.
+    ///
+    /// `None` on an agent that cannot take members — there is nothing to open,
+    /// and saying so is better than minting a code nothing will honour.
+    pub joining: Option<&'a crate::joining::JoinWindow>,
 }
 
 /// Asks every rank of a planned cluster what it would run.
@@ -250,6 +255,8 @@ impl<'a> Session<'a> {
             (Phase::Ready, ClientMsg::WatchFleet { id, vitals: _ }) => self.nodes(id),
             (Phase::Ready, ClientMsg::PairPeer { id, node, code }) => self.pair(id, node, &code),
             (Phase::Ready, ClientMsg::UnpairPeer { id, node }) => self.unpair(id, node),
+            (Phase::Ready, ClientMsg::MintJoinCode { id }) => self.mint_join(id),
+            (Phase::Ready, ClientMsg::RevokeJoinCode { id }) => self.revoke_join(id),
 
             // A preview is rendered by each rank in turn, on the machine that
             // would run it — never invented here. The head does not know what
@@ -355,90 +362,6 @@ impl<'a> Session<'a> {
         })
     }
 
-    fn preview(
-        &mut self,
-        id: u32,
-        recipe_id: &RecipeId,
-        requested: &BTreeMap<String, SettingValue>,
-    ) -> Vec<ServerMsg> {
-        let recipe = match self.resolve(recipe_id) {
-            Ok(r) => r,
-            Err(e) => return vec![err(Some(id), e)],
-        };
-        let overrides = match self.check_settings(requested) {
-            Ok(o) => o,
-            Err(e) => return vec![err(Some(id), e)],
-        };
-        match self.deps.launcher.preview(&recipe, &overrides) {
-            Ok(p) => vec![ServerMsg::Preview {
-                id,
-                command: p.command,
-                unapplied: p.unapplied,
-            }],
-            Err(e) => vec![err(Some(id), e)],
-        }
-    }
-
-    fn launch(
-        &mut self,
-        id: u32,
-        recipe_id: &RecipeId,
-        requested: &BTreeMap<String, SettingValue>,
-    ) -> Vec<ServerMsg> {
-        if let Err(why) = &self.deps.can_launch {
-            return vec![err(
-                Some(id),
-                AgentError::NotLaunchable {
-                    recipe: recipe_id.clone(),
-                    reason: why.clone(),
-                },
-            )];
-        }
-        let recipe = match self.resolve(recipe_id) {
-            Ok(r) => r,
-            Err(e) => return vec![err(Some(id), e)],
-        };
-        if let Err(why) = recipe.launchable() {
-            return vec![err(
-                Some(id),
-                AgentError::NotLaunchable {
-                    recipe: recipe_id.clone(),
-                    reason: why.to_string(),
-                },
-            )];
-        }
-        let overrides = match self.check_settings(requested) {
-            Ok(o) => o,
-            Err(e) => return vec![err(Some(id), e)],
-        };
-        match self.deps.launcher.launch(&recipe, &overrides) {
-            Ok(started) => vec![ServerMsg::Started {
-                id,
-                recipe: recipe_id.clone(),
-                container: started.container,
-                endpoint: started.endpoint,
-            }],
-            Err(e) => vec![err(Some(id), e)],
-        }
-    }
-
-    fn stop(&mut self, id: u32, recipe_id: &RecipeId) -> Vec<ServerMsg> {
-        match self.deps.launcher.stop(recipe_id.as_str()) {
-            Ok(()) => vec![ServerMsg::Stopped {
-                id,
-                recipe: recipe_id.clone(),
-            }],
-            Err(e) => vec![err(Some(id), e)],
-        }
-    }
-
-    fn status(&mut self, id: u32) -> Vec<ServerMsg> {
-        match self.deps.launcher.running() {
-            Ok(running) => vec![ServerMsg::Status { id, running }],
-            Err(e) => vec![err(Some(id), e)],
-        }
-    }
-
     fn inventory(&self) -> Vec<RecipeInfo> {
         self.deps
             .registry
@@ -487,6 +410,9 @@ fn err(id: Option<u32>, error: AgentError) -> ServerMsg {
 }
 
 mod fleet;
+
+#[path = "session/launch.rs"]
+mod launch;
 pub mod telemetry;
 pub use telemetry::LaunchTelemetry;
 

@@ -34,6 +34,12 @@ pub enum PeerFrame {
         can_launch: bool,
         /// Coarse accelerator tag.
         accelerator: String,
+        /// Coarse operating system name, for the other side's interface.
+        ///
+        /// Defaulted so a peer built before this field is understood as "did
+        /// not say" rather than refused.
+        #[serde(default)]
+        os: String,
         /// The addresses this node can be reached on, with their subnets.
         ///
         /// Only a node knows which links it is attached to, and a rendezvous

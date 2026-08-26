@@ -32,11 +32,14 @@ fn hf_cache_dir(home: &str) -> String {
 }
 
 /// Where atlasctl keeps its configuration.
+///
+/// Delegates so there is one resolution order and one place that knows the
+/// three files in there are a unit. See [`crate::configdir`].
+///
+/// # Errors
+/// If no home or override is set.
 pub fn config_dir() -> Result<std::path::PathBuf> {
-    let base = std::env::var("XDG_CONFIG_HOME")
-        .or_else(|_| std::env::var("HOME").map(|h| format!("{h}/.config")))
-        .context("neither XDG_CONFIG_HOME nor HOME is set")?;
-    Ok(std::path::PathBuf::from(base).join("atlasctl"))
+    crate::configdir::resolve()
 }
 
 /// This user's home directory.

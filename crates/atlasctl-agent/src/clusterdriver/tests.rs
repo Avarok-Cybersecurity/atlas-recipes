@@ -41,6 +41,7 @@ fn descriptor(seed: u8, local: bool) -> NodeDescriptor {
         launchability: Launchability::yes(),
         agent_version: "test".to_owned(),
         accelerator: "GB10".to_owned(),
+        os: "Linux".to_owned(),
         vitals: None,
         alerts: Vec::new(),
         running: None,

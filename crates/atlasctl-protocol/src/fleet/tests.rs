@@ -115,6 +115,7 @@ fn node(addresses: Vec<NodeAddress>) -> NodeDescriptor {
         launchability: Launchability::yes(),
         agent_version: "0.1.2".to_owned(),
         accelerator: "GB10".to_owned(),
+        os: "Linux".to_owned(),
         vitals: None,
         alerts: Vec::new(),
         running: None,

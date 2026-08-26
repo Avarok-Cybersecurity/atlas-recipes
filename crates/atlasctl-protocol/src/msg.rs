@@ -97,6 +97,28 @@ pub enum ClientMsg {
         code: String,
     },
 
+    /// Open a window in which one new machine may join this fleet.
+    ///
+    /// The inverse direction of [`Self::PairPeer`]: this machine mints the code
+    /// and the operator carries it to the machine being added. It exists
+    /// because the other direction needs a screen on the target, which a
+    /// headless box does not have.
+    ///
+    /// **This does not weaken the rule that a web page cannot pair on its own.**
+    /// The code still has to physically reach another machine, and only a
+    /// person can do that. What it does mean is that the code passes through a
+    /// shell, so the window is short, single-use, and attempt-limited.
+    MintJoinCode {
+        /// Correlates the reply.
+        id: u32,
+    },
+
+    /// Close an outstanding join window without using it.
+    RevokeJoinCode {
+        /// Correlates the reply.
+        id: u32,
+    },
+
     /// Drop trust in a peer. Takes effect on its next connection attempt.
     UnpairPeer {
         /// Correlates the reply.
@@ -308,6 +330,22 @@ pub enum ServerMsg {
         verification: Option<String>,
         /// Why not, when it failed.
         detail: String,
+    },
+
+    /// An invitation for one machine to join this fleet.
+    ///
+    /// Carries what the operator needs to build a command on the other
+    /// machine, and nothing else. The addresses are this node's own, so the
+    /// joining machine knows where to dial back.
+    JoinInvitation {
+        /// Correlates the request.
+        id: u32,
+        /// The digits, or absent when the window was closed rather than opened.
+        code: Option<String>,
+        /// Where this node can be reached, best link first.
+        addresses: Vec<String>,
+        /// Seconds the invitation remains valid.
+        expires_in_s: u64,
     },
 
     /// A cluster preview: the exact command each rank would run.

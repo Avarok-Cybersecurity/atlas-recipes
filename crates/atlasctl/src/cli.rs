@@ -8,6 +8,14 @@ use clap::{Args, Parser, Subcommand};
 #[derive(Parser, Debug)]
 #[command(name = "atlasctl", version, about, long_about = None)]
 pub struct Cli {
+    /// Keep this node's state in a specific directory.
+    ///
+    /// Relocates `browser.token`, `agent.key` and `peers.json` **together**.
+    /// Use this rather than `XDG_CONFIG_HOME`, which moves the identity too
+    /// and so returns the node to its own fleet as a stranger.
+    #[arg(long, global = true, value_name = "DIR")]
+    pub config_dir: Option<std::path::PathBuf>,
+
     /// The command to run.
     #[command(subcommand)]
     pub command: Command,
@@ -116,6 +124,24 @@ pub struct AgentInstallArgs {
     /// Do not advertise on the network, and do not listen for other agents.
     #[arg(long)]
     pub no_discovery: bool,
+
+    /// Do not serve the browser channel, and do not create a pairing token.
+    ///
+    /// For a machine that exists to hold a rank. Its peers reach it over
+    /// mutually authenticated TLS, which never consults the browser token, so
+    /// requiring one was a credential it would never use standing between the
+    /// node and starting at all.
+    #[arg(long)]
+    pub no_browser: bool,
+
+    /// Join an existing fleet: `--join <code>@<host>`.
+    ///
+    /// The whole value is shown by the machine doing the inviting. Installing
+    /// and joining are one command because they are one intention, and because
+    /// the operator is standing at a machine they may have reached only to run
+    /// this.
+    #[arg(long, value_name = "CODE@HOST")]
+    pub join: Option<String>,
 }
 
 /// `agent pair` arguments.
@@ -182,6 +208,15 @@ pub struct AgentRunArgs {
     /// Do not advertise on the network, and do not listen for other agents.
     #[arg(long)]
     pub no_discovery: bool,
+
+    /// Do not serve the browser channel, and do not create a pairing token.
+    ///
+    /// For a machine that exists to hold a rank. Its peers reach it over
+    /// mutually authenticated TLS, which never consults the browser token, so
+    /// requiring one put a credential the node would never use between it and
+    /// starting at all.
+    #[arg(long)]
+    pub no_browser: bool,
 }
 
 /// `agent token` arguments.
