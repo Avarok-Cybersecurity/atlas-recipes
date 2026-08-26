@@ -127,6 +127,16 @@ jobs:
           # Repairing it here rather than fighting release-please also makes a
           # split release harmless — each requirement gets the version of the
           # crate it actually names, whether or not the crates moved together.
+          # One list, shared by the "is there anything to do" test and the
+          # staging below. These were two separate literals, and
+          # .release-please-manifest.json was in neither — so --fix repaired
+          # the manifest, git add did not stage it, and the repair was thrown
+          # away while the job reported success. That is not a hypothetical:
+          # it is what happened to atlasctl-protocol on 2026-08-26, leaving the
+          # release PR recording 0.1.3 for a crate it was about to publish as
+          # 0.2.0.
+          REPAIRED=(.release-please-manifest.json Cargo.lock Cargo.toml crates/*/Cargo.toml)
+
           python3 scripts/check-version-sync.py --fix
 
           # The lock follows from the manifests, so it is regenerated after
@@ -135,7 +145,7 @@ jobs:
           # meaning.
           cargo metadata --locked --format-version 1 >/dev/null 2>&1 || cargo update --workspace
 
-          if git diff --quiet -- Cargo.lock '*Cargo.toml'; then
+          if git diff --quiet -- "${REPAIRED[@]}"; then
             echo "release PR already consistent; nothing to repair"
             exit 0
           fi
@@ -146,9 +156,14 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.lock Cargo.toml crates/*/Cargo.toml
+          git add -- "${REPAIRED[@]}"
           git commit -m "chore: sync manifests and lock with the versions release-please wrote"
           git push origin HEAD:release-please--branches--main
+
+          # Prove the push fixed what it set out to fix. A repair that stages
+          # nothing looked exactly like a successful one, which is how the
+          # stale manifest survived a green job.
+          python3 scripts/check-version-sync.py
 
   # A pull request opened by the default GITHUB_TOKEN does not trigger
   # workflows, so the standing release PR gets no CI — which is how three
