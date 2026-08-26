@@ -8,6 +8,7 @@
 //! test enforces.
 
 use super::spec::{BoundSpec, Disposition, Spec};
+use super::values::{DTYPES, KV_DTYPES};
 use atlasctl_protocol::settings::Group;
 
 use BoundSpec::{BoolValue, Enum, Float, Int, IntOrAuto, Toggle};
@@ -32,39 +33,6 @@ const fn e(
         advanced,
     })
 }
-
-/// Every KV-cache precision the serving runtime accepts.
-///
-/// Transcribed from `spark_runtime::kv_cache::KvCacheDtype::ALL`, which is
-/// derived from the enum under a wildcard-free match so adding a variant
-/// fails that build rather than silently missing from a picker. This list is
-/// the one place that transcription lives; `settings/tests.rs` records the
-/// count so a drift shows up as a failing test rather than as a launch that
-/// dies inside the container.
-///
-/// The short aliases the CLI also accepts (`fp8k2v` for `fp8k_turbo2v`) are
-/// deliberately not offered: a picker should name one spelling.
-const KV_DTYPES: &[&str] = &[
-    "bf16",
-    "fp8",
-    "nvfp4",
-    "turbo4",
-    "turbo3",
-    "turbo2",
-    "turbo8",
-    "turbo4k_turbo3v",
-    "turbo4k_turbo8v",
-    "turbo3k_turbo8v",
-    "bf16k_turbo4v",
-    "bf16k_turbo3v",
-    "fp8k_turbo4v",
-    "fp8k_turbo3v",
-    "bf16k_turbo2v",
-    "fp8k_turbo2v",
-];
-
-/// Precisions for weights-adjacent settings, which are not the KV set.
-const DTYPES: &[&str] = &["bf16", "fp8", "nvfp4"];
 
 /// Every flag, and whether a client may set it.
 ///
