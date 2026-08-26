@@ -13,7 +13,7 @@
 //! to it.
 
 use crate::id::RecipeId;
-use crate::msg::fleet::{FleetEvent, RankPrepare, RankPreview};
+use crate::msg::fleet::{FleetEvent, RankPrepare, RankPreview, RankStarted};
 use crate::settings::{SettingError, SettingSpec, SettingValue};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -152,6 +152,44 @@ pub enum ClientMsg {
         id: u32,
         /// Epoch from the prepare reply.
         epoch: String,
+    },
+
+    /// Stop every rank of the cluster this agent started.
+    ///
+    /// Named without a recipe or a node list on purpose: an agent stops the
+    /// cluster it launched and knows the containers for, rather than accepting
+    /// a list of things to stop on machines it was told about. A page cannot
+    /// use its local agent to stop something it did not start.
+    StopCluster {
+        /// Correlates the reply.
+        id: u32,
+    },
+
+    /// Ask how a running launch is doing.
+    ///
+    /// Polled rather than streamed. A sample is a difference between two
+    /// scrapes, so the page asking sets the window it gets — and a page that
+    /// stops asking costs the agent nothing, which a stream would not.
+    LaunchStats {
+        /// Correlates the reply.
+        id: u32,
+        /// Which launch.
+        recipe: RecipeId,
+    },
+
+    /// Read the tail of a launch's log.
+    ///
+    /// A tail, not a stream. Weight loading takes minutes and produces a lot of
+    /// output; a page that asks for the last N lines when it wants them costs
+    /// the agent nothing between asks, and cannot fall behind a firehose it
+    /// then has to be told it missed.
+    LaunchLogs {
+        /// Correlates the reply.
+        id: u32,
+        /// Which launch.
+        recipe: RecipeId,
+        /// How many lines to return, capped by the agent.
+        lines: u32,
     },
 
     /// Ask what is running.
@@ -294,6 +332,53 @@ pub enum ServerMsg {
         may_commit: bool,
     },
 
+    /// Every rank of a cluster started.
+    ClusterStarted {
+        /// Correlates the request.
+        id: u32,
+        /// Which prepare this commit consumed.
+        epoch: String,
+        /// Per-rank outcome, rank 0 first.
+        ranks: Vec<RankStarted>,
+    },
+
+    /// Every rank of a cluster was stopped.
+    ClusterStopped {
+        /// Correlates the request.
+        id: u32,
+        /// Ranks that were stopped, rank 0 first.
+        ranks: Vec<RankStarted>,
+    },
+
+    /// How a running launch is doing.
+    Stats {
+        /// Correlates the request.
+        id: u32,
+        /// Which launch.
+        recipe: RecipeId,
+        /// The reading. Every field is optional: absent means the engine does
+        /// not report it, or that there is not yet a second sample to
+        /// difference against — never zero.
+        stats: crate::msg::LaunchReading,
+    },
+
+    /// The tail of a launch's log.
+    Logs {
+        /// Correlates the request.
+        id: u32,
+        /// Which launch.
+        recipe: RecipeId,
+        /// The container the lines came from, so an operator can go read more.
+        container: String,
+        /// Lines, oldest first. Sanitised of control characters by the agent,
+        /// because a log line is attacker-influenced text that a browser is
+        /// about to render.
+        lines: Vec<String>,
+        /// Whether the container is still running. A tail from a container that
+        /// has exited is the last thing it said, not the latest news.
+        running: bool,
+    },
+
     /// Something failed.
     Error {
         /// Correlation id, when the failure answers a request.
@@ -320,6 +405,34 @@ pub struct RecipeInfo {
     pub defaults: BTreeMap<String, SettingValue>,
 }
 
+/// One reading of a running launch.
+///
+/// Every field optional, and absent is never zero: a dashboard that renders
+/// 0 tok/s for "not measured yet" teaches an operator to distrust it, and the
+/// one time throughput really is zero they will not believe the number.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LaunchReading {
+    /// Requests served since the engine started.
+    pub requests_total: Option<f64>,
+    /// Requests in flight.
+    pub requests_active: Option<f64>,
+    /// Generated tokens per second over the sampling window.
+    pub decode_tokens_per_s: Option<f64>,
+    /// Prompt tokens per second over the sampling window.
+    pub prompt_tokens_per_s: Option<f64>,
+    /// Median time to first token, seconds.
+    pub ttft_p50_s: Option<f64>,
+    /// 90th percentile time to first token, seconds.
+    pub ttft_p90_s: Option<f64>,
+    /// Share of drafted tokens accepted, 0..1.
+    pub accept_rate: Option<f64>,
+    /// Share of prefix-cache lookups that hit, 0..1.
+    pub prefix_hit_rate: Option<f64>,
+    /// Seconds the rates cover, so the page can say how fresh they are rather
+    /// than implying they are instantaneous.
+    pub window_s: Option<f64>,
+}
+
 /// A launch currently running.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunningLaunch {
@@ -331,83 +444,10 @@ pub struct RunningLaunch {
     pub status: String,
 }
 
-/// Everything that can go wrong, typed so a client can react rather than
-/// pattern-match on prose.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, thiserror::Error)]
-#[serde(tag = "code", rename_all = "snake_case")]
-pub enum AgentError {
-    /// The client's protocol version is not one we speak.
-    #[error("this agent speaks protocol {min}..={max}, the client asked for {requested}")]
-    UnsupportedProtocol {
-        /// Lowest supported.
-        min: u32,
-        /// Highest supported.
-        max: u32,
-        /// What was asked for.
-        requested: u32,
-    },
-
-    /// The pairing token was absent or wrong.
-    #[error("pairing token rejected — run `atlasctl agent token` and paste it into the page")]
-    NotPaired,
-
-    /// A frame arrived before the handshake completed.
-    #[error("expected a hello frame first")]
-    NotReady,
-
-    /// The frame did not deserialize.
-    #[error("malformed message: {detail}")]
-    InvalidMessage {
-        /// What was wrong with it.
-        detail: String,
-    },
-
-    /// No such recipe in the compiled-in set.
-    #[error("no recipe named `{recipe}`")]
-    UnknownRecipe {
-        /// What was asked for.
-        recipe: String,
-    },
-
-    /// The recipe exists but cannot be launched here.
-    #[error("`{recipe}` cannot be launched: {reason}")]
-    NotLaunchable {
-        /// Which recipe.
-        recipe: RecipeId,
-        /// Why not.
-        reason: String,
-    },
-
-    /// One or more settings were rejected.
-    #[error("{} setting(s) rejected", .errors.len())]
-    BadSettings {
-        /// Every problem at once.
-        errors: Vec<SettingError>,
-    },
-
-    /// Something is already running.
-    #[error("`{recipe}` is already running")]
-    AlreadyRunning {
-        /// Which recipe.
-        recipe: RecipeId,
-    },
-
-    /// Docker is not usable.
-    #[error("docker is not available: {detail}")]
-    DockerUnavailable {
-        /// What the probe said.
-        detail: String,
-    },
-
-    /// The launch itself failed.
-    #[error("launch failed: {detail}")]
-    LaunchFailed {
-        /// What went wrong.
-        detail: String,
-    },
-}
-
 pub mod fleet;
+
+mod error;
+pub use error::AgentError;
 
 #[cfg(test)]
 mod tests;

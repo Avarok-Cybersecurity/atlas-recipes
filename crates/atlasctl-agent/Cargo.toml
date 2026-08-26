@@ -20,7 +20,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal
 subtle = "2"
 thiserror.workspace = true
 ed25519-dalek = { version = "3", default-features = false, features = ["pkcs8", "alloc"] }
-sha2 = "0.11"
+sha2.workspace = true
 hex = "0.4"
 zeroize = "1"
 getrandom = "0.3"

@@ -44,6 +44,81 @@ pub struct SessionDeps<'a> {
     /// alone rather than erroring, because "no fleet" is a normal state and a
     /// page that got an error would show a fault where there is none.
     pub fleet: Option<&'a dyn crate::fleet::FleetView>,
+    /// Renders a cluster preview by asking each rank in turn.
+    ///
+    /// `None` means cluster launches are unavailable on this agent, which is
+    /// answered plainly rather than by pretending.
+    pub cluster: Option<&'a dyn ClusterControl>,
+    /// Sampling a running launch, when this agent can.
+    pub telemetry: Option<&'a dyn LaunchTelemetry>,
+}
+
+/// Asks every rank of a planned cluster what it would run.
+///
+/// A trait so the session stays transport-free: the preview needs to reach
+/// other machines, and a session that opened sockets itself could not be tested
+/// without them.
+pub trait ClusterControl: Send + Sync {
+    /// Plan the launch and collect each rank's own rendering. Reserves nothing.
+    ///
+    /// # Errors
+    /// If the plan is impossible, or a rank refuses or cannot be reached.
+    fn preview(
+        &self,
+        recipe: &RecipeId,
+        nodes: &[atlasctl_protocol::fleet::NodeId],
+        head: atlasctl_protocol::fleet::NodeId,
+        settings: &BTreeMap<String, SettingValue>,
+    ) -> Result<
+        (
+            Vec<atlasctl_protocol::msg::fleet::RankPreview>,
+            Option<String>,
+        ),
+        String,
+    >;
+
+    /// Ask every rank to validate and reserve. Nothing starts.
+    ///
+    /// Returns the epoch a later commit must quote, each rank's answer, and
+    /// whether a commit may proceed. A rank refusing is a normal outcome
+    /// reported in the answers, not an error.
+    ///
+    /// # Errors
+    /// If the plan itself is impossible, which is before any rank was asked.
+    fn prepare(
+        &self,
+        recipe: &RecipeId,
+        nodes: &[atlasctl_protocol::fleet::NodeId],
+        head: atlasctl_protocol::fleet::NodeId,
+        settings: &BTreeMap<String, SettingValue>,
+    ) -> Result<
+        (
+            String,
+            Vec<atlasctl_protocol::msg::fleet::RankPrepare>,
+            bool,
+        ),
+        String,
+    >;
+
+    /// Start what every rank prepared under this epoch.
+    ///
+    /// # Errors
+    /// If no such prepare is outstanding, or a rank fails to start — in which
+    /// case every rank that did start has already been stopped.
+    fn commit(
+        &self,
+        epoch: &str,
+    ) -> Result<Vec<atlasctl_protocol::msg::fleet::RankStarted>, String>;
+
+    /// Abandon a prepare, releasing every reservation.
+    fn abort(&self, epoch: &str);
+
+    /// Stop every rank of the cluster this agent started.
+    ///
+    /// # Errors
+    /// If no cluster is running, or a rank could not be stopped — and the
+    /// error names which, because a rank left running holds a whole GPU.
+    fn stop_cluster(&self) -> Result<Vec<atlasctl_protocol::msg::fleet::RankStarted>, String>;
 }
 
 /// A single client connection.
@@ -163,84 +238,49 @@ impl<'a> Session<'a> {
             (Phase::Ready, ClientMsg::PairPeer { id, node, code }) => self.pair(id, node, &code),
             (Phase::Ready, ClientMsg::UnpairPeer { id, node }) => self.unpair(id, node),
 
-            // Cluster verbs need the peer channel, which is not connected yet.
-            // Refusing plainly is the honest answer: a preview rendered without
-            // asking the other ranks would be a guess presented as a fact, and a
-            // prepare that pretended to reserve would be worse.
+            // A preview is rendered by each rank in turn, on the machine that
+            // would run it — never invented here. The head does not know what
+            // recipe revision or hardware the other machine has.
             (
                 Phase::Ready,
-                ClientMsg::PreviewCluster { id, .. }
-                | ClientMsg::PrepareCluster { id, .. }
-                | ClientMsg::CommitCluster { id, .. }
-                | ClientMsg::AbortCluster { id, .. },
-            ) => vec![err(Some(id), AgentError::NotReady)],
+                ClientMsg::PreviewCluster {
+                    id,
+                    recipe,
+                    nodes,
+                    head,
+                    settings,
+                },
+            ) => self.preview_cluster(id, &recipe, &nodes, head, &settings),
+
+            // Two phases, because a single-phase launch cannot fail cleanly:
+            // the third machine's refusal would leave two containers waiting
+            // forever on a rendezvous that will never complete.
+            (
+                Phase::Ready,
+                ClientMsg::PrepareCluster {
+                    id,
+                    recipe,
+                    nodes,
+                    head,
+                    settings,
+                },
+            ) => self.prepare_cluster(id, &recipe, &nodes, head, &settings),
+
+            (Phase::Ready, ClientMsg::CommitCluster { id, epoch }) => {
+                self.commit_cluster(id, &epoch)
+            }
+
+            (Phase::Ready, ClientMsg::AbortCluster { id, epoch }) => self.abort_cluster(id, &epoch),
+
+            (Phase::Ready, ClientMsg::StopCluster { id }) => self.stop_cluster(id),
+
+            (Phase::Ready, ClientMsg::LaunchStats { id, recipe }) => self.launch_stats(id, &recipe),
+
+            (Phase::Ready, ClientMsg::LaunchLogs { id, recipe, lines }) => {
+                self.launch_logs(id, &recipe, lines)
+            }
 
             (Phase::Closed, _) => Vec::new(),
-        }
-    }
-
-    /// The fleet, local node first.
-    fn nodes(&self, id: u32) -> Vec<ServerMsg> {
-        let nodes = self
-            .deps
-            .fleet
-            .map(crate::fleet::FleetView::nodes)
-            .unwrap_or_default();
-        vec![ServerMsg::Nodes { id, nodes }]
-    }
-
-    fn pair(
-        &mut self,
-        id: u32,
-        node: atlasctl_protocol::fleet::NodeId,
-        code: &str,
-    ) -> Vec<ServerMsg> {
-        let Some(fleet) = self.deps.fleet else {
-            return vec![err(Some(id), AgentError::NotReady)];
-        };
-        match fleet.pair(node, code) {
-            Ok(outcome) => vec![ServerMsg::PairResult {
-                id,
-                node,
-                paired: true,
-                verification: Some(outcome.verification),
-                detail: String::new(),
-            }],
-            // A failed pairing is reported as a result rather than an error:
-            // the page has a designed state for "that did not work", and the
-            // reason is the useful part.
-            Err(e) => vec![ServerMsg::PairResult {
-                id,
-                node,
-                paired: false,
-                verification: None,
-                detail: e.to_string(),
-            }],
-        }
-    }
-
-    fn unpair(&mut self, id: u32, node: atlasctl_protocol::fleet::NodeId) -> Vec<ServerMsg> {
-        let Some(fleet) = self.deps.fleet else {
-            return vec![err(Some(id), AgentError::NotReady)];
-        };
-        match fleet.unpair(node) {
-            Ok(was_pinned) => vec![ServerMsg::PairResult {
-                id,
-                node,
-                paired: false,
-                verification: None,
-                detail: if was_pinned {
-                    String::new()
-                } else {
-                    "that node was not paired".to_owned()
-                },
-            }],
-            Err(e) => vec![err(
-                Some(id),
-                AgentError::InvalidMessage {
-                    detail: e.to_string(),
-                },
-            )],
         }
     }
 
@@ -432,6 +472,10 @@ fn to_wire(v: &atlasctl_core::ScalarValue) -> SettingValue {
 fn err(id: Option<u32>, error: AgentError) -> ServerMsg {
     ServerMsg::Error { id, error }
 }
+
+mod fleet;
+pub mod telemetry;
+pub use telemetry::LaunchTelemetry;
 
 #[cfg(test)]
 mod tests;

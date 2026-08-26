@@ -156,6 +156,7 @@ dependencies = [
  "atlasctl-protocol",
  "serde",
  "serde_yaml_ng",
+ "sha2 0.11.0",
  "thiserror",
 ]
 

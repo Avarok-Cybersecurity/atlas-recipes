@@ -4,7 +4,6 @@
 
 pub mod meminfo;
 pub mod nvidia;
-pub mod prometheus;
 
 use atlasctl_core::io::ProcessRunner;
 use atlasctl_protocol::telemetry::{DeviceStats, TelemetryCaps};

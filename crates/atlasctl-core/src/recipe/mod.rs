@@ -2,6 +2,7 @@
 
 //! The recipe model: parse, validate, and stamp provenance.
 
+mod fingerprint;
 mod raw;
 mod topology;
 

@@ -67,6 +67,32 @@ pub enum PeerFrame {
         public_key: String,
     },
 
+    /// Render the command this rank would run, without running it.
+    ///
+    /// Asked of the rank itself rather than rendered by the head: the head does
+    /// not know what recipe revision or hardware the other machine has, and a
+    /// preview it invented would be a guess presented as the thing that will
+    /// execute.
+    PreviewRank {
+        /// What this node would be asked to do.
+        assignment: Box<RankAssignment>,
+    },
+
+    /// The command this rank would run.
+    RankPreviewed {
+        /// Shell-quoted, for reading and copying.
+        command: String,
+        /// Settings this node's flag table does not claim, so the operator can
+        /// see what will silently not apply.
+        unmapped: Vec<String>,
+    },
+
+    /// This rank cannot run the assignment, and why.
+    RankRefused {
+        /// Reason, in words the operator can act on.
+        reason: String,
+    },
+
     /// Validate and reserve for a rank. Nothing starts.
     Prepare {
         /// What this node is being asked to do.
@@ -89,10 +115,55 @@ pub enum PeerFrame {
         epoch: String,
     },
 
+    /// The rank started, and this is its container.
+    Committed {
+        /// Which prepare.
+        epoch: String,
+        /// Container id on that machine.
+        container: String,
+    },
+
+    /// A reservation was released. Acknowledged rather than answered with a
+    /// result, so a failure to release cannot mask whatever caused the
+    /// rollback that asked for it.
+    Aborted {
+        /// Which prepare.
+        epoch: String,
+    },
+
     /// Release a reservation without starting anything.
     Abort {
         /// Which prepare.
         epoch: String,
+    },
+
+    /// Is this container still running?
+    IsRankAlive {
+        /// Container id, as returned by the commit that started it.
+        container: String,
+    },
+
+    /// Whether it is.
+    RankLiveness {
+        /// Which container.
+        container: String,
+        /// Whether it is still running.
+        running: bool,
+    },
+
+    /// Stop a container this peer started as a rank.
+    ///
+    /// Names a container rather than a recipe, so a head can only stop what it
+    /// was told about — not an unrelated workload the operator is running.
+    StopRank {
+        /// Container id, as returned by the commit that started it.
+        container: String,
+    },
+
+    /// The rank was stopped, or was already not running.
+    RankStopped {
+        /// Which container.
+        container: String,
     },
 
     /// Periodic vitals, once paired.

@@ -51,8 +51,12 @@ pub struct RankAssignment {
     /// Content hash of the recipe the head used, so a worker running a
     /// different revision refuses rather than silently launching something else.
     pub recipe_hash: String,
-    /// Bounded, already-validated overrides.
-    pub settings: BTreeMap<String, String>,
+    /// Bounded overrides, still typed.
+    ///
+    /// Not flattened to strings: an integer setting would fail its own bound on
+    /// the way back in, and the receiving rank re-validates against the same
+    /// schema rather than trusting the head's word for it.
+    pub settings: BTreeMap<String, atlasctl_protocol::settings::SettingValue>,
 }
 
 /// A whole multi-node launch, ready to be prepared.
@@ -125,7 +129,7 @@ pub fn plan(
     required_nodes: u32,
     selected: &[&NodeDescriptor],
     head: NodeId,
-    settings: &BTreeMap<String, String>,
+    settings: &BTreeMap<String, atlasctl_protocol::settings::SettingValue>,
     epoch: String,
 ) -> Result<ClusterPlan, PlanError> {
     if selected.len() as u32 != required_nodes {
@@ -213,6 +217,22 @@ pub fn plan(
     })
 }
 
+/// A fresh epoch, so a prepare from one attempt can never authorize a commit
+/// from another.
+///
+/// Random rather than counted: a counter restarts at zero when the agent does,
+/// and a replayed commit from before the restart would then match a new prepare.
+#[must_use]
+pub fn new_epoch() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).expect("the OS must supply entropy");
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    })
+}
+
 /// What a worker says when asked to prepare.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
@@ -248,6 +268,19 @@ pub enum RefusalReason {
     /// Something is already running here.
     #[error("{0} is already running on this node")]
     AlreadyRunning(String),
+    /// This node has already agreed to be a rank of a different launch.
+    ///
+    /// Distinct from `AlreadyRunning` because nothing has started: an operator
+    /// told "already running" goes looking for a container that is not there.
+    /// What they actually need to do is abandon the other launch.
+    #[error(
+        "this node is already reserved for a launch of {recipe}; \
+         abort that launch, or wait for it to finish, before starting another"
+    )]
+    Reserved {
+        /// Which recipe the outstanding reservation is for.
+        recipe: String,
+    },
     /// The container runtime is unavailable.
     #[error("the container runtime is not answering on this node")]
     DockerUnavailable,

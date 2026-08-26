@@ -49,6 +49,94 @@ pub struct PeerReport {
     pub link: LinkClass,
 }
 
+/// Dial a pinned peer and complete the mutually authenticated handshake.
+///
+/// Shared by every verb that reaches another machine, so there is exactly one
+/// place that decides what "connected to the right peer" means. A second copy
+/// of this logic is how one call site ends up skipping the identity re-check.
+///
+/// # Errors
+/// If the peer cannot be reached, is not pinned, or is not the peer expected.
+pub async fn dial(
+    identity: &Identity,
+    pins: PinStore,
+    addr: SocketAddr,
+    expect: NodeId,
+) -> Result<tokio_rustls::client::TlsStream<tokio::net::TcpStream>> {
+    let cfg = client_config(identity, PinnedPeerVerifier::pinned(pins, Some(expect)))?;
+    let connector = tokio_rustls::TlsConnector::from(Arc::new(cfg));
+
+    let tcp = tokio::time::timeout(DIAL_TIMEOUT, tokio::net::TcpStream::connect(addr))
+        .await
+        .map_err(|_| anyhow::anyhow!("{addr} did not answer within {DIAL_TIMEOUT:?}"))?
+        .with_context(|| format!("connecting to {addr}"))?;
+
+    let name = rustls::pki_types::ServerName::try_from("peer.atlas.invalid")
+        .context("building a server name")?
+        .to_owned();
+    let tls = tokio::time::timeout(DIAL_TIMEOUT, connector.connect(name, tcp))
+        .await
+        .map_err(|_| anyhow::anyhow!("TLS handshake with {addr} timed out"))?
+        .context("TLS handshake")?;
+
+    // Belt and braces: the verifier already refused anything unpinned or
+    // unexpected, and this re-derives the identity from the certificate so a
+    // later refactor cannot attribute an answer to the wrong machine.
+    let peer_id = {
+        let (_, conn) = tls.get_ref();
+        let cert = conn
+            .peer_certificates()
+            .and_then(<[_]>::first)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("{addr} sent no certificate"))?;
+        peer_identity(&cert)?.0
+    };
+    if peer_id != expect {
+        bail!("reached {peer_id} at {addr}, expected {expect}");
+    }
+    Ok(tls)
+}
+
+/// Introduce ourselves on an established channel.
+///
+/// # Errors
+/// If the peer does not introduce itself back, or speaks another version.
+pub async fn exchange_hello<S>(tls: &mut S, addr: SocketAddr) -> Result<(String, bool, String)>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    write_frame(
+        tls,
+        &PeerFrame::Hello {
+            version: PEER_PROTOCOL_VERSION,
+            name: crate::discovery::local_display_name().as_str().to_owned(),
+            can_launch: true,
+            accelerator: String::new(),
+        },
+    )
+    .await?;
+
+    let hello = tokio::time::timeout(DIAL_TIMEOUT, read_frame(tls))
+        .await
+        .map_err(|_| anyhow::anyhow!("{addr} did not introduce itself"))??;
+
+    match hello {
+        PeerFrame::Hello {
+            version,
+            name,
+            can_launch,
+            accelerator,
+        } => {
+            anyhow::ensure!(
+                version == PEER_PROTOCOL_VERSION,
+                "this node speaks peer protocol {PEER_PROTOCOL_VERSION}, {name} speaks {version}"
+            );
+            Ok((name, can_launch, accelerator))
+        }
+        other => bail!("expected a hello from {addr}, got {other:?}"),
+    }
+}
+
 /// Dial a pinned peer and ask how it is.
 ///
 /// `expect` is the peer we intend to reach. Passing it means connecting to some
@@ -69,68 +157,8 @@ pub async fn query(
     expect: NodeId,
     link: LinkClass,
 ) -> Result<PeerReport> {
-    let cfg = client_config(identity, PinnedPeerVerifier::pinned(pins, Some(expect)))?;
-    let connector = tokio_rustls::TlsConnector::from(Arc::new(cfg));
-
-    let tcp = tokio::time::timeout(DIAL_TIMEOUT, tokio::net::TcpStream::connect(addr))
-        .await
-        .map_err(|_| anyhow::anyhow!("{addr} did not answer within {DIAL_TIMEOUT:?}"))?
-        .with_context(|| format!("connecting to {addr}"))?;
-
-    let name = rustls::pki_types::ServerName::try_from("peer.atlas.invalid")
-        .context("building a server name")?
-        .to_owned();
-    let mut tls = tokio::time::timeout(DIAL_TIMEOUT, connector.connect(name, tcp))
-        .await
-        .map_err(|_| anyhow::anyhow!("TLS handshake with {addr} timed out"))?
-        .context("TLS handshake")?;
-
-    // Belt and braces: the verifier already refused anything unpinned or
-    // unexpected, and this re-derives the identity from the certificate so the
-    // report cannot be attributed to the wrong machine by a later refactor.
-    let (peer_id, _) = {
-        let (_, conn) = tls.get_ref();
-        let cert = conn
-            .peer_certificates()
-            .and_then(<[_]>::first)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("{addr} sent no certificate"))?;
-        peer_identity(&cert)?
-    };
-    if peer_id != expect {
-        bail!("reached {peer_id} at {addr}, expected {expect}");
-    }
-
-    write_frame(
-        &mut tls,
-        &PeerFrame::Hello {
-            version: PEER_PROTOCOL_VERSION,
-            name: crate::discovery::local_display_name().as_str().to_owned(),
-            can_launch: true,
-            accelerator: String::new(),
-        },
-    )
-    .await?;
-
-    let hello = tokio::time::timeout(DIAL_TIMEOUT, read_frame(&mut tls))
-        .await
-        .map_err(|_| anyhow::anyhow!("{addr} did not introduce itself"))??;
-
-    let (name, can_launch, accelerator) = match hello {
-        PeerFrame::Hello {
-            version,
-            name,
-            can_launch,
-            accelerator,
-        } => {
-            anyhow::ensure!(
-                version == PEER_PROTOCOL_VERSION,
-                "this node speaks peer protocol {PEER_PROTOCOL_VERSION}, {name} speaks {version}"
-            );
-            (name, can_launch, accelerator)
-        }
-        other => bail!("expected a hello from {addr}, got {other:?}"),
-    };
+    let mut tls = dial(identity, pins, addr, expect).await?;
+    let (name, can_launch, accelerator) = exchange_hello(&mut tls, addr).await?;
 
     // Vitals are optional: an agent may be up and simply have nothing to say
     // about its hardware, which is not a failure.
@@ -141,7 +169,7 @@ pub async fn query(
     };
 
     Ok(PeerReport {
-        node: peer_id,
+        node: expect,
         name,
         can_launch,
         accelerator,
@@ -195,4 +223,103 @@ where
         .await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use atlasctl_protocol::fleet::Metric;
+
+    fn vitals() -> NodeVitals {
+        NodeVitals {
+            accelerator_util: Metric::Unsupported,
+            sm_clock_mhz: Metric::Unsupported,
+            sm_clock_healthy_mhz: None,
+            temperature_c: Metric::Unsupported,
+            power_w: Metric::Unsupported,
+            memory_used_frac: Metric::Unsupported,
+            memory_total_bytes: Metric::Unsupported,
+            disk_free_bytes: Metric::Unsupported,
+            docker_ok: false,
+            agent_uptime_s: 0,
+        }
+    }
+
+    /// A peer offers vitals unsolicited, so they can land between the request
+    /// and its answer. Reading the next frame as *the* answer mistook a vitals
+    /// sample for a preview and failed every real two-node preview.
+    #[tokio::test]
+    async fn preview_reads_past_interleaved_vitals() {
+        let (mut a, mut b) = tokio::io::duplex(1 << 16);
+
+        let responder = tokio::spawn(async move {
+            // Two vitals frames arrive before the answer.
+            for _ in 0..2 {
+                write_frame(
+                    &mut b,
+                    &PeerFrame::Vitals {
+                        vitals: Box::new(vitals()),
+                    },
+                )
+                .await
+                .unwrap();
+            }
+            write_frame(
+                &mut b,
+                &PeerFrame::RankPreviewed {
+                    command: "docker run rank1".to_owned(),
+                    unmapped: vec!["mtp_gate".to_owned()],
+                },
+            )
+            .await
+            .unwrap();
+        });
+
+        let mut got = None;
+        for _ in 0..8 {
+            match read_frame(&mut a).await.unwrap() {
+                PeerFrame::Vitals { .. } => continue,
+                PeerFrame::RankPreviewed { command, unmapped } => {
+                    got = Some((command, unmapped));
+                    break;
+                }
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        responder.await.unwrap();
+        assert_eq!(
+            got,
+            Some(("docker run rank1".to_owned(), vec!["mtp_gate".to_owned()]))
+        );
+    }
+
+    /// A peer that only ever sends vitals must not hold the preview open.
+    #[tokio::test]
+    async fn preview_gives_up_on_endless_vitals() {
+        let (mut a, mut b) = tokio::io::duplex(1 << 16);
+        tokio::spawn(async move {
+            for _ in 0..20 {
+                if write_frame(
+                    &mut b,
+                    &PeerFrame::Vitals {
+                        vitals: Box::new(vitals()),
+                    },
+                )
+                .await
+                .is_err()
+                {
+                    return;
+                }
+            }
+        });
+
+        let mut answered = false;
+        for _ in 0..8 {
+            if let Ok(PeerFrame::Vitals { .. }) = read_frame(&mut a).await {
+                continue;
+            }
+            answered = true;
+        }
+        assert!(!answered, "the loop must be bounded, not endless");
+    }
 }

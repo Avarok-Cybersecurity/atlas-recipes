@@ -7,6 +7,10 @@
 mod cli;
 mod commands;
 mod hostinfo;
+mod httpscrape;
+mod launchtelemetry;
+mod peertransport;
+mod rankservice;
 mod validate;
 
 use anyhow::Result;

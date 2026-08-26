@@ -22,6 +22,15 @@ pub struct RankPreview {
     pub master_addr: String,
     /// The command, shell-quoted for reading and copying.
     pub command: String,
+    /// Values this machine's flag table does not claim, and which therefore
+    /// reach nothing.
+    ///
+    /// Reported per rank rather than once, because the machines can be running
+    /// different revisions: a value that lands on rank 0 can be silently
+    /// dropped on rank 1, and that asymmetry is exactly what an operator needs
+    /// to see. The tool this replaces discarded these without a word, which is
+    /// how a recipe's stated correctness pin went unapplied for months.
+    pub unmapped: Vec<String>,
 }
 
 /// One rank's answer to a prepare.
@@ -37,6 +46,22 @@ pub struct RankPrepare {
     pub prepared: bool,
     /// Why not, when it refused.
     pub reason: String,
+}
+
+/// One rank that started.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RankStarted {
+    /// Which node.
+    pub node: NodeId,
+    /// Its display name.
+    pub name: DisplayName,
+    /// Rank number.
+    pub rank: u16,
+    /// Container id on that machine.
+    pub container: String,
+    /// Where the API is, for rank 0. Worker ranks serve nothing and carry
+    /// `None` rather than a URL that would not answer.
+    pub endpoint: Option<String>,
 }
 
 /// Something that happened to the fleet.

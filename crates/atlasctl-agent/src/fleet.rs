@@ -84,6 +84,7 @@ pub struct LocalFleet {
     name: DisplayName,
     /// Where this machine's vitals come from, when anything can supply them.
     vitals: Option<Box<dyn VitalsSource>>,
+    running_source: Option<Box<dyn vitals::RunningSource>>,
     /// Beacons seen, by node id.
     seen: Mutex<BTreeMap<NodeId, Seen>>,
     /// Alerts currently raised, by node.
@@ -125,11 +126,33 @@ impl LocalFleet {
             accelerator,
             name,
             vitals: None,
+            running_source: None,
             seen: Mutex::new(BTreeMap::new()),
             alerts: Mutex::new(BTreeMap::new()),
             running: Mutex::new(None),
             reports: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// Attach a source for what this machine is serving.
+    #[must_use]
+    pub fn with_running(mut self, source: Box<dyn vitals::RunningSource>) -> Self {
+        self.running_source = Some(source);
+        self
+    }
+
+    /// Re-read what is running here, and report whether it changed.
+    ///
+    /// Returns the new value only when it differs, so a caller can push an
+    /// event on a change instead of on every tick.
+    pub fn refresh_running(&self) -> Option<Option<String>> {
+        let found = self.running_source.as_ref()?.running();
+        let mut held = self.running.lock().ok()?;
+        if *held == found {
+            return None;
+        }
+        *held = found.clone();
+        Some(found)
     }
 
     /// Attach a source for this machine's vitals.
@@ -350,4 +373,7 @@ pub fn no_vitals() -> NodeVitals {
 mod listing;
 pub mod vitals;
 
-pub use vitals::{SystemVitals, VitalsSource, docker_probe_argv, vitals_from_device};
+pub use vitals::{
+    DockerRunning, RunningSource, SystemVitals, VitalsSource, docker_probe_argv,
+    running_probe_argv, vitals_from_device,
+};

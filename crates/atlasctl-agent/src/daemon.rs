@@ -20,6 +20,7 @@
 
 use crate::discovery::{Advertiser, Beacon, DiscoveryBrowser, DiscoveryEvent};
 use crate::fleet::{FleetView, LocalFleet};
+use crate::rank::RankService;
 use atlasctl_protocol::msg::ServerMsg;
 use atlasctl_protocol::msg::fleet::FleetEvent;
 use std::sync::Arc;
@@ -67,12 +68,14 @@ pub fn spawn_peer_work(
     pins: crate::identity::PinStore,
     events: broadcast::Sender<ServerMsg>,
     peer_port: u16,
+    rank: Arc<dyn RankService>,
 ) {
     spawn_peer_listener(
         Arc::clone(&fleet),
         Arc::clone(&identity),
         pins.clone(),
         peer_port,
+        rank,
     );
     spawn_peer_poll(fleet, identity, pins, events, peer_port);
 }
@@ -83,6 +86,7 @@ fn spawn_peer_listener(
     identity: Arc<crate::identity::Identity>,
     pins: crate::identity::PinStore,
     port: u16,
+    rank: Arc<dyn RankService>,
 ) {
     tokio::spawn(async move {
         // Pinned-only: an unpaired agent is refused during the handshake, so
@@ -115,6 +119,7 @@ fn spawn_peer_listener(
             };
             let acceptor = acceptor.clone();
             let fleet = Arc::clone(&fleet);
+            let rank = Arc::clone(&rank);
             tokio::spawn(async move {
                 let Ok(mut tls) = acceptor.accept(tcp).await else {
                     // An unpaired caller failing the handshake is the system
@@ -122,14 +127,22 @@ fn spawn_peer_listener(
                     return;
                 };
                 let vitals = fleet.local_vitals_and_id().map(|(_, v)| v);
-                let _ = crate::peer::link::serve_query(
+                if crate::peer::link::serve_query(
                     &mut tls,
                     crate::discovery::local_display_name().as_str(),
                     fleet.can_launch(),
                     "",
                     vitals,
                 )
-                .await;
+                .await
+                .is_err()
+                {
+                    return;
+                }
+                // The peer may go on to ask this rank to describe what it would
+                // run. Rendering happens here, on the machine that would
+                // execute it, from this machine's own vendored recipe.
+                serve_rank_requests(&mut tls, &rank).await;
             });
         }
     });
@@ -254,7 +267,28 @@ fn spawn_vitals(fleet: Arc<LocalFleet>, events: broadcast::Sender<ServerMsg>) {
             }
             let fleet = Arc::clone(&fleet);
             // Sampling shells out, so it must not run on the async runtime.
-            let sampled = tokio::task::spawn_blocking(move || fleet.local_vitals_and_id()).await;
+            let sampled = tokio::task::spawn_blocking(move || {
+                // Both shell out, so they share the blocking hop.
+                let changed = fleet.refresh_running().is_some();
+                // Re-read after refreshing, so a node whose running model just
+                // changed is described as it is now rather than as it was.
+                let local = changed.then(|| fleet.nodes().into_iter().next());
+                (fleet.local_vitals_and_id(), local)
+            })
+            .await;
+            let sampled = match sampled {
+                Ok((v, local)) => {
+                    if let Some(Some(node)) = local {
+                        let _ = events.send(ServerMsg::FleetEvent {
+                            event: FleetEvent::NodeChanged {
+                                node: Box::new(node),
+                            },
+                        });
+                    }
+                    Ok(v)
+                }
+                Err(e) => Err(e),
+            };
             if let Ok(Some((id, vitals))) = sampled {
                 let _ = events.send(ServerMsg::FleetEvent {
                     event: FleetEvent::Vitals {
@@ -284,4 +318,66 @@ fn spawn_prune(fleet: Arc<LocalFleet>, events: broadcast::Sender<ServerMsg>) {
             }
         }
     });
+}
+
+/// Answer a paired peer's questions about what this rank would run.
+///
+/// Only reached after the TLS verifier confirmed the caller is pinned, so there
+/// is no authorization decision here — only rendering, from this machine's own
+/// copy of the recipe.
+async fn serve_rank_requests<S>(stream: &mut S, rank: &Arc<dyn RankService>)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use crate::peer::wire::{PeerFrame, read_frame, write_frame};
+    loop {
+        let Ok(frame) = read_frame(stream).await else {
+            return;
+        };
+        let reply = match frame {
+            PeerFrame::PreviewRank { assignment } => match rank.render(&assignment) {
+                Ok((command, unmapped)) => PeerFrame::RankPreviewed { command, unmapped },
+                Err(e) => PeerFrame::RankRefused {
+                    reason: e.to_string(),
+                },
+            },
+            PeerFrame::Prepare { assignment, epoch } => PeerFrame::Prepared {
+                reply: rank.prepare(&epoch, &assignment),
+                epoch,
+            },
+            // Commit deliberately carries no assignment: what starts is what
+            // this machine rendered and stored at prepare time, so a head
+            // compromised between the phases cannot substitute anything.
+            PeerFrame::Commit { epoch } => match rank.commit(&epoch) {
+                Ok(container) => PeerFrame::Committed { epoch, container },
+                Err(e) => PeerFrame::RankRefused {
+                    reason: e.to_string(),
+                },
+            },
+            // Abort is acknowledged rather than answered with a result: the
+            // head is already rolling back, and a failure to release must not
+            // mask whatever caused the rollback.
+            // Acknowledged whether or not the container was there: a rollback
+            // asking twice, or asking about a rank that never started, is an
+            // ordinary race and not something the head can act on.
+            PeerFrame::IsRankAlive { container } => PeerFrame::RankLiveness {
+                // Unaskable is not alive: a rank whose state we cannot read
+                // must not be counted as part of a whole cluster.
+                running: rank.alive(&container).unwrap_or(false),
+                container,
+            },
+            PeerFrame::StopRank { container } => {
+                let _ = rank.stop(&container);
+                PeerFrame::RankStopped { container }
+            }
+            PeerFrame::Abort { epoch } => {
+                rank.abort(&epoch);
+                PeerFrame::Aborted { epoch }
+            }
+            _ => return,
+        };
+        if write_frame(stream, &reply).await.is_err() {
+            return;
+        }
+    }
 }

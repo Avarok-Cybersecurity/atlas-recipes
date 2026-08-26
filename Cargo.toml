@@ -24,6 +24,7 @@ repository = "https://github.com/Avarok-Cybersecurity/atlas-recipes"
 authors = ["Avarok Cybersecurity"]
 
 [workspace.dependencies]
+sha2 = "0.11"
 atlas-recipes-data = { path = ".", version = "0.1.1" }
 atlasctl-core = { path = "crates/atlasctl-core", version = "0.1.1" }
 atlasctl-protocol = { path = "crates/atlasctl-protocol", version = "0.1.1" }

@@ -46,6 +46,13 @@ pub struct AgentState {
     /// `None` for a single-node agent, which is a normal configuration rather
     /// than a degraded one.
     pub fleet: Option<Box<dyn crate::fleet::FleetView>>,
+    /// Renders a cluster preview by asking each rank.
+    ///
+    /// `None` on an agent that cannot reach peers, which is answered plainly
+    /// rather than by inventing a preview.
+    pub cluster: Option<Box<dyn crate::session::ClusterControl>>,
+    /// Sampling a running launch, when this agent can.
+    pub telemetry: Option<Box<dyn crate::session::LaunchTelemetry>>,
     /// Fleet changes pushed to every authenticated session.
     ///
     /// A broadcast channel rather than a per-session queue: a slow tab must not
@@ -127,6 +134,8 @@ async fn run_session(mut socket: ws::WebSocket, state: Arc<AgentState>) {
         token: &state.token,
         can_launch: state.can_launch.clone(),
         fleet: state.fleet.as_deref(),
+        cluster: state.cluster.as_deref(),
+        telemetry: state.telemetry.as_deref(),
     });
 
     if send(&mut socket, &welcome).await.is_err() {
