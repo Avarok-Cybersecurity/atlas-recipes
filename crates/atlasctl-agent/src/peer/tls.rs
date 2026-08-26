@@ -131,10 +131,51 @@ pub struct PinnedPeerVerifier {
     /// we intend to reach, so connecting to the wrong node is an error rather
     /// than a silent success.
     expect: Option<NodeId>,
-    /// Accept an unpinned peer. Only ever true inside the pairing ceremony,
-    /// where the SPAKE2 exchange supplies the authentication instead.
-    allow_unpinned: bool,
+    /// When an unpinned peer is acceptable.
+    ///
+    /// Only inside the pairing ceremony, where SPAKE2 supplies the
+    /// authentication a pin would otherwise. It is a gate rather than a
+    /// constant because the agent's own listener has to answer this
+    /// differently over time: a stranger is refused at the handshake, except
+    /// during the short window in which a human minted a join code.
+    allow_unpinned: Unpinned,
     supported: rustls::crypto::WebPkiSupportedAlgorithms,
+}
+
+/// When a peer that is not pinned may still complete a handshake.
+#[derive(Clone)]
+pub enum Unpinned {
+    /// Never. The listener's ordinary posture.
+    Never,
+    /// Always — the dialling side of a pairing, which has a code in hand.
+    Always,
+    /// Only while this answers true, i.e. while a join code is outstanding.
+    ///
+    /// Consulted per handshake, so the window closes the moment the code is
+    /// used or expires. Refusing at the handshake rather than after keeps a
+    /// stranger's reach limited to rustls' ClientHello handling for all the
+    /// time no one is joining, which is almost all of it.
+    While(Arc<dyn Fn() -> bool + Send + Sync>),
+}
+
+impl std::fmt::Debug for Unpinned {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Never => "Never",
+            Self::Always => "Always",
+            Self::While(_) => "While(..)",
+        })
+    }
+}
+
+impl Unpinned {
+    fn allows(&self) -> bool {
+        match self {
+            Self::Never => false,
+            Self::Always => true,
+            Self::While(f) => f(),
+        }
+    }
 }
 
 impl PinnedPeerVerifier {
@@ -144,7 +185,7 @@ impl PinnedPeerVerifier {
         Arc::new(Self {
             pins,
             expect,
-            allow_unpinned: false,
+            allow_unpinned: Unpinned::Never,
             supported: rustls::crypto::ring::default_provider().signature_verification_algorithms,
         })
     }
@@ -156,7 +197,21 @@ impl PinnedPeerVerifier {
         Arc::new(Self {
             pins,
             expect: None,
-            allow_unpinned: true,
+            allow_unpinned: Unpinned::Always,
+            supported: rustls::crypto::ring::default_provider().signature_verification_algorithms,
+        })
+    }
+
+    /// A verifier that accepts an unpinned peer only while `gate` says so.
+    ///
+    /// The agent's listener uses this: pinned peers always, a stranger only
+    /// inside a join window a human opened.
+    #[must_use]
+    pub fn while_joining(pins: PinStore, gate: Arc<dyn Fn() -> bool + Send + Sync>) -> Arc<Self> {
+        Arc::new(Self {
+            pins,
+            expect: None,
+            allow_unpinned: Unpinned::While(gate),
             supported: rustls::crypto::ring::default_provider().signature_verification_algorithms,
         })
     }
@@ -173,7 +228,7 @@ impl PinnedPeerVerifier {
                 "connected to {id}, expected {expected}"
             )));
         }
-        if self.allow_unpinned {
+        if self.allow_unpinned.allows() {
             return Ok(());
         }
         let pinned = self
