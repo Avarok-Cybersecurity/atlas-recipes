@@ -180,3 +180,130 @@ fn free_bytes(path: &std::path::Path) -> Option<f64> {
         None
     }
 }
+
+/// What this machine is currently serving.
+///
+/// Read from the container runtime rather than remembered from a launch this
+/// process performed, so an agent that was restarted still reports the model it
+/// left running. An agent that forgot its own containers on restart would
+/// report an idle machine that is in fact holding a GPU.
+pub trait RunningSource: Send + Sync {
+    /// The recipe running here, if any.
+    fn running(&self) -> Option<String>;
+}
+
+/// Argv that lists the recipes of managed containers still running.
+///
+/// Filtered by our own label, so an operator's unrelated containers are neither
+/// listed nor confused for ours.
+#[must_use]
+pub fn running_probe_argv() -> Vec<String> {
+    vec![
+        "docker".into(),
+        "ps".into(),
+        "--filter".into(),
+        format!(
+            "label={}=1",
+            atlasctl_core::docker::translate::LABEL_MANAGED
+        ),
+        "--format".into(),
+        format!(
+            "{{{{.Label \"{}\"}}}}",
+            atlasctl_core::docker::translate::LABEL_RECIPE
+        ),
+    ]
+}
+
+/// Reads it from the container runtime.
+pub struct DockerRunning(pub std::sync::Arc<dyn atlasctl_core::io::ProcessRunner>);
+
+impl RunningSource for DockerRunning {
+    fn running(&self) -> Option<String> {
+        let out = self.0.run(&running_probe_argv()).ok()?;
+        if !out.success() {
+            return None;
+        }
+        // First non-empty line. More than one managed container can be up — a
+        // cluster rank plus a solo launch — and naming one is better than
+        // naming none; the launch surface shows the full picture.
+        out.stdout
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .map(str::to_owned)
+    }
+}
+
+#[cfg(test)]
+mod running_tests {
+    use super::*;
+    use atlasctl_core::io::RecordingRunner;
+    use atlasctl_core::io::process::Output;
+    use std::sync::Arc;
+
+    /// An operator's own containers must not be listed as ours, nor ours
+    /// confused for theirs.
+    #[test]
+    fn the_probe_asks_only_for_containers_we_manage() {
+        let argv = running_probe_argv();
+        assert_eq!(argv[0], "docker");
+        assert!(
+            argv.iter().any(|a| a.contains("io.atlasctl.managed=1")),
+            "{argv:?}"
+        );
+        assert!(
+            argv.iter().any(|a| a.contains("io.atlasctl.recipe")),
+            "{argv:?}"
+        );
+    }
+
+    #[test]
+    fn a_running_recipe_is_reported() {
+        let r = Arc::new(RecordingRunner::new());
+        r.push_result(Output {
+            status: 0,
+            stdout: "qwen3.6-35b-a3b-fp8-bf16head\n".to_owned(),
+            stderr: String::new(),
+        });
+        let src = DockerRunning(Arc::clone(&r) as Arc<dyn atlasctl_core::io::ProcessRunner>);
+        assert_eq!(
+            src.running().as_deref(),
+            Some("qwen3.6-35b-a3b-fp8-bf16head")
+        );
+    }
+
+    #[test]
+    fn nothing_running_is_reported_as_nothing() {
+        let r = Arc::new(RecordingRunner::new());
+        let src = DockerRunning(Arc::clone(&r) as Arc<dyn atlasctl_core::io::ProcessRunner>);
+        assert_eq!(src.running(), None);
+    }
+
+    /// A container runtime that is not answering is not the same as an idle
+    /// machine, and neither is reported as a recipe.
+    #[test]
+    fn an_unavailable_runtime_reports_nothing_rather_than_garbage() {
+        let r = Arc::new(RecordingRunner::new());
+        r.push_result(Output {
+            status: 1,
+            stdout: String::new(),
+            stderr: "Cannot connect to the Docker daemon".to_owned(),
+        });
+        let src = DockerRunning(Arc::clone(&r) as Arc<dyn atlasctl_core::io::ProcessRunner>);
+        assert_eq!(src.running(), None);
+    }
+
+    /// Blank lines come back for a container whose label is missing; they are
+    /// not a recipe name.
+    #[test]
+    fn blank_lines_are_not_recipe_names() {
+        let r = Arc::new(RecordingRunner::new());
+        r.push_result(Output {
+            status: 0,
+            stdout: "\n\n  \nreal-recipe\n".to_owned(),
+            stderr: String::new(),
+        });
+        let src = DockerRunning(Arc::clone(&r) as Arc<dyn atlasctl_core::io::ProcessRunner>);
+        assert_eq!(src.running().as_deref(), Some("real-recipe"));
+    }
+}

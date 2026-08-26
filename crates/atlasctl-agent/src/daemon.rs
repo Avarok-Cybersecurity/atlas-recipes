@@ -267,7 +267,28 @@ fn spawn_vitals(fleet: Arc<LocalFleet>, events: broadcast::Sender<ServerMsg>) {
             }
             let fleet = Arc::clone(&fleet);
             // Sampling shells out, so it must not run on the async runtime.
-            let sampled = tokio::task::spawn_blocking(move || fleet.local_vitals_and_id()).await;
+            let sampled = tokio::task::spawn_blocking(move || {
+                // Both shell out, so they share the blocking hop.
+                let changed = fleet.refresh_running().is_some();
+                // Re-read after refreshing, so a node whose running model just
+                // changed is described as it is now rather than as it was.
+                let local = changed.then(|| fleet.nodes().into_iter().next());
+                (fleet.local_vitals_and_id(), local)
+            })
+            .await;
+            let sampled = match sampled {
+                Ok((v, local)) => {
+                    if let Some(Some(node)) = local {
+                        let _ = events.send(ServerMsg::FleetEvent {
+                            event: FleetEvent::NodeChanged {
+                                node: Box::new(node),
+                            },
+                        });
+                    }
+                    Ok(v)
+                }
+                Err(e) => Err(e),
+            };
             if let Ok(Some((id, vitals))) = sampled {
                 let _ = events.send(ServerMsg::FleetEvent {
                     event: FleetEvent::Vitals {

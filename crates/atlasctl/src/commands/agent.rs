@@ -125,7 +125,10 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         launchability,
         String::new(),
     )
-    .with_vitals(Box::new(vitals));
+    .with_vitals(Box::new(vitals))
+    .with_running(Box::new(atlasctl_agent::fleet::DockerRunning(Arc::clone(
+        &runner,
+    ))));
 
     let fleet = Arc::new(fleet);
     let (events, _keep) = tokio::sync::broadcast::channel(256);
