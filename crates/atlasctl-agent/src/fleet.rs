@@ -414,3 +414,123 @@ pub fn record_pairing(
 pub fn no_vitals() -> NodeVitals {
     NodeVitals::default()
 }
+
+/// Vitals read from this machine.
+///
+/// Capabilities are probed once at construction, because the answer does not
+/// change while the agent runs and re-probing every second would spawn a
+/// process every second. Individual readings are taken per sample.
+pub struct SystemVitals {
+    runner: std::sync::Arc<dyn atlasctl_core::io::ProcessRunner>,
+    caps: atlasctl_protocol::telemetry::TelemetryCaps,
+    started: Instant,
+    /// Filesystem whose free space matters — images and the model cache.
+    disk_path: std::path::PathBuf,
+}
+
+impl std::fmt::Debug for SystemVitals {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SystemVitals")
+            .field("caps", &self.caps)
+            .finish_non_exhaustive()
+    }
+}
+
+impl SystemVitals {
+    /// Probe this machine's telemetry capabilities and start sampling.
+    #[must_use]
+    pub fn new(
+        runner: std::sync::Arc<dyn atlasctl_core::io::ProcessRunner>,
+        disk_path: std::path::PathBuf,
+    ) -> Self {
+        let caps = crate::telemetry::probe(runner.as_ref());
+        Self {
+            runner,
+            caps,
+            started: Instant::now(),
+            disk_path,
+        }
+    }
+
+    /// What this machine can answer.
+    #[must_use]
+    pub const fn caps(&self) -> &atlasctl_protocol::telemetry::TelemetryCaps {
+        &self.caps
+    }
+}
+
+impl VitalsSource for SystemVitals {
+    fn vitals(&self) -> NodeVitals {
+        // `busy` drives the clamp decision, and it is the agent's call rather
+        // than the client's: an idle part at a low clock is normal, the same
+        // clock under load is the failure that hides for weeks.
+        let device = crate::telemetry::sample_device(self.runner.as_ref(), &self.caps, false);
+        let disk = free_bytes(&self.disk_path);
+        let docker_ok = self
+            .runner
+            .run(&docker_probe_argv())
+            .is_ok_and(|o| o.success());
+        vitals_from_device(
+            &device,
+            disk,
+            docker_ok,
+            self.started.elapsed().as_secs(),
+            self.caps.sm_clock_healthy_mhz,
+        )
+    }
+}
+
+/// The one way this project asks whether the container runtime is answering.
+///
+/// `docker info` exposes `.ServerVersion`; `docker version` does not — its
+/// field is `.Server.Version`, and asking `version` for `.ServerVersion` exits
+/// non-zero with a template error on Docker 29. That is a silent way to report
+/// a healthy daemon as unreachable, so there is exactly one definition of the
+/// probe and both callers use it.
+#[must_use]
+pub fn docker_probe_argv() -> Vec<String> {
+    vec![
+        "docker".to_owned(),
+        "info".to_owned(),
+        "--format".to_owned(),
+        "{{.ServerVersion}}".to_owned(),
+    ]
+}
+
+/// Free bytes on the filesystem holding `path`, when it can be determined.
+///
+/// A full model cache is a leading cause of launch failure, so this is worth
+/// reporting even though it needs a platform call.
+fn free_bytes(path: &std::path::Path) -> Option<f64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        // The cache directory may not exist yet on a fresh install, and statvfs
+        // on a missing path fails. What matters is the filesystem that WOULD
+        // hold it, so walk up to the nearest ancestor that does exist.
+        let mut probe = path;
+        while !probe.exists() {
+            match probe.parent() {
+                Some(parent) => probe = parent,
+                None => return None,
+            }
+        }
+        let c = std::ffi::CString::new(probe.as_os_str().as_bytes()).ok()?;
+        // SAFETY: `c` is a valid NUL-terminated path and `stat` is written only
+        // by the call, which reports success before we read it.
+        let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statvfs(c.as_ptr(), &raw mut stat) } != 0 {
+            return None;
+        }
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "free space is displayed in gigabytes"
+        )]
+        Some(stat.f_bavail as f64 * stat.f_frsize as f64)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
+}

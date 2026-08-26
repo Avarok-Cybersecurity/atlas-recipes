@@ -18,12 +18,7 @@ use std::sync::Arc;
 /// "this box cannot launch" instead of offering a button that will fail. A
 /// machine that cannot launch is still useful: it can list and inspect.
 fn probe_can_launch(runner: &dyn ProcessRunner) -> Result<(), String> {
-    match runner.run(&[
-        "docker".into(),
-        "info".into(),
-        "--format".into(),
-        "{{.ServerVersion}}".into(),
-    ]) {
+    match runner.run(&atlasctl_agent::fleet::docker_probe_argv()) {
         Ok(out) if out.success() => Ok(()),
         Ok(out) => Err(format!(
             "the docker daemon did not answer: {}",
@@ -40,6 +35,55 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     let runner: Arc<dyn ProcessRunner> = Arc::new(StdProcessRunner);
     let can_launch = probe_can_launch(runner.as_ref());
 
+    // The fleet view is what makes /control show real machines. It is built
+    // from this box's own facts — identity, links, launchability — so a fresh
+    // agent shows itself correctly before any peer exists.
+    let identity = atlasctl_agent::identity::Identity::load_or_create(&config_dir)?;
+    use atlasctl_agent::fabric::FabricProvider as _;
+    let fabric = atlasctl_agent::fabric::linux::LinuxFabric::new();
+    let addresses = fabric.addresses().unwrap_or_default();
+    let launchability = match &can_launch {
+        Ok(()) => atlasctl_protocol::fleet::Launchability::yes(),
+        Err(why) => atlasctl_protocol::fleet::Launchability::no(why.clone()),
+    };
+    eprintln!("node identity: {}", identity.id().short());
+    if addresses.is_empty() {
+        eprintln!("no usable network link — this agent cannot take part in a cluster");
+    } else {
+        eprintln!(
+            "cluster address: {} ({})",
+            addresses[0].addr,
+            addresses[0].class.label()
+        );
+    }
+    // Real vitals for this machine. Capabilities are probed once here rather
+    // than per sample: on a GB10 that probe is what discovers there is no
+    // framebuffer to report, and the answer does not change while we run.
+    let vitals = atlasctl_agent::fleet::SystemVitals::new(
+        Arc::clone(&runner),
+        hostinfo::cache_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")),
+    );
+    eprintln!(
+        "telemetry: gpu={} clock={} memory={}",
+        vitals.caps().gpu_util,
+        vitals.caps().sm_clock,
+        if vitals.caps().unified_memory {
+            "unified"
+        } else {
+            "none"
+        }
+    );
+
+    let fleet = atlasctl_agent::fleet::LocalFleet::new(
+        identity,
+        atlasctl_agent::identity::PinStore::new(&config_dir),
+        atlasctl_agent::discovery::local_display_name(),
+        addresses,
+        launchability,
+        String::new(),
+    )
+    .with_vitals(Box::new(vitals));
+
     let state = Arc::new(AgentState {
         registry: crate::commands::registry_set()?,
         launcher: Box::new(DockerLauncher::new(
@@ -52,6 +96,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         can_launch: can_launch.clone(),
         port: args.port,
         allow_dev_origins: args.dev_origins,
+        fleet: Some(Box::new(fleet)),
     });
 
     eprintln!("atlasctl agent listening on 127.0.0.1:{}", args.port);
@@ -106,4 +151,121 @@ pub fn status() -> Result<()> {
             bail!("no agent is listening on {addr}")
         }
     }
+}
+
+/// Print a code for joining this machine to a fleet, and accept one pairing.
+///
+/// The code is shown HERE and typed on the machine doing the adding. That
+/// direction is the entire reason a hostile web page cannot pair anything: it
+/// would have to know a code it never saw, on a screen it cannot read.
+///
+/// # Errors
+/// If the identity cannot be loaded or the peer port cannot be bound.
+pub fn pair(args: &crate::cli::AgentPairArgs) -> Result<()> {
+    use atlasctl_agent::identity::{Identity, PinStore};
+    use atlasctl_agent::pairing::{CODE_TTL_SECS, PairingCode};
+    use atlasctl_agent::peer::pair::{Role, run};
+    use atlasctl_agent::peer::tls::{PinnedPeerVerifier, peer_identity, server_config};
+    use atlasctl_protocol::fleet::DisplayName;
+    use std::sync::Arc;
+
+    let dir = hostinfo::config_dir()?;
+    let identity = Identity::load_or_create(&dir)?;
+    let pins = PinStore::new(&dir);
+    let code = PairingCode::generate();
+
+    println!();
+    println!("  Pairing code:  {}", code.grouped());
+    println!();
+    println!("  On the other machine, run:");
+    println!(
+        "      atlasctl peer add {} --code {}",
+        hostname_hint(),
+        code.as_str()
+    );
+    println!();
+    println!("  This code is good for {CODE_TTL_SECS} seconds and for one attempt.");
+    println!("  Waiting…");
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("starting a runtime")?;
+
+    let paired = runtime.block_on(async {
+        let cfg = server_config(&identity, PinnedPeerVerifier::pairing(pins.clone()))?;
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(cfg));
+        let listener = tokio::net::TcpListener::bind(("0.0.0.0", args.port))
+            .await
+            .with_context(|| format!("binding the peer port {}", args.port))?;
+
+        let accept = async {
+            let (tcp, _) = listener.accept().await?;
+            let mut tls = acceptor.accept(tcp).await.context("TLS handshake")?;
+            let (_, conn) = tls.get_ref();
+            let cert = conn
+                .peer_certificates()
+                .and_then(<[_]>::first)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("the other machine sent no certificate"))?;
+            let (peer_id, _) = peer_identity(&cert)?;
+            let binding = atlasctl_agent::pairing::binding_from_server(conn)?;
+            run(
+                &mut tls,
+                Role::Responder,
+                &identity,
+                peer_id,
+                code.as_str(),
+                binding,
+            )
+            .await
+        };
+
+        // The code expires on its own, so an unattended terminal does not leave
+        // a pairing window open indefinitely.
+        tokio::time::timeout(std::time::Duration::from_secs(CODE_TTL_SECS), accept)
+            .await
+            .map_err(|_| anyhow::anyhow!("nobody paired within {CODE_TTL_SECS} seconds"))?
+    })?;
+
+    println!();
+    println!("  Verification words:  {}", paired.verification);
+    println!();
+    println!("  The other machine is showing the same words. If it is not,");
+    println!("  answer no — something is relaying this connection.");
+    println!();
+    print!("  Do they match? [y/N] ");
+    use std::io::Write;
+    std::io::stdout().flush().ok();
+    let mut answer = String::new();
+    std::io::stdin()
+        .read_line(&mut answer)
+        .context("reading confirmation")?;
+    if !matches!(answer.trim(), "y" | "Y" | "yes") {
+        println!("Nothing was trusted.");
+        return Ok(());
+    }
+
+    atlasctl_agent::fleet::record_pairing(
+        &pins,
+        paired.node,
+        &paired.public_key,
+        DisplayName::new(&paired.name),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs()),
+    )?;
+    println!("Paired with {} ({}).", paired.name, paired.node.short());
+    Ok(())
+}
+
+/// A hostname the other machine can probably reach us on.
+///
+/// Only ever printed as a hint in a copy-pasteable command — the address that
+/// actually matters is whichever one the operator can route to, and they are
+/// the ones who know that.
+fn hostname_hint() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .map(|h| h.trim().to_owned())
+        .unwrap_or_else(|_| "<this-machine>".to_owned())
 }

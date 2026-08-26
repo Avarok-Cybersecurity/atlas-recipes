@@ -30,6 +30,7 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 rcgen = { version = "0.14", default-features = false, features = ["pem", "crypto", "ring"] }
 spake2 = "0.4"
 rustls-pki-types = "1.15.1"
+libc = "0.2"
 
 [dev-dependencies]
 # The recording mocks are feature-gated so they never ship in a release build.
