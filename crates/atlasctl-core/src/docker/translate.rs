@@ -88,6 +88,25 @@ pub enum TranslateError {
         /// Nodes the placement offers.
         supplied: u32,
     },
+
+    /// The rendezvous address is not an address.
+    ///
+    /// It arrives from the head over the peer channel and is the one value in a
+    /// rank's command line that a rank cannot derive for itself. Everything
+    /// else the head sends is bounded by the settings schema; without this,
+    /// this one field was an unbounded string going straight into argv, which
+    /// let a paired head append serve flags to another machine's command line.
+    #[error(
+        "{name}: rendezvous address {addr:?} is not an IP address. The head \
+         chooses it from addresses this fleet actually reported, so anything \
+         else means the plan did not come from where it claims."
+    )]
+    BadRendezvousAddress {
+        /// Recipe name.
+        name: String,
+        /// What was offered.
+        addr: String,
+    },
 }
 
 /// The injected policy a launch runs under.
@@ -160,6 +179,14 @@ pub fn translate(
         serve_flags.push(rank.to_string());
         serve_flags.push("--world-size".into());
         serve_flags.push(world_size.to_string());
+        // Parsed, not trusted. This is the only value in a rank's command line
+        // that comes from another machine, and it reaches argv directly.
+        if master_addr.parse::<std::net::IpAddr>().is_err() {
+            return Err(TranslateError::BadRendezvousAddress {
+                name: recipe.name.clone(),
+                addr: master_addr.clone(),
+            });
+        }
         serve_flags.push("--master-addr".into());
         serve_flags.push(master_addr.clone());
         serve_flags.push("--master-port".into());
