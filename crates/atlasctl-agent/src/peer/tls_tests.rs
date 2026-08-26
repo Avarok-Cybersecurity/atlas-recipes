@@ -46,6 +46,7 @@ fn pin_of(store: &PinStore, who: &Identity) {
             public_key: hex::encode(who.public().as_bytes()),
             name: DisplayName::new("peer"),
             paired_at: 0,
+            last_address: None,
         })
         .expect("pin");
 }

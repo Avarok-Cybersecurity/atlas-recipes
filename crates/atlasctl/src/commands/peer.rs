@@ -129,6 +129,7 @@ pub fn add(args: &PeerAddArgs) -> Result<()> {
         &paired.public_key,
         DisplayName::new(&paired.name),
         now_unix(),
+        Some(addr.ip().to_string()),
     )?;
     println!("Paired with {} ({}).", paired.name, paired.node.short());
     Ok(())

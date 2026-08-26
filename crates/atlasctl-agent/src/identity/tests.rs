@@ -80,6 +80,7 @@ fn pin_for(id: NodeId, key: &VerifyingKey) -> Pin {
         public_key: hex::encode(key.as_bytes()),
         name: DisplayName::new("spark-43fa"),
         paired_at: 1_756_000_000,
+        last_address: None,
     }
 }
 

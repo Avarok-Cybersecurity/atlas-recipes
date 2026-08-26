@@ -170,6 +170,15 @@ pub struct Pin {
     pub name: DisplayName,
     /// When it was paired, as a unix timestamp.
     pub paired_at: u64,
+    /// Where it was last seen.
+    ///
+    /// Remembered so that restarting this agent does not blank a paired
+    /// machine's address until mDNS happens to re-announce it — which can take
+    /// a minute on a quiet network and looks exactly like the peer having no
+    /// usable link. Defaulted so pin files written before this field still
+    /// load.
+    #[serde(default)]
+    pub last_address: Option<String>,
 }
 
 /// The set of peers this machine trusts.

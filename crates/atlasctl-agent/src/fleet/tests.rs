@@ -128,6 +128,7 @@ fn a_paired_node_that_is_switched_off_stays_in_the_fleet_as_unreachable() {
         &hex::encode(peer.public().as_bytes()),
         DisplayName::new("spark-43fa"),
         1_756_000_000,
+        None,
     )
     .expect("pin");
 
@@ -156,6 +157,7 @@ fn a_paired_node_that_is_answering_is_reported_as_paired() {
         &hex::encode(peer.public().as_bytes()),
         DisplayName::new("spark-43fa"),
         0,
+        None,
     )
     .expect("pin");
     f.observe(beacon(peer.id(), "spark-43fa", true));
@@ -183,6 +185,7 @@ fn a_node_is_listed_once_even_when_pinned_and_seen() {
         &hex::encode(peer.public().as_bytes()),
         DisplayName::new("p"),
         0,
+        None,
     )
     .expect("pin");
     f.observe(beacon(peer.id(), "p", true));
@@ -251,6 +254,7 @@ fn unpairing_reports_whether_there_was_anything_to_undo() {
         &hex::encode(peer.public().as_bytes()),
         DisplayName::new("p"),
         0,
+        None,
     )
     .expect("pin");
 
@@ -309,4 +313,66 @@ fn an_unanswerable_device_field_becomes_unsupported_not_zero() {
     assert_eq!(v.memory_used_frac, Metric::Unsupported);
     assert_eq!(v.disk_free_bytes, Metric::Unsupported);
     assert_ne!(v.memory_total_bytes, Metric::reading(0.0));
+}
+
+#[test]
+fn a_paired_peers_address_survives_this_agent_restarting() {
+    // Sightings live in memory; pins live on disk. Without remembering the
+    // address, restarting the agent made a paired machine that was up and
+    // answering render as "no usable network link" until mDNS happened to
+    // re-announce it — up to a minute on a quiet network, and indistinguishable
+    // from a peer with no fabric at all.
+    let t = Tmp::new("addrmem");
+    let peer = Identity::generate();
+    let pins = PinStore::new(&t.0);
+    record_pairing(
+        &pins,
+        peer.id(),
+        &hex::encode(peer.public().as_bytes()),
+        DisplayName::new("spark-43fa"),
+        0,
+        None,
+    )
+    .expect("pin");
+
+    // First run: a beacon arrives, and the address is remembered.
+    let first = fleet_at(&t.0);
+    first.observe(beacon(peer.id(), "spark-43fa", true));
+    assert_eq!(
+        pins.load().expect("read")[&peer.id()]
+            .last_address
+            .as_deref(),
+        Some("10.10.10.10")
+    );
+
+    // Second run: fresh process, no sightings at all.
+    let restarted = fleet_at(&t.0);
+    let listed = restarted
+        .nodes()
+        .into_iter()
+        .find(|n| n.id == peer.id())
+        .expect("a pinned peer is still listed");
+    assert_eq!(
+        listed.addresses.first().map(|a| a.addr.as_str()),
+        Some("10.10.10.10"),
+        "a restart must not forget where a paired machine lives"
+    );
+    // Remembered, not re-verified: the class stays unverified until the peer
+    // says so over the authenticated channel.
+    assert_eq!(
+        listed.addresses[0].class,
+        atlasctl_protocol::fleet::LinkClass::Unverified
+    );
+}
+
+#[test]
+fn an_unverified_link_is_usable_but_never_preferred_and_never_warns() {
+    use atlasctl_protocol::fleet::LinkClass;
+    // It is an absence of information. Treating it as a problem would invent
+    // one; treating it as a preference would let an unauthenticated beacon
+    // outrank a link we measured ourselves.
+    assert!(LinkClass::Unverified.usable_for_cluster());
+    assert!(!LinkClass::Unverified.warns());
+    assert!(LinkClass::Unverified.rank() < LinkClass::Ethernet.rank());
+    assert!(LinkClass::Unverified.rank() > LinkClass::Virtual.rank());
 }

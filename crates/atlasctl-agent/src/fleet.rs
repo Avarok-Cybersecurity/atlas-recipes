@@ -196,6 +196,11 @@ impl LocalFleet {
         if beacon.id == self.identity.id() {
             return;
         }
+        // A sighting of a peer we trust also refreshes where we think it is,
+        // so the address outlives this process.
+        if let Some(addr) = beacon.addresses.first().map(ToString::to_string) {
+            let _ = remember_address(&self.pins, beacon.id, &addr);
+        }
         if let Ok(mut seen) = self.seen.lock() {
             seen.insert(
                 beacon.id,
@@ -300,9 +305,26 @@ impl FleetView for LocalFleet {
                 } else {
                     PairingState::Unreachable
                 },
-                addresses: sighting
-                    .map(|s| addresses_of(&s.beacon))
-                    .unwrap_or_default(),
+                // A live sighting wins; otherwise fall back to where this peer
+                // was last known to be, so a restart does not make a paired
+                // machine look unreachable-and-addressless.
+                addresses: sighting.map_or_else(
+                    || {
+                        pin.last_address
+                            .as_ref()
+                            .map(|a| {
+                                vec![NodeAddress {
+                                    iface: String::new(),
+                                    addr: a.clone(),
+                                    class: atlasctl_protocol::fleet::LinkClass::Unverified,
+                                    speed_mbps: None,
+                                    rdma: false,
+                                }]
+                            })
+                            .unwrap_or_default()
+                    },
+                    |s| addresses_of(&s.beacon),
+                ),
                 launchability: sighting.map_or_else(
                     || Launchability::no("not reachable right now"),
                     |s| {
@@ -418,13 +440,33 @@ pub fn record_pairing(
     public_key_hex: &str,
     name: DisplayName,
     now_unix: u64,
+    last_address: Option<String>,
 ) -> Result<()> {
     pins.add(Pin {
         id: node,
         public_key: public_key_hex.to_owned(),
         name,
         paired_at: now_unix,
+        last_address,
     })
+}
+
+/// Remember where a paired peer was last seen.
+///
+/// Called when a beacon refreshes, so the address survives an agent restart.
+///
+/// # Errors
+/// If the pin store cannot be read or written.
+pub fn remember_address(pins: &PinStore, node: NodeId, addr: &str) -> Result<()> {
+    let mut all = pins.load()?;
+    if let Some(pin) = all.get_mut(&node)
+        && pin.last_address.as_deref() != Some(addr)
+    {
+        pin.last_address = Some(addr.to_owned());
+        let updated = pin.clone();
+        pins.add(updated)?;
+    }
+    Ok(())
 }
 
 /// Vitals a provider could not supply at all.

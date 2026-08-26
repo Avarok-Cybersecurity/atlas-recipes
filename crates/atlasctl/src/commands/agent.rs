@@ -354,6 +354,8 @@ pub fn pair(args: &crate::cli::AgentPairArgs) -> Result<()> {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs()),
+        // The responder learns the initiator's address from the connection.
+        None,
     )?;
     println!("Paired with {} ({}).", paired.name, paired.node.short());
     Ok(())
