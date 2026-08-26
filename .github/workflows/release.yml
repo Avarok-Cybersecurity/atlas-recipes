@@ -115,29 +115,39 @@ jobs:
       - if: steps.co.outcome == 'success'
         uses: dtolnay/rust-toolchain@stable
       - if: steps.co.outcome == 'success'
-        name: repair the lock if release-please left it behind
+        name: repair what release-please leaves behind
         run: |
           set -eu
-          if cargo metadata --locked --format-version 1 >/dev/null 2>&1; then
-            echo "release PR lock already matches its manifests"
+          # release-please bumps `[package] version` and never rewrites the
+          # requirements pointing at it, so on the release branch they are
+          # stale by construction: atlasctl asks for `^0.1.3` while
+          # atlasctl-protocol has become 0.2.0, and nothing resolves. That
+          # failed every release attempt on 2026-08-26.
+          #
+          # Repairing it here rather than fighting release-please also makes a
+          # split release harmless — each requirement gets the version of the
+          # crate it actually names, whether or not the crates moved together.
+          python3 scripts/check-version-sync.py --fix
+
+          # The lock follows from the manifests, so it is regenerated after
+          # them, not before. --workspace resolves workspace members only, so
+          # external dependencies stay exactly as pinned and --locked keeps its
+          # meaning.
+          cargo metadata --locked --format-version 1 >/dev/null 2>&1 || cargo update --workspace
+
+          if git diff --quiet -- Cargo.lock '*Cargo.toml'; then
+            echo "release PR already consistent; nothing to repair"
             exit 0
           fi
-          echo "::warning::release-please left Cargo.lock behind its manifests; repairing"
-          # --workspace resolves workspace members only, so external
-          # dependencies stay exactly as pinned and --locked keeps its meaning.
-          cargo update --workspace
-          # If the lock check failed but resolving workspace members changed
-          # nothing, the cause is something other than version drift and this
-          # job must not paper over it.
-          if git diff --quiet -- Cargo.lock; then
-            echo "::error::Cargo.lock failed --locked but resolving the workspace changed nothing."
-            echo "::error::Something other than release-please version drift is wrong here."
-            exit 1
-          fi
+
+          # Whatever was repaired, the result has to actually resolve — this is
+          # the last point before publishing where that is cheap to find out.
+          cargo metadata --locked --format-version 1 >/dev/null
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.lock
-          git commit -m "chore: sync Cargo.lock with the versions release-please wrote"
+          git add Cargo.lock Cargo.toml crates/*/Cargo.toml
+          git commit -m "chore: sync manifests and lock with the versions release-please wrote"
           git push origin HEAD:release-please--branches--main
 
   # A pull request opened by the default GITHUB_TOKEN does not trigger
