@@ -24,6 +24,7 @@
 use anyhow::{Context, Result, bail};
 use atlasctl_agent::cluster::{PrepareReply, RankAssignment, RefusalReason};
 use atlasctl_agent::rank::RankService;
+use atlasctl_agent::rendezvous;
 use atlasctl_core::chain::UserConfig;
 use atlasctl_core::docker::collective::CollectiveEnv;
 use atlasctl_core::docker::profile::{DeviceProfile, LaunchProfile};
@@ -32,6 +33,7 @@ use atlasctl_core::host::HostSnapshot;
 use atlasctl_core::io::ProcessRunner;
 use atlasctl_core::registry::{RecipeRef, RegistrySet};
 use atlasctl_core::settings;
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 /// A rendered rank, held between prepare and commit.
@@ -39,6 +41,26 @@ struct Reservation {
     epoch: String,
     recipe: String,
     plan: atlasctl_core::docker::LaunchPlan,
+}
+
+/// What this machine can do, as opposed to what it ships.
+///
+/// Grouped rather than passed loose: these three are one question — whether
+/// this node can take a rank at all, and whether it can reach the rendezvous
+/// it would be given — and a constructor that takes them separately reads as
+/// nine unrelated arguments.
+pub struct RankEnvironment {
+    /// Why this machine cannot run models, when it cannot.
+    pub can_launch: Result<(), String>,
+    /// This machine's own addresses, with their subnets.
+    pub local_addresses: Vec<atlasctl_protocol::fleet::NodeAddress>,
+    /// How to ask the network about an address subnet arithmetic cannot place.
+    pub reachability: Box<dyn rendezvous::Reachability>,
+    /// Which RDMA device backs each of this machine's interfaces.
+    ///
+    /// Injected rather than read at render time so the mapping is fixed for
+    /// the life of the agent and a test can supply its own.
+    pub rdma_devices: BTreeMap<String, String>,
 }
 
 /// Serves rank requests from this machine's own recipe inventory.
@@ -51,6 +73,13 @@ pub struct LocalRankService {
     runner: Arc<dyn ProcessRunner>,
     /// Why this machine cannot run models, when it cannot.
     can_launch: Result<(), String>,
+    /// This machine's own addresses, for judging whether a rendezvous address
+    /// is one it can actually reach.
+    local_addresses: Vec<atlasctl_protocol::fleet::NodeAddress>,
+    /// How to ask the network about an address subnet arithmetic cannot place.
+    reachability: Box<dyn rendezvous::Reachability>,
+    /// Which RDMA device backs each of this machine's interfaces.
+    rdma_devices: BTreeMap<String, String>,
     reserved: Mutex<Option<Reservation>>,
 }
 
@@ -70,7 +99,7 @@ impl LocalRankService {
         devices: Box<dyn DeviceProfile>,
         collective: Box<dyn CollectiveEnv>,
         runner: Arc<dyn ProcessRunner>,
-        can_launch: Result<(), String>,
+        env: RankEnvironment,
     ) -> Self {
         Self {
             registry,
@@ -79,7 +108,10 @@ impl LocalRankService {
             devices,
             collective,
             runner,
-            can_launch,
+            can_launch: env.can_launch,
+            local_addresses: env.local_addresses,
+            reachability: env.reachability,
+            rdma_devices: env.rdma_devices,
             reserved: Mutex::new(None),
         }
     }
@@ -148,6 +180,24 @@ impl LocalRankService {
         )
         .with_context(|| format!("rendering rank {} of {}", a.rank, a.recipe))?;
 
+        // Pin the collective to the link the plan actually chose.
+        //
+        // Nothing set NCCL_SOCKET_IFNAME or NCCL_IB_HCA, on the reasoning that
+        // guessing a NIC name produces a launch that looks fine and silently
+        // uses the wrong fabric. That is true of guessing -- but leaving them
+        // unset does not avoid the guess, it delegates it to NCCL, which on a
+        // machine with four RoCE ports picked the one that reaches nobody and
+        // died at `ibv_modify_qp` with `Connection timed out`.
+        //
+        // This is not a guess. The rendezvous address is on exactly one of this
+        // machine's interfaces, and that interface is backed by exactly one
+        // RDMA device. Both are read from the system, not assumed.
+        if let Placement::Rank { .. } = placement {
+            for (k, v) in self.collective_binding(&a.master_addr) {
+                plan.docker.env.insert(k, v);
+            }
+        }
+
         // The agent removes a container by name before it starts one, and on
         // stop, so it owns this lifecycle already. Auto-remove therefore buys
         // nothing and costs the only evidence there is: a rank that dies takes
@@ -156,6 +206,38 @@ impl LocalRankService {
         // container was gone before anyone could read it.
         plan.docker.auto_remove = false;
         Ok(plan)
+    }
+
+    /// The interface and RDMA device carrying a given address, as NCCL wants
+    /// them named.
+    ///
+    /// Empty when the address is not on a directly-attached subnet: a routed
+    /// rendezvous has no single local interface to name, and inventing one
+    /// would be the guess this exists to avoid.
+    fn collective_binding(&self, master_addr: &str) -> Vec<(String, String)> {
+        let Some(iface) = self
+            .local_addresses
+            .iter()
+            .filter(|a| a.prefix_len > 0 && !a.iface.is_empty())
+            .find(|a| rendezvous::shares_network(&a.addr, a.prefix_len, master_addr))
+            .map(|a| a.iface.clone())
+        else {
+            return Vec::new();
+        };
+        let mut out = vec![("NCCL_SOCKET_IFNAME".to_owned(), iface.clone())];
+        if let Some(dev) = self.rdma_devices.get(&iface) {
+            out.push(("NCCL_IB_HCA".to_owned(), dev.clone()));
+        }
+        out
+    }
+
+    /// Whether this machine can reach the rendezvous address.
+    ///
+    /// Directly-attached first because it is exact and free; a routed probe
+    /// only for addresses subnet arithmetic cannot account for.
+    fn can_reach(&self, addr: &str, port: u16) -> bool {
+        rendezvous::on_local_subnet(addr, &self.local_addresses)
+            || self.reachability.answers(addr, port)
     }
 
     /// Whether the container runtime is answering here.
@@ -211,6 +293,16 @@ impl RankService for LocalRankService {
 
         if !self.docker_ok() {
             return refuse(RefusalReason::DockerUnavailable);
+        }
+
+        // Checked here, where a refusal costs a second and names the problem.
+        // After commit the same fact is a silent hang: the rank starts, waits
+        // at the collective barrier, and retries until somebody reads the logs.
+        if !self.can_reach(&assignment.master_addr, assignment.master_port) {
+            return refuse(RefusalReason::RendezvousUnreachable(rendezvous::explain(
+                &assignment.master_addr,
+                &self.local_addresses,
+            )));
         }
 
         // Rendering is the last check, and it is the strongest one: it proves

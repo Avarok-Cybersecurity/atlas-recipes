@@ -121,7 +121,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         atlasctl_agent::identity::Identity::load_or_create(&config_dir)?,
         pins.clone(),
         atlasctl_agent::discovery::local_display_name(),
-        addresses,
+        addresses.clone(),
         launchability,
         String::new(),
     )
@@ -150,7 +150,12 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
             Box::new(NvidiaDevices),
             Box::new(atlasctl_core::docker::collective::NcclRoce),
             Arc::clone(&runner),
-            can_launch.clone(),
+            crate::rankservice::RankEnvironment {
+                can_launch: can_launch.clone(),
+                local_addresses: addresses.clone(),
+                reachability: Box::new(atlasctl_agent::rendezvous::TcpProbe),
+                rdma_devices: atlasctl_agent::fabric::linux::rdma_devices_by_interface(),
+            },
         ));
 
     let state = Arc::new(AgentState {

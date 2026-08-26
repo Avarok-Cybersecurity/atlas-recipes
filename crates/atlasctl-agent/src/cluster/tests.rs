@@ -12,6 +12,8 @@ fn addr(iface: &str, a: &str, class: LinkClass, speed: Option<u32>) -> NodeAddre
         class,
         speed_mbps: speed,
         rdma: matches!(class, LinkClass::Roce | LinkClass::InfiniBand),
+        // Point-to-point, like the RoCE links on a real Spark.
+        prefix_len: 30,
     }
 }
 
@@ -303,4 +305,109 @@ fn a_recipe_that_differs_between_nodes_refuses_and_says_both_hashes() {
         msg.contains("same atlasctl"),
         "must say how to fix it: {msg}"
     );
+}
+
+/// The head must offer an address the workers are actually attached to.
+///
+/// A DGX Spark carries several point-to-point RoCE links. Ranking by link
+/// class alone returns whichever sorts first, and on the real pair that was
+/// the head's *other* port — the workers hung at the collective barrier.
+mod rendezvous_choice {
+    use super::*;
+
+    /// dgx1's two RoCE ports; only 10.10.10.9/30 reaches the peer.
+    fn head_with_two_roce() -> NodeDescriptor {
+        node(
+            1,
+            "spark-256a",
+            vec![
+                addr("enp1s0f1np1", "10.10.10.13", LinkClass::Roce, Some(200_000)),
+                addr("enp1s0f0np0", "10.10.10.9", LinkClass::Roce, Some(200_000)),
+            ],
+        )
+    }
+
+    fn peer_on_first_link() -> NodeDescriptor {
+        node(
+            2,
+            "spark-43fa",
+            vec![
+                addr("enp1s0f0np0", "10.10.10.10", LinkClass::Roce, Some(200_000)),
+                addr("enp1s0f1np1", "10.10.10.17", LinkClass::Roce, Some(200_000)),
+            ],
+        )
+    }
+
+    #[test]
+    fn it_picks_the_link_the_worker_is_on() {
+        let head = head_with_two_roce();
+        let peer = peer_on_first_link();
+        let sel = vec![&head, &peer];
+        let p = plan(
+            "r",
+            "hash",
+            2,
+            &sel,
+            head.id,
+            &BTreeMap::new(),
+            "e".to_owned(),
+        )
+        .expect("plans");
+        assert_eq!(
+            p.ranks[0].master_addr, "10.10.10.9",
+            "must choose the shared /30, not the head's other RoCE port"
+        );
+        assert!(p.ranks.iter().all(|r| r.master_addr == "10.10.10.9"));
+    }
+
+    /// Among addresses every worker can reach, the head's own ordering still
+    /// decides — a shared ethernet link must not beat a shared RoCE one.
+    #[test]
+    fn among_shared_links_the_faster_class_still_wins() {
+        let head = node(
+            1,
+            "head",
+            vec![
+                addr("enp1s0f0np0", "10.10.10.9", LinkClass::Roce, Some(200_000)),
+                addr("eth0", "192.168.1.2", LinkClass::Ethernet, Some(1000)),
+            ],
+        );
+        let peer = node(
+            2,
+            "peer",
+            vec![
+                addr("enp1s0f0np0", "10.10.10.10", LinkClass::Roce, Some(200_000)),
+                addr("eth0", "192.168.1.3", LinkClass::Ethernet, Some(1000)),
+            ],
+        );
+        let sel = vec![&head, &peer];
+        let p = plan("r", "h", 2, &sel, head.id, &BTreeMap::new(), "e".to_owned()).expect("plans");
+        assert_eq!(p.ranks[0].master_addr, "10.10.10.9");
+    }
+
+    /// A worker whose subnets are unknown — an older agent, or one never
+    /// dialled — must not make the launch impossible. The rank re-checks
+    /// reachability at prepare, so a guess is refused rather than hung.
+    #[test]
+    fn an_unknown_worker_subnet_falls_back_rather_than_failing() {
+        let head = head_with_two_roce();
+        let mut peer = peer_on_first_link();
+        for a in &mut peer.addresses {
+            a.prefix_len = 0;
+        }
+        let sel = vec![&head, &peer];
+        let p = plan("r", "h", 2, &sel, head.id, &BTreeMap::new(), "e".to_owned()).expect("plans");
+        // Falls back to the head's preferred address rather than refusing.
+        assert!(!p.ranks[0].master_addr.is_empty());
+    }
+
+    /// A single-node plan has no worker to share a link with, and must still
+    /// produce an address.
+    #[test]
+    fn a_solo_plan_still_gets_an_address() {
+        let head = head_with_two_roce();
+        let sel = vec![&head];
+        let p = plan("r", "h", 1, &sel, head.id, &BTreeMap::new(), "e".to_owned()).expect("plans");
+        assert!(!p.ranks[0].master_addr.is_empty());
+    }
 }

@@ -141,6 +141,16 @@ impl LocalFleet {
         self
     }
 
+    /// This machine's own addresses, with their subnets.
+    ///
+    /// Told to peers over the authenticated channel, because a rendezvous
+    /// address has to be one every rank can reach and only a node knows which
+    /// links it is attached to.
+    #[must_use]
+    pub fn local_addresses(&self) -> Vec<NodeAddress> {
+        self.local_addresses.clone()
+    }
+
     /// Re-read what is running here, and report whether it changed.
     ///
     /// Returns the new value only when it differs, so a caller can push an

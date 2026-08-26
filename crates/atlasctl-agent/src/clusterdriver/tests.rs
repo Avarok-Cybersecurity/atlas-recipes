@@ -35,6 +35,7 @@ fn descriptor(seed: u8, local: bool) -> NodeDescriptor {
             addr: format!("10.0.0.{seed}"),
             class: LinkClass::Roce,
             speed_mbps: Some(200_000),
+            prefix_len: 30,
             rdma: true,
         }],
         launchability: Launchability::yes(),

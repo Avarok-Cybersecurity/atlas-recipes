@@ -71,7 +71,7 @@ pub async fn preview_rank(
     assignment: RankAssignment,
 ) -> Result<(String, Vec<String>)> {
     let mut tls = dial(identity, pins, addr, expect).await?;
-    exchange_hello(&mut tls, addr).await?;
+    exchange_hello(&mut tls, addr, &[]).await?;
     write_frame(
         &mut tls,
         &PeerFrame::PreviewRank {
@@ -107,7 +107,7 @@ pub async fn prepare_rank(
     assignment: RankAssignment,
 ) -> Result<PrepareReply> {
     let mut tls = dial(identity, pins, addr, expect).await?;
-    exchange_hello(&mut tls, addr).await?;
+    exchange_hello(&mut tls, addr, &[]).await?;
     write_frame(
         &mut tls,
         &PeerFrame::Prepare {
@@ -147,7 +147,7 @@ pub async fn commit_rank(
     epoch: &str,
 ) -> Result<String> {
     let mut tls = dial(identity, pins, addr, expect).await?;
-    exchange_hello(&mut tls, addr).await?;
+    exchange_hello(&mut tls, addr, &[]).await?;
     write_frame(
         &mut tls,
         &PeerFrame::Commit {
@@ -183,7 +183,7 @@ pub async fn abort_rank(
     epoch: &str,
 ) -> Result<()> {
     let mut tls = dial(identity, pins, addr, expect).await?;
-    exchange_hello(&mut tls, addr).await?;
+    exchange_hello(&mut tls, addr, &[]).await?;
     write_frame(
         &mut tls,
         &PeerFrame::Abort {
@@ -212,7 +212,7 @@ pub async fn rank_alive(
     container: &str,
 ) -> Result<bool> {
     let mut tls = dial(identity, pins, addr, expect).await?;
-    exchange_hello(&mut tls, addr).await?;
+    exchange_hello(&mut tls, addr, &[]).await?;
     write_frame(
         &mut tls,
         &PeerFrame::IsRankAlive {
@@ -245,7 +245,7 @@ pub async fn stop_rank(
     container: &str,
 ) -> Result<()> {
     let mut tls = dial(identity, pins, addr, expect).await?;
-    exchange_hello(&mut tls, addr).await?;
+    exchange_hello(&mut tls, addr, &[]).await?;
     write_frame(
         &mut tls,
         &PeerFrame::StopRank {

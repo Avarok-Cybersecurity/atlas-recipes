@@ -116,8 +116,17 @@ impl ClusterDriver {
         if node.is_local {
             return Ok(None);
         }
-        let addr = node
-            .preferred_address()
+        // The peer's best address *from here*, not its best address outright.
+        // A Spark answers on several point-to-point links and this machine is
+        // attached to only some of them; picking by class alone dials one that
+        // goes nowhere and times out.
+        let local = self.fleet.nodes();
+        let mine = local
+            .iter()
+            .find(|n| n.is_local)
+            .map(|n| n.addresses.clone())
+            .unwrap_or_default();
+        let addr = crate::rendezvous::best_reachable(&node.addresses, &mine)
             .ok_or_else(|| format!("{} has no usable network link", node.name))?;
         format!("{}:{}", addr.addr, self.peer_port)
             .parse()
