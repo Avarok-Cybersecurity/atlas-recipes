@@ -29,10 +29,12 @@ mod tests;
 
 /// A node absent for longer than this is reported as unreachable.
 ///
-/// Two discovery intervals, deliberately: one missed refresh on a busy wireless
-/// network is normal, and a node that blinks out of someone's interface every
-/// few seconds is worse than one that lingers a moment too long.
-pub const UNREACHABLE_AFTER: Duration = Duration::from_secs(30);
+/// Generous on purpose. mDNS records re-resolve on their own schedule rather
+/// than on ours, and 30 seconds turned out to be shorter than the refresh
+/// interval on a quiet network — a paired Spark that was up and answering
+/// showed as unreachable simply because nothing had re-announced it yet. One
+/// missed refresh must not make a machine blink out of someone's interface.
+pub const UNREACHABLE_AFTER: Duration = Duration::from_secs(120);
 
 /// Supplies this machine's vitals.
 ///
@@ -382,8 +384,12 @@ impl FleetView for LocalFleet {
 ///
 /// A beacon carries no link classification — it is unauthenticated, and letting
 /// a stranger tell you their link is RoCE would let them talk their way to the
-/// top of your preference order. Class is filled in from the local fabric
-/// probe once the peer is paired and speaks for itself.
+/// top of your preference order.
+///
+/// The class is therefore `Unverified` rather than a guess. Guessing "ethernet"
+/// was worse than saying nothing: it told the operator of a 200 Gb RoCE fabric
+/// that their cluster would run on ethernet. It is resolved once the peer is
+/// reached over the authenticated channel and describes itself.
 fn addresses_of(beacon: &Beacon) -> Vec<NodeAddress> {
     beacon
         .addresses
@@ -391,7 +397,7 @@ fn addresses_of(beacon: &Beacon) -> Vec<NodeAddress> {
         .map(|a| NodeAddress {
             iface: String::new(),
             addr: a.to_string(),
-            class: atlasctl_protocol::fleet::LinkClass::Ethernet,
+            class: atlasctl_protocol::fleet::LinkClass::Unverified,
             speed_mbps: None,
             rdma: false,
         })

@@ -199,6 +199,11 @@ pub enum LinkClass {
     Virtual,
     /// Loopback.
     Loopback,
+    /// Not established. A peer's beacon says where it is but is
+    /// unauthenticated, so its claim about the link is not evidence — and
+    /// guessing "ethernet" would tell someone their 200 Gb RoCE fabric is slow.
+    /// Resolved once the peer is reached over the authenticated channel.
+    Unverified,
 }
 
 impl LinkClass {
@@ -210,6 +215,9 @@ impl LinkClass {
             Self::Roce => 4,
             Self::Ethernet => 3,
             Self::Wireless => 2,
+            // Below anything known: an unverified link is a candidate, never a
+            // preference.
+            Self::Unverified => 1,
             Self::Virtual | Self::Loopback => 0,
         }
     }
@@ -217,13 +225,18 @@ impl LinkClass {
     /// Whether a cluster may be formed over this link at all.
     #[must_use]
     pub const fn usable_for_cluster(self) -> bool {
-        matches!(self, Self::InfiniBand | Self::Roce | Self::Ethernet)
+        matches!(
+            self,
+            Self::InfiniBand | Self::Roce | Self::Ethernet | Self::Unverified
+        )
     }
 
     /// Whether using this link should raise a visible warning.
     #[must_use]
     pub const fn warns(self) -> bool {
-        !matches!(self, Self::InfiniBand | Self::Roce)
+        // Unverified does not warn: it is an absence of information, and
+        // dressing that up as a problem is its own kind of wrong.
+        !matches!(self, Self::InfiniBand | Self::Roce | Self::Unverified)
     }
 
     /// Short human label.
@@ -236,6 +249,7 @@ impl LinkClass {
             Self::Wireless => "Wi-Fi",
             Self::Virtual => "virtual",
             Self::Loopback => "loopback",
+            Self::Unverified => "link unverified",
         }
     }
 }

@@ -104,9 +104,13 @@ impl Beacon {
             addresses,
             can_launch: get(TXT_CAN_LAUNCH) == Some("1"),
             // Length-capped through DisplayName for the same reason the name is.
-            accelerator: DisplayName::new(get(TXT_ACCEL).unwrap_or("unknown"))
-                .as_str()
-                .to_owned(),
+            // Length-capped like every other beacon string, but an absent tag
+            // stays absent: DisplayName's "unnamed" fallback is right for a
+            // hostname and wrong for a hardware label nobody supplied.
+            accelerator: match get(TXT_ACCEL).map(str::trim).filter(|s| !s.is_empty()) {
+                Some(tag) => DisplayName::new(tag).as_str().to_owned(),
+                None => String::new(),
+            },
         })
     }
 }
