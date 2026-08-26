@@ -339,6 +339,12 @@ where
             // Acknowledged whether or not the container was there: a rollback
             // asking twice, or asking about a rank that never started, is an
             // ordinary race and not something the head can act on.
+            PeerFrame::IsRankAlive { container } => PeerFrame::RankLiveness {
+                // Unaskable is not alive: a rank whose state we cannot read
+                // must not be counted as part of a whole cluster.
+                running: rank.alive(&container).unwrap_or(false),
+                container,
+            },
             PeerFrame::StopRank { container } => {
                 let _ = rank.stop(&container);
                 PeerFrame::RankStopped { container }

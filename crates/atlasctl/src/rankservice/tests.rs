@@ -245,3 +245,49 @@ fn a_client_only_agent_refuses_to_be_a_rank() {
     assert!(reason.contains("--client mode"), "{reason}");
     assert_eq!(runner.call_count(), 0, "it must not even probe docker");
 }
+
+/// `docker run -d` returning 0 means the container was created, not that the
+/// workload survived. This is the question that catches the difference.
+#[test]
+fn a_running_container_reports_alive() {
+    let runner = Arc::new(RecordingRunner::new());
+    runner.push_result(Output {
+        status: 0,
+        stdout: "true\n".to_owned(),
+        stderr: String::new(),
+    });
+    let svc = service(&runner, Ok(()));
+    assert!(svc.alive("atlas-x").expect("asks"));
+
+    let asked = runner.calls().into_iter().next().expect("one call");
+    assert_eq!(asked[0], "docker");
+    assert_eq!(asked[1], "inspect");
+    assert_eq!(asked.last().expect("the container"), "atlas-x");
+}
+
+#[test]
+fn a_stopped_container_reports_not_alive() {
+    let runner = Arc::new(RecordingRunner::new());
+    runner.push_result(Output {
+        status: 0,
+        stdout: "false\n".to_owned(),
+        stderr: String::new(),
+    });
+    let svc = service(&runner, Ok(()));
+    assert!(!svc.alive("atlas-x").expect("asks"));
+}
+
+/// A rank that died under `--rm` has already been removed, so `docker inspect`
+/// fails. That is the exact case this exists to catch, and it is an answer
+/// rather than an error.
+#[test]
+fn a_container_removed_after_dying_reports_not_alive() {
+    let runner = Arc::new(RecordingRunner::new());
+    runner.push_result(Output {
+        status: 1,
+        stdout: String::new(),
+        stderr: "Error: No such object: atlas-x".to_owned(),
+    });
+    let svc = service(&runner, Ok(()));
+    assert!(!svc.alive("atlas-x").expect("a missing container is an answer"));
+}

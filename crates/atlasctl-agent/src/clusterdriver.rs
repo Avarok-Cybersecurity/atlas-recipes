@@ -26,18 +26,19 @@
 //! invariant is that a cluster is either whole or absent, never partial.
 
 use anyhow::Result;
-use crate::cluster::{ClusterPlan, PrepareReply, new_epoch, plan};
+use crate::cluster::{PrepareReply, new_epoch};
 use crate::fleet::FleetView;
 use crate::rank::RankService;
 use crate::session::ClusterControl;
 use crate::transport::RankTransport;
 use atlasctl_protocol::RecipeId;
-use atlasctl_protocol::fleet::{DisplayName, NodeDescriptor, NodeId};
+use atlasctl_protocol::fleet::{DisplayName, NodeId};
 use atlasctl_protocol::msg::fleet::{RankPrepare, RankPreview, RankStarted};
 use atlasctl_protocol::settings::SettingValue;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// One rank, resolved to somewhere reachable.
 ///
@@ -79,8 +80,29 @@ pub struct ClusterDriver {
     /// Every other machine.
     transport: Arc<dyn RankTransport>,
     peer_port: u16,
+    /// How long to let a cluster settle before believing it started.
+    ///
+    /// Not a readiness wait — weights take minutes to load, and nothing here
+    /// waits for that. It is long enough to catch the rank that dies on
+    /// startup, which is the failure that otherwise reads as a hang.
+    settle: Duration,
     pending: Mutex<Option<Pending>>,
     running: Mutex<Option<Running>>,
+}
+
+/// Default settling window.
+pub const SETTLE: Duration = Duration::from_secs(5);
+
+impl ClusterDriver {
+    /// Shorten the settling window.
+    ///
+    /// Only for tests: a real cluster needs a window long enough for a doomed
+    /// rank to actually die, and zero would make the gate always pass.
+    #[must_use]
+    pub fn with_settle(mut self, settle: Duration) -> Self {
+        self.settle = settle;
+        self
+    }
 }
 
 impl std::fmt::Debug for ClusterDriver {
@@ -103,117 +125,10 @@ impl ClusterDriver {
             rank,
             transport,
             peer_port,
+            settle: SETTLE,
             pending: Mutex::new(None),
             running: Mutex::new(None),
         }
-    }
-
-    /// Resolve the selection, plan, and pin every rank to a reachable address.
-    ///
-    /// Everything that can fail without side effects fails here: an unknown
-    /// recipe, a machine that left the fleet, a machine with no usable link.
-    /// By the time a rank is asked anything, the only remaining failures are
-    /// that rank's own.
-    fn resolve(
-        &self,
-        recipe: &RecipeId,
-        nodes: &[NodeId],
-        head: NodeId,
-        settings: &BTreeMap<String, SettingValue>,
-        epoch: String,
-    ) -> Result<Pending, String> {
-        let all = self.fleet.nodes();
-        let selected: Vec<NodeDescriptor> = nodes
-            .iter()
-            .filter_map(|id| all.iter().find(|n| n.id == *id).cloned())
-            .collect();
-        if selected.len() != nodes.len() {
-            return Err("one of those machines is not in this fleet".to_owned());
-        }
-
-        // The head states the revision it intends, and every rank compares it
-        // against its own. Sending nothing would make the comparison vacuous,
-        // so an unknown recipe fails here rather than launching unchecked.
-        let hash = self
-            .rank
-            .content_hash(recipe.as_str())
-            .map_err(|e| format!("{e:#}"))?;
-
-        // The recipe's own node count decides how many machines are required;
-        // the page cannot widen it by selecting more.
-        let required = u32::try_from(nodes.len()).unwrap_or(u32::MAX);
-        let refs: Vec<&NodeDescriptor> = selected.iter().collect();
-        let plan: ClusterPlan = plan(
-            recipe.as_str(),
-            &hash,
-            required,
-            &refs,
-            head,
-            settings,
-            epoch.clone(),
-        )
-        .map_err(|e| e.to_string())?;
-
-        let mut targets = Vec::with_capacity(plan.ranks.len());
-        for assignment in plan.ranks {
-            let node = selected
-                .iter()
-                .find(|n| n.id == assignment.node)
-                .ok_or_else(|| "the plan named a machine that left the fleet".to_owned())?;
-            targets.push(Target {
-                addr: self.address_of(node)?,
-                name: node.name.clone(),
-                assignment,
-            });
-        }
-
-        Ok(Pending {
-            port: serve_port(&targets),
-            epoch,
-            targets,
-        })
-    }
-
-    /// The link warning for a selection, computed the same way the plan does.
-    fn link_warning(
-        &self,
-        recipe: &RecipeId,
-        nodes: &[NodeId],
-        head: NodeId,
-        settings: &BTreeMap<String, SettingValue>,
-    ) -> Option<String> {
-        let all = self.fleet.nodes();
-        let selected: Vec<NodeDescriptor> = nodes
-            .iter()
-            .filter_map(|id| all.iter().find(|n| n.id == *id).cloned())
-            .collect();
-        let refs: Vec<&NodeDescriptor> = selected.iter().collect();
-        let hash = self.rank.content_hash(recipe.as_str()).ok()?;
-        plan(
-            recipe.as_str(),
-            &hash,
-            u32::try_from(nodes.len()).unwrap_or(u32::MAX),
-            &refs,
-            head,
-            settings,
-            "preview".to_owned(),
-        )
-        .ok()?
-        .link_warning
-    }
-
-    /// Where to reach a rank, or `None` when it is this machine.
-    fn address_of(&self, node: &NodeDescriptor) -> Result<Option<SocketAddr>, String> {
-        if node.is_local {
-            return Ok(None);
-        }
-        let addr = node
-            .preferred_address()
-            .ok_or_else(|| format!("{} has no usable network link", node.name))?;
-        format!("{}:{}", addr.addr, self.peer_port)
-            .parse()
-            .map(Some)
-            .map_err(|_| format!("{} has an address we cannot dial", node.name))
     }
 
     /// Release every reservation held for this attempt, ignoring failures.
@@ -367,6 +282,42 @@ impl ClusterControl for ClusterDriver {
                 }
             }
         }
+        // `docker run -d` returning 0 means the container was created, not that
+        // the workload survived. Rank 0 once died one second after starting
+        // while the commit reported success and rank 1 kept running alone,
+        // waiting forever on a rendezvous — the operator saw a hang, not an
+        // error. So every rank is asked again after a settling window, and a
+        // cluster that is not whole is torn down rather than reported as up.
+        if self.settle > Duration::ZERO {
+            std::thread::sleep(self.settle);
+        }
+        let mut dead = Vec::new();
+        for t in &pending.targets {
+            let Some(r) = started.iter().find(|r| r.node == t.assignment.node) else {
+                continue;
+            };
+            let alive = match t.addr {
+                None => self.rank.alive(&r.container).unwrap_or(false),
+                // A rank we cannot ask is not a rank we can count.
+                Some(addr) => self
+                    .transport
+                    .alive(t.assignment.node, addr, &r.container)
+                    .unwrap_or(false),
+            };
+            if !alive {
+                dead.push(t.name.to_string());
+            }
+        }
+        if !dead.is_empty() {
+            self.stop_started(&started, &pending.targets.iter().collect::<Vec<_>>());
+            return Err(format!(
+                "{} stopped within {}s of starting. \
+                 The whole cluster has been shut down; check that machine's container logs.",
+                dead.join(" and "),
+                self.settle.as_secs().max(1)
+            ));
+        }
+
         *self.running.lock().expect("running lock poisoned") = Some(Running {
             targets: pending.targets,
             started: started.clone(),
@@ -442,28 +393,11 @@ impl ClusterDriver {
     }
 }
 
-/// The port rank 0 will serve on, for the endpoint shown to the operator.
-///
-/// Read from rank 0's own settings, so it reflects what was actually planned
-/// rather than a guess made at display time.
-fn serve_port(targets: &[Target]) -> u16 {
-    targets
-        .iter()
-        .find(|t| t.assignment.rank == 0)
-        .and_then(|t| match t.assignment.settings.get("port") {
-            Some(SettingValue::Int(p)) => u16::try_from(*p).ok(),
-            _ => None,
-        })
-        .unwrap_or(DEFAULT_SERVE_PORT)
-}
 
-/// The port a recipe serves on when it does not say otherwise.
-///
-/// Not a silent fallback: it mirrors the recipe schema's own default, and it
-/// only ever decorates a URL shown to a human — nothing is launched from it.
-const DEFAULT_SERVE_PORT: u16 = 8000;
 
 #[cfg(test)]
 mod cases;
 #[cfg(test)]
 mod tests;
+
+mod plan;

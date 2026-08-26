@@ -137,6 +137,20 @@ pub enum PeerFrame {
         epoch: String,
     },
 
+    /// Is this container still running?
+    IsRankAlive {
+        /// Container id, as returned by the commit that started it.
+        container: String,
+    },
+
+    /// Whether it is.
+    RankLiveness {
+        /// Which container.
+        container: String,
+        /// Whether it is still running.
+        running: bool,
+    },
+
     /// Stop a container this peer started as a rank.
     ///
     /// Names a container rather than a recipe, so a head can only stop what it

@@ -60,6 +60,15 @@ pub trait RankTransport: Send + Sync {
     /// Release this rank's reservation. Failures are the driver's to ignore.
     fn abort(&self, node: NodeId, addr: SocketAddr, epoch: &str);
 
+    /// Whether a container this rank started is still running.
+    ///
+    /// A peer that cannot be asked is treated as dead by the caller: a rank
+    /// whose liveness is unknown cannot be counted as part of a whole cluster.
+    ///
+    /// # Errors
+    /// If the peer cannot be reached.
+    fn alive(&self, node: NodeId, addr: SocketAddr, container: &str) -> Result<bool>;
+
     /// Stop a container this rank started. Failures are the driver's to ignore.
     fn stop(&self, node: NodeId, addr: SocketAddr, container: &str);
 }

@@ -66,6 +66,7 @@ pub(super) struct FixtureRank {
     prepare: PrepareReply,
     commit: Result<String, String>,
     stop: Result<(), String>,
+    alive: bool,
 }
 
 impl FixtureRank {
@@ -75,6 +76,7 @@ impl FixtureRank {
             prepare: PrepareReply::Prepared,
             commit: Ok("head-container".to_owned()),
             stop: Ok(()),
+            alive: true,
         }
     }
     fn note(&self, what: String) {
@@ -99,6 +101,10 @@ impl RankService for FixtureRank {
         self.note("local.commit".to_owned());
         self.commit.clone().map_err(|e| anyhow::anyhow!(e))
     }
+    fn alive(&self, container: &str) -> anyhow::Result<bool> {
+        self.note(format!("local.alive({container})"));
+        Ok(self.alive)
+    }
     fn stop(&self, container: &str) -> anyhow::Result<()> {
         self.note(format!("local.stop({container})"));
         self.stop.clone().map_err(|e| anyhow::anyhow!(e))
@@ -113,6 +119,7 @@ pub(super) struct FixtureTransport {
     log: Log,
     prepare: BTreeMap<NodeId, PrepareReply>,
     commit: BTreeMap<NodeId, Result<String, String>>,
+    dead: BTreeMap<NodeId, bool>,
 }
 
 impl FixtureTransport {
@@ -121,7 +128,13 @@ impl FixtureTransport {
             log: Arc::clone(log),
             prepare: BTreeMap::new(),
             commit: BTreeMap::new(),
+            dead: BTreeMap::new(),
         }
+    }
+    /// A peer whose container does not survive its own start.
+    pub(super) fn dying(mut self, node: NodeId) -> Self {
+        self.dead.insert(node, true);
+        self
     }
     pub(super) fn refusing(mut self, node: NodeId, why: &str) -> Self {
         self.prepare.insert(
@@ -169,6 +182,10 @@ impl RankTransport for FixtureTransport {
     fn abort(&self, node: NodeId, _: SocketAddr, _: &str) {
         self.note(format!("{}.abort", node.short()));
     }
+    fn alive(&self, node: NodeId, _: SocketAddr, container: &str) -> anyhow::Result<bool> {
+        self.note(format!("{}.alive({container})", node.short()));
+        Ok(!self.dead.get(&node).copied().unwrap_or(false))
+    }
     fn stop(&self, node: NodeId, _: SocketAddr, container: &str) {
         self.note(format!("{}.stop({container})", node.short()));
     }
@@ -193,6 +210,7 @@ pub(super) fn refusing_rank(log: &Log, why: &str) -> FixtureRank {
         },
         commit: Err("was never prepared".to_owned()),
         stop: Ok(()),
+        alive: true,
     }
 }
 
@@ -203,6 +221,18 @@ pub(super) fn refusing_stop_rank(log: &Log) -> FixtureRank {
         prepare: PrepareReply::Prepared,
         commit: Ok("head-container".to_owned()),
         stop: Err("the container runtime is not answering".to_owned()),
+        alive: true,
+    }
+}
+
+/// This machine, whose container dies moments after it starts.
+pub(super) fn dying_rank(log: &Log) -> FixtureRank {
+    FixtureRank {
+        log: Arc::clone(log),
+        prepare: PrepareReply::Prepared,
+        commit: Ok("head-container".to_owned()),
+        stop: Ok(()),
+        alive: false,
     }
 }
 
@@ -225,7 +255,10 @@ pub(super) fn driver(rank: FixtureRank, transport: FixtureTransport) -> (Cluster
             Arc::new(rank),
             Arc::new(transport),
             34334,
-        ),
+        )
+        // The fixtures answer liveness from a table rather than from a real
+        // container, so there is nothing for a settling window to observe.
+        .with_settle(std::time::Duration::ZERO),
         log,
     )
 }

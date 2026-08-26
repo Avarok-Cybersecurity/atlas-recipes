@@ -310,3 +310,84 @@ fn every_rank_is_attempted_even_when_one_refuses_to_stop() {
         );
     }
 }
+
+/// The failure that real hardware found. `docker run -d` returned 0 for rank 0,
+/// so the commit reported success — and rank 0's container had already died a
+/// second later, leaving rank 1 running alone and waiting forever on a
+/// rendezvous that would never complete. The operator saw a hang, not an error.
+#[test]
+fn a_rank_that_dies_on_startup_fails_the_commit_and_stops_the_rest() {
+    let log = new_log();
+    let (d, _) = driver(dying_rank(&log), transport(&log));
+    let (epoch, _, _) = d
+        .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .expect("prepares");
+
+    let err = d.commit(&epoch).expect_err("rank 0 did not survive");
+    assert!(err.contains("stopped within"), "{err}");
+    assert!(err.contains("spark-1"), "the dead machine must be named: {err}");
+
+    // The peers that did start must not be left holding a GPU.
+    let c = calls(&log);
+    for seed in [2u8, 3] {
+        let id = node_id(seed).short();
+        assert!(
+            c.iter().any(|x| x.starts_with(&format!("{id}.stop("))),
+            "{id} must be stopped: {c:?}"
+        );
+    }
+}
+
+#[test]
+fn a_peer_that_dies_on_startup_fails_the_commit_too() {
+    let log = new_log();
+    let (d, _) = driver(ready_rank(&log), transport(&log).dying(node_id(3)));
+    let (epoch, _, _) = d
+        .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .expect("prepares");
+
+    let err = d.commit(&epoch).expect_err("rank 2 did not survive");
+    assert!(err.contains("spark-3"), "{err}");
+    assert!(
+        calls(&log).contains(&"local.stop(head-container)".to_owned()),
+        "rank 0 must be stopped too: {:?}",
+        calls(&log)
+    );
+}
+
+/// Every rank is checked, not just the first — a cluster is whole or absent.
+#[test]
+fn every_rank_is_asked_whether_it_survived() {
+    let log = new_log();
+    let (d, _) = driver(ready_rank(&log), transport(&log));
+    let (epoch, _, _) = d
+        .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .expect("prepares");
+    d.commit(&epoch).expect("commits");
+
+    let c = calls(&log);
+    assert!(c.contains(&"local.alive(head-container)".to_owned()), "{c:?}");
+    for seed in [2u8, 3] {
+        let id = node_id(seed).short();
+        assert!(
+            c.iter().any(|x| x.starts_with(&format!("{id}.alive("))),
+            "{id} was never asked: {c:?}"
+        );
+    }
+}
+
+/// A commit that failed its settling gate must leave no cluster behind to stop.
+#[test]
+fn a_cluster_that_failed_to_settle_is_not_recorded_as_running() {
+    let log = new_log();
+    let (d, _) = driver(dying_rank(&log), transport(&log));
+    let (epoch, _, _) = d
+        .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .expect("prepares");
+    let _ = d.commit(&epoch);
+
+    assert!(
+        d.stop_cluster().is_err(),
+        "nothing is running, so there is nothing to stop"
+    );
+}

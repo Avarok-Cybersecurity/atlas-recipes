@@ -256,6 +256,26 @@ impl RankService for LocalRankService {
         Ok(name)
     }
 
+    fn alive(&self, container: &str) -> Result<bool> {
+        let out = self
+            .runner
+            .run(&[
+                "docker".into(),
+                "inspect".into(),
+                "-f".into(),
+                "{{.State.Running}}".into(),
+                container.to_owned(),
+            ])
+            .context("asking the container runtime about a rank")?;
+        // A container that has already been removed is not running, and that is
+        // an answer rather than a failure: a rank that died under `--rm` is
+        // exactly the case this exists to catch.
+        if !out.success() {
+            return Ok(false);
+        }
+        Ok(out.stdout.trim() == "true")
+    }
+
     fn stop(&self, container: &str) -> Result<()> {
         let out = self
             .runner

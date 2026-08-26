@@ -55,6 +55,18 @@ pub trait RankService: Send + Sync {
     /// refuses.
     fn commit(&self, epoch: &str) -> Result<String>;
 
+    /// Whether a container this machine started is still running.
+    ///
+    /// `docker run -d` returning 0 means the container was *created*, not that
+    /// the workload inside it survived. A rank that dies a second later leaves
+    /// the others waiting forever on a rendezvous that will never complete, and
+    /// the operator sees a hang rather than an error — so a commit is not
+    /// finished until every rank has been asked this.
+    ///
+    /// # Errors
+    /// If the container runtime cannot be asked.
+    fn alive(&self, container: &str) -> Result<bool>;
+
     /// Stop a container this machine started as a rank.
     ///
     /// Needed because a cluster is either whole or absent: when one rank fails

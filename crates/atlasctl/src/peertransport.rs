@@ -111,6 +111,16 @@ impl RankTransport for PeerTransport {
         ));
     }
 
+    fn alive(&self, node: NodeId, addr: SocketAddr, container: &str) -> Result<bool> {
+        self.blocking(cluster::rank_alive(
+            &self.identity,
+            self.pins.clone(),
+            addr,
+            node,
+            container,
+        ))
+    }
+
     fn stop(&self, node: NodeId, addr: SocketAddr, container: &str) {
         let _ = self.blocking(cluster::stop_rank(
             &self.identity,

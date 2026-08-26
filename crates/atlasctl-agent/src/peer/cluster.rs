@@ -200,6 +200,35 @@ pub async fn abort_rank(
     .await
 }
 
+/// Ask whether a container a rank started is still running.
+///
+/// # Errors
+/// If the peer cannot be reached or answers with something else.
+pub async fn rank_alive(
+    identity: &Identity,
+    pins: PinStore,
+    addr: SocketAddr,
+    expect: NodeId,
+    container: &str,
+) -> Result<bool> {
+    let mut tls = dial(identity, pins, addr, expect).await?;
+    exchange_hello(&mut tls, addr).await?;
+    write_frame(
+        &mut tls,
+        &PeerFrame::IsRankAlive {
+            container: container.to_owned(),
+        },
+    )
+    .await?;
+    let want = container.to_owned();
+    answer(&mut tls, addr, "liveness", move |f| match f {
+        PeerFrame::RankLiveness { container, running } if container == want => Ok(Some(running)),
+        PeerFrame::RankLiveness { .. } => Ok(None),
+        other => bail!("expected a liveness answer, got {other:?}"),
+    })
+    .await
+}
+
 /// Stop a container a rank started.
 ///
 /// Used by rollback, so failures are the caller's to ignore: this runs when
