@@ -221,102 +221,6 @@ impl<'a> Session<'a> {
         }
     }
 
-    /// The fleet, local node first.
-    fn nodes(&self, id: u32) -> Vec<ServerMsg> {
-        let nodes = self
-            .deps
-            .fleet
-            .map(crate::fleet::FleetView::nodes)
-            .unwrap_or_default();
-        vec![ServerMsg::Nodes { id, nodes }]
-    }
-
-    fn pair(
-        &mut self,
-        id: u32,
-        node: atlasctl_protocol::fleet::NodeId,
-        code: &str,
-    ) -> Vec<ServerMsg> {
-        let Some(fleet) = self.deps.fleet else {
-            return vec![err(Some(id), AgentError::NotReady)];
-        };
-        match fleet.pair(node, code) {
-            Ok(outcome) => vec![ServerMsg::PairResult {
-                id,
-                node,
-                paired: true,
-                verification: Some(outcome.verification),
-                detail: String::new(),
-            }],
-            // A failed pairing is reported as a result rather than an error:
-            // the page has a designed state for "that did not work", and the
-            // reason is the useful part.
-            Err(e) => vec![ServerMsg::PairResult {
-                id,
-                node,
-                paired: false,
-                verification: None,
-                detail: e.to_string(),
-            }],
-        }
-    }
-
-    fn unpair(&mut self, id: u32, node: atlasctl_protocol::fleet::NodeId) -> Vec<ServerMsg> {
-        let Some(fleet) = self.deps.fleet else {
-            return vec![err(Some(id), AgentError::NotReady)];
-        };
-        match fleet.unpair(node) {
-            Ok(was_pinned) => vec![ServerMsg::PairResult {
-                id,
-                node,
-                paired: false,
-                verification: None,
-                detail: if was_pinned {
-                    String::new()
-                } else {
-                    "that node was not paired".to_owned()
-                },
-            }],
-            Err(e) => vec![err(
-                Some(id),
-                AgentError::InvalidMessage {
-                    detail: e.to_string(),
-                },
-            )],
-        }
-    }
-
-    fn preview_cluster(
-        &self,
-        id: u32,
-        recipe: &RecipeId,
-        nodes: &[atlasctl_protocol::fleet::NodeId],
-        head: atlasctl_protocol::fleet::NodeId,
-        settings: &BTreeMap<String, SettingValue>,
-    ) -> Vec<ServerMsg> {
-        let Some(cluster) = self.deps.cluster else {
-            return vec![err(Some(id), AgentError::NotReady)];
-        };
-        match cluster.preview(recipe, nodes, head, settings) {
-            Ok((ranks, link_warning)) => vec![ServerMsg::ClusterPreview {
-                id,
-                ranks,
-                link_warning,
-            }],
-            // NotLaunchable rather than BadSettings: the plan failing is
-            // usually about the machines — one unpaired, one with no usable
-            // link, the wrong count selected — not about a value being out of
-            // range, and the reason says which.
-            Err(reason) => vec![err(
-                Some(id),
-                AgentError::NotLaunchable {
-                    recipe: recipe.clone(),
-                    reason,
-                },
-            )],
-        }
-    }
-
     fn hello(&mut self, version: u32, presented: &str) -> Vec<ServerMsg> {
         if version != PROTOCOL_VERSION {
             self.phase = Phase::Closed;
@@ -505,6 +409,8 @@ fn to_wire(v: &atlasctl_core::ScalarValue) -> SettingValue {
 fn err(id: Option<u32>, error: AgentError) -> ServerMsg {
     ServerMsg::Error { id, error }
 }
+
+mod fleet;
 
 #[cfg(test)]
 mod tests;
