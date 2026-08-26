@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.3](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.1.2...v0.1.3) (2026-08-26)
+
+
+### Bug Fixes
+
+* cross builds and a publish job that could never have worked ([#37](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/37)) ([c4f03da](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/c4f03dac4c72e60305a996e8b507a23cf7a15bfb))
+* let cargo order the workspace publish, and stop calling a script from the tag ([#39](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/39)) ([5f1dc6f](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/5f1dc6f33c181e6c5b483681a815480b834cfdff))
+
 ## [0.1.2](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.1.1...v0.1.2) (2026-08-25)
 
 
