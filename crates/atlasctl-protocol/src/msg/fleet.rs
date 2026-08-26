@@ -22,6 +22,15 @@ pub struct RankPreview {
     pub master_addr: String,
     /// The command, shell-quoted for reading and copying.
     pub command: String,
+    /// Values this machine's flag table does not claim, and which therefore
+    /// reach nothing.
+    ///
+    /// Reported per rank rather than once, because the machines can be running
+    /// different revisions: a value that lands on rank 0 can be silently
+    /// dropped on rank 1, and that asymmetry is exactly what an operator needs
+    /// to see. The tool this replaces discarded these without a word, which is
+    /// how a recipe's stated correctness pin went unapplied for months.
+    pub unmapped: Vec<String>,
 }
 
 /// One rank's answer to a prepare.

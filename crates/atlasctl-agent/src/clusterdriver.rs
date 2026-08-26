@@ -160,7 +160,7 @@ impl ClusterControl for ClusterDriver {
 
         let mut out = Vec::with_capacity(pending.targets.len());
         for t in &pending.targets {
-            let (command, _unmapped) = match t.addr {
+            let (command, unmapped) = match t.addr {
                 None => self
                     .rank
                     .render(&t.assignment)
@@ -176,6 +176,7 @@ impl ClusterControl for ClusterDriver {
                 rank: t.assignment.rank,
                 master_addr: t.assignment.master_addr.clone(),
                 command,
+                unmapped,
             });
         }
         Ok((out, self.link_warning(recipe, nodes, head, settings)))
