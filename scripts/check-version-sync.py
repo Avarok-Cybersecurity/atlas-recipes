@@ -65,6 +65,57 @@ def path_dependencies(manifest: pathlib.Path):
                 yield table, name, path, version
 
 
+def linked_components(cfg: dict) -> list[str]:
+    """The components the linked-versions plugin claims to group."""
+    for plugin in cfg.get("plugins", []):
+        if isinstance(plugin, dict) and plugin.get("type") == "linked-versions":
+            return plugin.get("components", [])
+    return []
+
+
+def check_release_config() -> int:
+    """Every linked component must name a crate release-please can see.
+
+    A component that matches nothing is not an error to release-please — it is
+    silently ignored, and the group it was meant to join simply does not form.
+    That is how five crates ended up proposed at two different versions with
+    `linked-versions` sitting right there in the config looking correct:
+    `atlas-recipes-data` matched nothing, because path "." was registered under
+    the name `atlasctl`, which is also the name of a real crate one directory
+    down.
+    """
+    cfg_path = ROOT / "release-please-config.json"
+    cfg = json.loads(cfg_path.read_text())
+
+    known = set()
+    root_name = cfg.get("packages", {}).get(".", {}).get("package-name")
+    if root_name:
+        known.add(root_name)
+    for manifest in sorted(ROOT.glob("crates/*/Cargo.toml")):
+        with manifest.open("rb") as fh:
+            known.add(tomllib.load(fh)["package"]["name"])
+
+    # The name release-please uses for "." should be the crate that is there,
+    # or the component list cannot refer to both it and its namesake.
+    with (ROOT / "Cargo.toml").open("rb") as fh:
+        actual_root = tomllib.load(fh)["package"]["name"]
+    bad = 0
+    if root_name != actual_root:
+        print(
+            f"::error::release-please-config.json calls path \".\" {root_name!r}, "
+            f"but the crate there is {actual_root!r}"
+        )
+        bad = 1
+
+    for component in linked_components(cfg):
+        if component in known:
+            print(f"ok   linked component {component}")
+        else:
+            print(f"::error::linked-versions names {component!r}, which is no crate here")
+            bad = 1
+    return bad
+
+
 def main() -> int:
     manifests = [ROOT / "Cargo.toml", *sorted(ROOT.glob("crates/*/Cargo.toml"))]
     bad = 0
@@ -98,6 +149,8 @@ def main() -> int:
             bad = 1
         else:
             print(f"ok   release manifest {path} {recorded}")
+
+    bad |= check_release_config()
 
     if bad:
         print(

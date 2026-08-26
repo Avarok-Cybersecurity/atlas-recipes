@@ -3,7 +3,7 @@
   "release-type": "rust",
   "packages": {
     ".": {
-      "package-name": "atlasctl",
+      "package-name": "atlas-recipes-data",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         "Cargo.toml",
