@@ -171,3 +171,38 @@ fn a_failed_attempt_spends_any_exchange_already_pending() {
     }
     assert!(fleet.keys_pinned().is_empty());
 }
+
+/// A failure reply must carry the CAUSE, not just the attempt.
+///
+/// `anyhow`'s `to_string()` renders only the outermost context, so a reply built
+/// from it says "resolving not-a-host" and drops "Name or service not known" —
+/// the half that tells the operator whether to fix a typo, a DNS server, or a
+/// firewall. `{e:#}` renders the chain.
+#[test]
+fn a_failure_detail_carries_the_cause_and_not_only_the_attempt() {
+    let f = Fixture::new();
+    let node = NodeId::from_bytes([7; 32]);
+    let fleet = RecordingFleet::new(node);
+    fleet.start_failing();
+    let mut s = session(&f, &fleet);
+
+    let out = s.handle(ClientMsg::PairPeerAt {
+        id: 1,
+        target: "not-a-host".to_owned(),
+        code: "12345678".to_owned(),
+    });
+
+    match &out[0] {
+        ServerMsg::PairAtResult { detail, .. } => {
+            assert!(
+                detail.contains("resolving not-a-host"),
+                "the attempt: {detail}"
+            );
+            assert!(
+                detail.contains("Name or service not known"),
+                "the cause is the half an operator can act on: {detail}"
+            );
+        }
+        other => panic!("expected a pair-at result, got {other:?}"),
+    }
+}

@@ -63,7 +63,7 @@ impl DockerLauncher {
         .map_err(|e| AgentError::NotLaunchable {
             recipe: RecipeId::parse(&recipe.name)
                 .unwrap_or_else(|_| RecipeId::parse("unknown").expect("literal is a valid id")),
-            reason: e.to_string(),
+            reason: format!("{e:#}"),
         })?;
         // The agent removes a container by name before it starts one, and on
         // stop, so it owns this lifecycle already. Auto-remove therefore buys
@@ -110,7 +110,7 @@ impl Launcher for DockerLauncher {
             self.runner
                 .run(&plan.docker.to_argv())
                 .map_err(|e| AgentError::LaunchFailed {
-                    detail: e.to_string(),
+                    detail: format!("{e:#}"),
                 })?;
         if !out.success() {
             return Err(AgentError::LaunchFailed {
@@ -141,7 +141,7 @@ impl Launcher for DockerLauncher {
             .runner
             .run(&["docker".into(), "stop".into(), format!("atlas-{recipe}")])
             .map_err(|e| AgentError::LaunchFailed {
-                detail: e.to_string(),
+                detail: format!("{e:#}"),
             })?;
         if out.success() {
             Ok(())
@@ -164,7 +164,7 @@ impl Launcher for DockerLauncher {
                 "{{.Names}}\t{{.Status}}".into(),
             ])
             .map_err(|e| AgentError::DockerUnavailable {
-                detail: e.to_string(),
+                detail: format!("{e:#}"),
             })?;
         if !out.success() {
             return Err(AgentError::DockerUnavailable {

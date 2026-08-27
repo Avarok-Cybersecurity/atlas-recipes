@@ -91,7 +91,7 @@ where
             PeerFrame::PreviewRank { assignment } => match ctx.rank.render(&assignment) {
                 Ok((command, unmapped)) => PeerFrame::RankPreviewed { command, unmapped },
                 Err(e) => PeerFrame::RankRefused {
-                    reason: e.to_string(),
+                    reason: format!("{e:#}"),
                 },
             },
             PeerFrame::Prepare { assignment, epoch } => PeerFrame::Prepared {
@@ -104,7 +104,7 @@ where
             PeerFrame::Commit { epoch } => match ctx.rank.commit(&epoch) {
                 Ok(container) => PeerFrame::Committed { epoch, container },
                 Err(e) => PeerFrame::RankRefused {
-                    reason: e.to_string(),
+                    reason: format!("{e:#}"),
                 },
             },
             PeerFrame::IsRankAlive { container } => PeerFrame::RankLiveness {
