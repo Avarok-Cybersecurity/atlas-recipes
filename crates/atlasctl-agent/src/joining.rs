@@ -92,7 +92,14 @@ impl JoinWindow {
         self.inner
             .lock()
             .ok()
-            .and_then(|s| s.as_ref().map(|p| p.opened.elapsed() < JOIN_TTL))
+            .and_then(|s| {
+                s.as_ref()
+                    // Exhausted counts as closed. The slot outlives the last
+                    // reservation so that ceremony can still consume it, but
+                    // the TLS gate must stop admitting strangers the moment
+                    // the guesses run out, not one handshake later.
+                    .map(|p| p.opened.elapsed() < JOIN_TTL && p.attempts < MAX_ATTEMPTS)
+            })
             .unwrap_or(false)
     }
 
@@ -131,13 +138,18 @@ impl JoinWindow {
             return None;
         }
         p.attempts = p.attempts.saturating_add(1);
-        let code = p.code.as_str().to_owned();
-        if p.attempts >= MAX_ATTEMPTS {
-            // This was the last one. Closing now rather than on the next call
-            // means no further ceremony can even start.
-            *slot = None;
-        }
-        Some(code)
+        // Deliberately NOT closed here even when this was the last permitted
+        // attempt. The ceremony it belongs to has not run yet, and closing now
+        // meant a peer that went on to SUCCEED found the slot already empty:
+        // `consume` returned false and `serve_join` refused a legitimate
+        // pairing with "that invitation was already used by another machine",
+        // which was both wrong and alarming. The effective budget was two.
+        //
+        // Exhaustion is expressed by the counter instead — `is_open` reports
+        // closed and the guard above refuses the next caller — so nothing
+        // further can start while the last ceremony is still entitled to
+        // finish.
+        Some(p.code.as_str().to_owned())
     }
 
     /// Close the window because it was used, reporting whether *this* caller
@@ -287,5 +299,28 @@ mod tests {
         let _ = w.begin_attempt();
         let _ = w.begin_attempt();
         assert!(w.is_open(), "the earlier failures must not carry over");
+    }
+
+    /// A ceremony that reserved the LAST permitted attempt must still be able
+    /// to win it.
+    #[test]
+    fn the_final_permitted_attempt_can_still_pair() {
+        let w = JoinWindow::default();
+        w.mint().expect("mints");
+        for _ in 0..(MAX_ATTEMPTS - 1) {
+            assert!(
+                w.begin_attempt().is_some(),
+                "earlier attempts are permitted"
+            );
+        }
+        assert!(
+            w.begin_attempt().is_some(),
+            "the last permitted attempt must still get the code"
+        );
+        assert!(
+            w.consume(),
+            "and succeeding on it must count as spending the invitation, not as \
+             losing a race to another machine"
+        );
     }
 }
