@@ -24,20 +24,58 @@ pub fn list() -> Result<()> {
     if pins.is_empty() {
         println!("No paired machines.");
         println!();
-        println!("Run `atlasctl agent pair` on the machine you want to add, then");
-        println!("`atlasctl peer add <host> --code <digits>` here.");
+        // NOT "run `atlasctl agent pair` there". That command binds the peer
+        // port, which a running agent already holds — and a machine you would
+        // add to a fleet is usually one whose agent is already running, because
+        // installing it starts it. Both directions are named, with the
+        // condition that picks between them.
+        println!("To add one, either:");
+        println!("  · open this machine's control page and use \"Show me how\" —");
+        println!("    it hands you one line to run on the machine you are adding; or");
+        println!("  · if that machine's agent is NOT running, run `atlasctl agent pair`");
+        println!("    there and type its code into `atlasctl peer add <host> --code <digits>`.");
         return Ok(());
     }
-    println!("{:<20}  {:<20}  PAIRED", "NAME", "FINGERPRINT");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    println!(
+        "{:<20}  {:<20}  {:<12}  CONTROL",
+        "NAME", "FINGERPRINT", "PAIRED"
+    );
     for pin in pins.values() {
         println!(
-            "{:<20}  {:<20}  {}",
+            "{:<20}  {:<20}  {:<12}  {}",
             pin.name.as_str(),
             pin.id.short(),
-            pin.paired_at
+            age_text(pin.paired_at, now),
+            // The grant that lets that machine drive this one. Invisible until
+            // now, which made it impossible to audit: an operator could not
+            // answer "who can run commands on my box?" from anywhere.
+            if pin.controller { "yes" } else { "—" }
         );
     }
     Ok(())
+}
+
+/// How long ago something happened, for a column a human reads.
+///
+/// `paired_at` is a unix timestamp, and printing it raw put a ten-digit number
+/// in front of the operator — technically the answer and useless as one.
+///
+/// Pure, with `now` passed in, so it is testable without waiting for time to
+/// pass. A clock that runs backwards (NTP correction, a pin written on another
+/// machine) yields "just now" rather than a negative age.
+#[must_use]
+pub fn age_text(then: u64, now: u64) -> String {
+    let secs = now.saturating_sub(then);
+    match secs {
+        0..=59 => "just now".to_owned(),
+        60..=3599 => format!("{} min ago", secs / 60),
+        3600..=86_399 => format!("{} h ago", secs / 3600),
+        86_400..=2_591_999 => format!("{} d ago", secs / 86_400),
+        _ => format!("{} mo ago", secs / 2_592_000),
+    }
 }
 
 /// Pair with a machine by address.
@@ -189,4 +227,33 @@ fn now_unix() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
+}
+
+#[cfg(test)]
+mod list_tests {
+    use super::age_text;
+
+    #[test]
+    fn an_age_reads_as_a_human_would_say_it() {
+        const H: u64 = 3600;
+        const D: u64 = 86_400;
+        assert_eq!(age_text(1000, 1000), "just now");
+        assert_eq!(age_text(1000, 1059), "just now");
+        assert_eq!(age_text(0, 60), "1 min ago");
+        assert_eq!(age_text(0, 59 * 60), "59 min ago");
+        assert_eq!(age_text(0, H), "1 h ago");
+        assert_eq!(age_text(0, 23 * H), "23 h ago");
+        assert_eq!(age_text(0, D), "1 d ago");
+        assert_eq!(age_text(0, 29 * D), "29 d ago");
+        assert_eq!(age_text(0, 40 * D), "1 mo ago");
+    }
+
+    /// A pin written on another machine, or an NTP correction, can put
+    /// `paired_at` in the future. A negative age would print as a wrapped
+    /// number the size of the universe; "just now" is wrong by seconds instead.
+    #[test]
+    fn a_clock_that_ran_backwards_does_not_wrap() {
+        assert_eq!(age_text(9_999, 1_000), "just now");
+        assert_eq!(age_text(u64::MAX, 0), "just now");
+    }
 }
