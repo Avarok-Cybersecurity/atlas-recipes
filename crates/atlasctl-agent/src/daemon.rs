@@ -317,7 +317,21 @@ async fn serve_join<S>(
             return;
         }
         let _ = fleet;
-        eprintln!("paired with {} ({})", paired.name, paired.node.short());
+        // The words, not just the name. The machine that DIALLED shows these to
+        // its operator and asks them to compare — and until now this side
+        // printed nothing to compare against, so the comparison was one-sided
+        // and the question the other dialog asked could not be answered.
+        //
+        // This is a log line rather than a prompt because this side is
+        // typically headless and unattended: the ceremony is authorised by the
+        // invitation, which a human minted here minutes ago. The words let
+        // someone who wants to check, check.
+        eprintln!(
+            "paired with {} ({}) — verification words: {}",
+            paired.name,
+            paired.node.short(),
+            paired.verification
+        );
     }
 }
 
