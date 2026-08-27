@@ -47,13 +47,7 @@ pub fn pair(args: &crate::cli::AgentPairArgs) -> Result<()> {
     let listener = runtime.block_on(async {
         tokio::net::TcpListener::bind(("0.0.0.0", args.port))
             .await
-            .with_context(|| {
-                format!(
-                    "could not bind the peer port {} — is another `atlasctl agent pair` \
-                     already waiting?",
-                    args.port
-                )
-            })
+            .with_context(|| bind_failure(args.port, local_agent_running()))
     })?;
 
     println!();
@@ -147,4 +141,98 @@ fn hostname_hint() -> String {
     std::fs::read_to_string("/proc/sys/kernel/hostname")
         .map(|h| h.trim().to_owned())
         .unwrap_or_else(|_| "<this-machine>".to_owned())
+}
+
+/// Whether this machine's own agent is answering on the browser port.
+///
+/// Separated from [`bind_failure`] so the message is decided by a pure function
+/// a test can drive both ways. A test that probes a real socket passes or fails
+/// by accident depending on whether the developer happens to have an agent
+/// running — which is exactly what happened when this was one function.
+fn local_agent_running() -> bool {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], atlasctl_agent::DEFAULT_PORT));
+    std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok()
+}
+
+/// Why the peer port could not be bound, in the operator's terms.
+///
+/// The likely holder is not another `agent pair` — it is this machine's own
+/// agent, which binds the same port for the peer channel. That is the COMMON
+/// case, because `install.sh` installs the agent as a service: anyone who
+/// followed the documented setup and then ran this command was told to go
+/// looking for a second copy of a command they had run once.
+///
+/// A running agent is not a fault here, and the remedy is not to stop it. It
+/// takes new members through its join window instead, which is what the control
+/// page's "Show me how" opens — so the message names that path rather than
+/// sending someone to kill their own agent.
+fn bind_failure(port: u16, agent_running: bool) -> String {
+    if agent_running {
+        format!(
+            "could not bind the peer port {port}: this machine's agent is already \
+             running and holds it.\n\
+             \n\
+             That agent adds machines through its own join window, not through this \
+             command. On the machine you want to add this one FROM, open the control \
+             page and use \"Show me how\" — it hands you one line to run here.\n\
+             \n\
+             This command is for a machine whose agent is not running yet."
+        )
+    } else {
+        format!(
+            "could not bind the peer port {port} — is another `atlasctl agent pair` \
+             already waiting?"
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bind_failure;
+
+    /// With no agent listening, the old wording is right: another `agent pair`
+    /// really is the likely holder.
+    #[test]
+    fn with_no_agent_running_it_still_suspects_another_pair() {
+        let msg = bind_failure(34334, false);
+        assert!(msg.contains("34334"), "{msg}");
+        assert!(
+            msg.contains("another `atlasctl agent pair`"),
+            "without an agent, that is the honest guess: {msg}"
+        );
+    }
+
+    /// The common case, and the one that was wrong: the agent this operator was
+    /// told to install is holding the port, and the old message sent them
+    /// hunting for a second copy of a command they ran once.
+    #[test]
+    fn a_running_agent_is_named_as_the_holder_with_the_path_that_works() {
+        let msg = bind_failure(34334, true);
+        assert!(
+            msg.contains("agent is already") && msg.contains("holds it"),
+            "it must name the real holder: {msg}"
+        );
+        assert!(
+            !msg.contains("another `atlasctl agent pair`"),
+            "the wrong guess must not survive alongside the right one: {msg}"
+        );
+        assert!(
+            msg.contains("Show me how"),
+            "an operator needs the path that DOES work, not just a diagnosis: {msg}"
+        );
+    }
+
+    /// The message must never send someone to kill the agent they were told to
+    /// install.
+    #[test]
+    fn the_remedy_is_never_to_go_hunting_for_a_process() {
+        for running in [true, false] {
+            let msg = bind_failure(34334, running);
+            assert!(
+                !msg.to_lowercase().contains("kill"),
+                "an operator following the documented setup must not be told to kill \
+                 something: {msg}"
+            );
+        }
+    }
 }
