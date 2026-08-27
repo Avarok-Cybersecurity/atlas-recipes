@@ -109,6 +109,7 @@ fn agent() -> AgentInvocation {
         client: false,
         discovery: true,
         browser: true,
+        config_dir: None,
     }
 }
 
@@ -127,6 +128,32 @@ fn systemd_reloads_before_it_enables() {
     let reload = order.iter().position(|c| c.contains("daemon-reload"));
     let enable = order.iter().position(|c| c.contains("enable"));
     assert!(reload < enable, "reload must come first: {order:?}");
+}
+
+/// Reinstalling must actually restart the agent.
+///
+/// `enable --now` starts a stopped unit and does nothing to a running one, so
+/// on a reinstall the agent keeps the flags it was first installed with — a
+/// different port, a stale config dir, browser mode when `--no-browser` was
+/// asked for — while the command reports success. The operator then pairs
+/// against a process that is not the one they just configured.
+#[test]
+fn reinstalling_restarts_rather_than_leaving_the_old_agent_running() {
+    let p = plan(ServiceKind::Systemd, &agent(), &home(), 1000);
+    let order: Vec<String> = p.activate.iter().map(|a| a.join(" ")).collect();
+    let enable = order
+        .iter()
+        .position(|c| c.contains("enable"))
+        .expect("the unit is enabled");
+    let restart = order
+        .iter()
+        .position(|c| c.contains("restart"))
+        .expect("a reinstall must restart the unit, not assume --now did it");
+    assert!(
+        enable < restart,
+        "enable must precede restart, or the first install restarts a unit that \
+         is not enabled yet: {order:?}"
+    );
 }
 
 /// The port is written even when it equals today's default. A unit file
@@ -310,4 +337,46 @@ fn uninstalling_something_that_was_never_installed_succeeds() {
     let fs = Files::default();
     let r = Recorder::failing("disable");
     uninstall(&fs, &r, &home(), 1000).expect("must not fail");
+}
+
+/// A relocated config dir must reach the unit, or the service starts against
+/// the default one.
+///
+/// This is the failure that looks like a security problem and is not: the
+/// install joins the fleet using `/data/atlas`, the unit runs `agent run` with
+/// no config dir, the service finds no `agent.key` where it looked, mints a
+/// fresh identity, and the node the operator paired sixty seconds ago comes
+/// back as an unknown machine with no pins.
+#[test]
+fn a_relocated_config_dir_is_recorded_in_the_unit() {
+    let mut a = agent();
+    a.config_dir = Some(PathBuf::from("/data/atlas"));
+    let argv = a.argv();
+    let joined = argv.join(" ");
+    assert!(
+        joined.contains("--config-dir /data/atlas"),
+        "the unit must carry the config dir: {joined}"
+    );
+    // Global flags bind to the top-level command, so it has to precede the
+    // subcommand or the unit is not a command anyone could have typed.
+    let flag = argv
+        .iter()
+        .position(|s| s == "--config-dir")
+        .expect("present");
+    let sub = argv.iter().position(|s| s == "agent").expect("present");
+    assert!(
+        flag < sub,
+        "--config-dir is global and must precede `agent`: {argv:?}"
+    );
+}
+
+/// And the default must NOT be written out. A resolved default baked into a
+/// unit outlives the default it came from.
+#[test]
+fn an_unset_config_dir_writes_no_flag() {
+    let joined = agent().argv().join(" ");
+    assert!(
+        !joined.contains("--config-dir"),
+        "no flag when the operator chose none: {joined}"
+    );
 }

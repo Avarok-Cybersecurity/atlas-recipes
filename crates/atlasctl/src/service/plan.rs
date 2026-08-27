@@ -70,6 +70,16 @@ pub struct AgentInvocation {
     /// must still be one after a reboot, rather than quietly starting to
     /// demand a browser credential it does not use.
     pub browser: bool,
+    /// Where this agent keeps its state, when it is not the default.
+    ///
+    /// Recorded for the same reason the port is, only the stakes are higher.
+    /// `--config-dir` is a global flag, so `atlasctl --config-dir /data agent
+    /// install --join …` performs the join against `/data` — and then wrote a
+    /// unit that ran `agent run` with no config dir at all. The service came up
+    /// against the default directory, found no `agent.key`, minted a NEW
+    /// identity, and rejoined the fleet as a stranger with zero pins. The
+    /// operator sees a node that paired a moment ago and is now untrusted.
+    pub config_dir: Option<PathBuf>,
 }
 
 impl AgentInvocation {
@@ -80,13 +90,19 @@ impl AgentInvocation {
     /// must not silently move an installed service to a different port.
     #[must_use]
     pub fn argv(&self) -> Vec<String> {
-        let mut v = vec![
-            self.exe.display().to_string(),
+        let mut v = vec![self.exe.display().to_string()];
+        // Before the subcommand: it is a global flag, and putting it here means
+        // the unit reads the way the operator would type it.
+        if let Some(dir) = &self.config_dir {
+            v.push("--config-dir".to_owned());
+            v.push(dir.display().to_string());
+        }
+        v.extend([
             "agent".to_owned(),
             "run".to_owned(),
             "--port".to_owned(),
             self.port.to_string(),
-        ];
+        ]);
         if self.client {
             v.push("--client".to_owned());
         }
@@ -179,7 +195,20 @@ fn systemd(agent: &AgentInvocation, home: &Path) -> ServicePlan {
         unit_body,
         // daemon-reload first: enabling a unit systemd has not read yet fails,
         // and it fails in a way that reads like the unit was never written.
-        activate: vec![sc(&["daemon-reload"]), sc(&["enable", "--now", &unit])],
+        //
+        // `restart` after `enable --now` is not redundant. On a first install
+        // `--now` starts the unit and the restart is a no-op. On a REinstall
+        // the unit is already active, so `--now` does nothing at all and the
+        // agent keeps running with the flags it was installed with — a
+        // different port, a stale --config-dir, browser mode when the operator
+        // asked for --no-browser — while the command prints "agent installed
+        // and started". Silently succeeding while doing nothing is worse than
+        // failing, because the operator goes off and pairs against the old one.
+        activate: vec![
+            sc(&["daemon-reload"]),
+            sc(&["enable", "--now", &unit]),
+            sc(&["restart", &unit]),
+        ],
         // A headless box logs nobody in, so without lingering the service stops
         // the moment the installing session ends. It is also exactly the call
         // that is unavailable in a container, so it cannot be required.

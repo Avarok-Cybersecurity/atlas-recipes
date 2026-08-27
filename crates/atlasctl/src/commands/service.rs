@@ -30,6 +30,11 @@ pub fn install(args: &crate::cli::AgentInstallArgs) -> Result<()> {
         client: args.client,
         discovery: !args.no_discovery,
         browser: !args.no_browser,
+        // Only when the operator chose one. Recording the resolved default
+        // would pin today's default into a unit that outlives it, which is the
+        // same trap the port comment warns about — except this one would move
+        // the node's identity rather than its port.
+        config_dir: std::env::var_os(crate::configdir::DIR_ENV).map(std::path::PathBuf::from),
     };
     let done = crate::service::install(
         &atlasctl_core::io::StdFileSystem,

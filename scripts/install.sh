@@ -175,6 +175,18 @@ check_sparkrun() {
 do_uninstall() {
     dir="${ATLASCTL_INSTALL_DIR:-$HOME/.local/bin}"
     if [ -f "$dir/$BIN_NAME" ]; then
+        # The service MUST come out before the binary does. `main` installs the
+        # agent service by default, and its unit carries Restart=on-failure with
+        # RestartSec=5. Deleting the binary underneath a live unit leaves
+        # systemd relaunching a path that no longer exists, every five seconds,
+        # forever — a failed unit and journal spam that reinstalling elsewhere
+        # does not clear, because the stale unit is still the one enabled.
+        # Best-effort: an uninstall must finish even if this half cannot.
+        if "$dir/$BIN_NAME" agent uninstall >/dev/null 2>&1; then
+            info "removed the agent service"
+        else
+            info "no agent service to remove (or it could not be reached)"
+        fi
         rm -f "$dir/$BIN_NAME"
         info "removed $dir/$BIN_NAME"
     else
