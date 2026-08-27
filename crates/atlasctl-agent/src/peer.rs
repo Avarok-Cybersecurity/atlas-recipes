@@ -26,6 +26,10 @@ pub mod wire;
 mod tls_tests;
 
 #[cfg(test)]
+#[path = "peer/link_tests.rs"]
+mod link_tests;
+
+#[cfg(test)]
 #[path = "peer/pair_tests.rs"]
 mod pair_tests;
 

@@ -74,6 +74,21 @@ pub fn router(state: Arc<AgentState>) -> Router {
 /// yield something that is not loopback, and this listener must never be
 /// reachable from the network.
 pub async fn serve(state: Arc<AgentState>, port: u16) -> Result<()> {
+    serve_on(state, bind(port).await?).await
+}
+
+/// Claim the browser port, or say why not.
+///
+/// Separate from [`serve_on`] so the caller can bind *before* it prints
+/// anything. `agent run` used to announce "listening on 127.0.0.1:PORT", the
+/// docker status and the full pairing token, and only then try to bind — so a
+/// port conflict produced a complete, confident success banner followed by
+/// `could not bind`. The operator had already been handed a token for an agent
+/// that does not exist.
+///
+/// # Errors
+/// If the port is taken.
+pub async fn bind(port: u16) -> Result<tokio::net::TcpListener> {
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -84,7 +99,14 @@ pub async fn serve(state: Arc<AgentState>, port: u16) -> Result<()> {
         bound.ip().is_loopback(),
         "the browser listener must be loopback-only"
     );
+    Ok(listener)
+}
 
+/// Serve on a listener the caller already holds.
+///
+/// # Errors
+/// If the listener stops unexpectedly.
+pub async fn serve_on(state: Arc<AgentState>, listener: tokio::net::TcpListener) -> Result<()> {
     axum::serve(
         listener,
         router(state).into_make_service_with_connect_info::<SocketAddr>(),

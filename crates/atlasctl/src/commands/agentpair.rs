@@ -31,7 +31,7 @@ pub fn pair(args: &crate::cli::AgentPairArgs) -> Result<()> {
     use atlasctl_protocol::fleet::DisplayName;
     use std::sync::Arc;
 
-    let dir = hostinfo::config_dir()?;
+    let dir = hostinfo::usable_config_dir()?;
     let identity = Identity::load_or_create(&dir)?;
     let pins = PinStore::new(&dir);
     let code = PairingCode::generate();

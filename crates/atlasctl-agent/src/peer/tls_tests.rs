@@ -10,6 +10,7 @@ use super::tls::{
 };
 use crate::identity::{Identity, Pin, PinStore};
 use atlasctl_protocol::fleet::DisplayName;
+use ed25519_dalek::ed25519::pkcs8::EncodePrivateKey;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -307,4 +308,68 @@ async fn revoking_a_pin_takes_effect_on_the_next_connection() {
     handshake(&a, apins, &b, bpins, Some(a.id()))
         .await
         .expect_err("a removed pin must be refused immediately");
+}
+
+/// A certificate carrying a second Ed25519 SPKI must be refused outright.
+///
+/// This is the parser differential that `peer_identity`'s uniqueness check
+/// exists to close, and it is worth spelling out because the certificate is
+/// otherwise perfectly valid and rustls accepts it.
+///
+/// rustls verifies the handshake signature against the certificate's *real*
+/// SubjectPublicKeyInfo. `peer_identity` finds a key by scanning DER bytes. An
+/// attacker who signs with their own key, but embeds a victim's public key
+/// earlier in the certificate — the serial number precedes the SPKI, and its
+/// bytes are arbitrary — makes the two disagree. Taking the first match would
+/// report the victim's identity for a connection only the attacker can produce,
+/// which on the pinned fast path is admission to the fleet as that victim.
+#[test]
+fn a_certificate_with_a_smuggled_second_key_is_refused_not_guessed() {
+    let attacker = Identity::generate();
+    let victim = Identity::generate();
+
+    // The exact 44-byte SPKI the victim's own certificate would carry.
+    let mut smuggled = vec![
+        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
+    ];
+    smuggled.extend_from_slice(victim.public().as_bytes());
+
+    let pkcs8 = attacker
+        .signing_key()
+        .to_pkcs8_der()
+        .expect("encode attacker key");
+    let key_pair = rcgen::KeyPair::try_from(pkcs8.as_bytes()).expect("rcgen key");
+    let mut params =
+        rcgen::CertificateParams::new(vec![attacker.id().to_string()]).expect("params");
+    // The serial number is arbitrary bytes and is emitted before the SPKI.
+    params.serial_number = Some(rcgen::SerialNumber::from_slice(&smuggled));
+    let cert = params.self_signed(&key_pair).expect("self-sign");
+    let der = cert.der().clone();
+
+    // Precondition: the smuggled key really is in there, ahead of the real one.
+    let hay = der.as_ref();
+    let first = hay
+        .windows(smuggled.len())
+        .position(|w| w == smuggled.as_slice())
+        .expect("the victim key must actually be embedded for this test to mean anything");
+    let real = {
+        let mut probe = vec![
+            0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
+        ];
+        probe.extend_from_slice(attacker.public().as_bytes());
+        hay.windows(probe.len())
+            .position(|w| w == probe.as_slice())
+            .expect("the attacker's own key is present")
+    };
+    assert!(
+        first < real,
+        "the smuggled key must precede the real one, or the test proves nothing"
+    );
+
+    let err = peer_identity(&der).expect_err("an ambiguous certificate must be refused");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("more than one"),
+        "the refusal must say why it is ambiguous, got: {msg}"
+    );
 }

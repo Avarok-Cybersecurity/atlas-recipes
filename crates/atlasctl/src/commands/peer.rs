@@ -19,7 +19,7 @@ use atlasctl_protocol::fleet::{DisplayName, NodeId};
 /// # Errors
 /// If the pin store cannot be read.
 pub fn list() -> Result<()> {
-    let dir = crate::hostinfo::config_dir()?;
+    let dir = crate::hostinfo::usable_config_dir()?;
     let pins = PinStore::new(&dir).load()?;
     if pins.is_empty() {
         println!("No paired machines.");
@@ -47,7 +47,7 @@ pub fn list() -> Result<()> {
 /// ceremony fails — which is what both a wrong code and a relayed connection
 /// look like.
 pub fn add(args: &PeerAddArgs) -> Result<()> {
-    let dir = crate::hostinfo::config_dir()?;
+    let dir = crate::hostinfo::usable_config_dir()?;
     let identity = Identity::load_or_create(&dir)?;
     let pins = PinStore::new(&dir);
 
@@ -110,7 +110,7 @@ pub fn add(args: &PeerAddArgs) -> Result<()> {
 /// # Errors
 /// If the prefix matches no peer, or more than one.
 pub fn remove(args: &PeerRemoveArgs) -> Result<()> {
-    let dir = crate::hostinfo::config_dir()?;
+    let dir = crate::hostinfo::usable_config_dir()?;
     let pins = PinStore::new(&dir);
     let all = pins.load()?;
 

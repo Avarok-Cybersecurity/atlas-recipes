@@ -94,6 +94,19 @@ pub fn certificate_for(identity: &Identity) -> Result<PeerCertificate> {
 /// carrying any other algorithm fails to match rather than being accepted with
 /// a key we then misinterpret.
 ///
+/// **Exactly one** match is required, and that is load-bearing rather than
+/// tidy. rustls verifies `CertificateVerify` against the certificate's real
+/// SubjectPublicKeyInfo; this function finds a key by scanning bytes. If a
+/// certificate contained two Ed25519 SPKIs, the two could disagree — and a
+/// scan that took the first match would report an identity nobody proved
+/// possession of. A peer could then self-sign with their own key while
+/// embedding a victim's public key earlier in the DER (in the serial number or
+/// the subject, both of which precede the real SPKI), and be pinned and
+/// admitted as that victim. Refusing the ambiguous certificate outright closes
+/// the gap without needing a parser to adjudicate it: `supported_verify_schemes`
+/// is Ed25519-only, so the authenticating key is always itself one of the
+/// matches, and an injected second key can only ever add to the count.
+///
 /// # Errors
 /// If the certificate does not contain exactly one Ed25519 SPKI.
 pub fn peer_identity(cert: &CertificateDer<'_>) -> Result<(NodeId, VerifyingKey)> {
@@ -104,10 +117,20 @@ pub fn peer_identity(cert: &CertificateDer<'_>) -> Result<(NodeId, VerifyingKey)
     ];
 
     let der = cert.as_ref();
-    let start = der
+    let mut matches = der
         .windows(SPKI_PREFIX.len())
-        .position(|w| w == SPKI_PREFIX)
+        .enumerate()
+        .filter(|(_, w)| *w == SPKI_PREFIX)
+        .map(|(i, _)| i);
+    let start = matches
+        .next()
         .context("certificate carries no Ed25519 public key")?;
+    if matches.next().is_some() {
+        anyhow::bail!(
+            "certificate carries more than one Ed25519 public key, so which one \
+             authenticated it is ambiguous. Refusing rather than guessing."
+        );
+    }
     let key_start = start + SPKI_PREFIX.len();
     let bytes: [u8; 32] = der
         .get(key_start..key_start + 32)

@@ -42,6 +42,12 @@ pub const PRUNE_INTERVAL: Duration = Duration::from_secs(10);
 /// and a fleet of idle machines should cost almost nothing to watch.
 pub const PEER_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
+// The vitals and prune timers live in `daemon/housekeeping.rs`. They are
+// timers over local state; this file is the machine-to-machine half.
+mod housekeeping;
+
+use housekeeping::{spawn_prune, spawn_vitals};
+
 /// Start every background loop.
 ///
 /// Returns immediately; the loops run until the process ends.
@@ -62,24 +68,47 @@ pub fn spawn_all(
 ///
 /// Separate from [`spawn_all`] because it needs this agent's identity, which
 /// the fleet view owns privately.
-pub fn spawn_peer_work(
-    fleet: Arc<crate::fleet::LocalFleet>,
-    identity: Arc<crate::identity::Identity>,
-    pins: crate::identity::PinStore,
-    events: broadcast::Sender<ServerMsg>,
-    peer_port: u16,
-    rank: Arc<dyn RankService>,
-    joining: Arc<crate::joining::JoinWindow>,
-) {
+/// `accelerator` is threaded in rather than left blank: `fleet::listing` gives
+/// the authenticated peer report PRECEDENCE over the beacon, so an empty string
+/// here overwrites a good beacon value and every paired node in the fleet view
+/// reads blank. That is the exact symptom `agent run` documents as already
+/// fixed — the fix reached the beacon, and this path kept sending "".
+pub struct PeerWork {
+    /// This machine's view of the fleet.
+    pub fleet: Arc<crate::fleet::LocalFleet>,
+    /// This node's keypair.
+    pub identity: Arc<crate::identity::Identity>,
+    /// Who this node trusts.
+    pub pins: crate::identity::PinStore,
+    /// Where fleet changes are published.
+    pub events: broadcast::Sender<ServerMsg>,
+    /// The peer channel's port.
+    pub peer_port: u16,
+    /// What answers rank requests.
+    pub rank: Arc<dyn RankService>,
+    /// Whether this node is currently accepting a new member.
+    pub joining: Arc<crate::joining::JoinWindow>,
+    /// This machine's accelerator tag, probed once at startup.
+    pub accelerator: String,
+}
+
+pub fn spawn_peer_work(w: PeerWork) {
     spawn_peer_listener(
-        Arc::clone(&fleet),
-        Arc::clone(&identity),
-        pins.clone(),
-        peer_port,
-        rank,
-        joining,
+        Arc::clone(&w.fleet),
+        Arc::clone(&w.identity),
+        w.pins.clone(),
+        w.peer_port,
+        w.rank,
+        w.joining,
     );
-    spawn_peer_poll(fleet, identity, pins, events, peer_port);
+    spawn_peer_poll(
+        w.fleet,
+        w.identity,
+        w.pins,
+        w.events,
+        w.peer_port,
+        w.accelerator,
+    );
 }
 
 /// Accept connections from paired peers.
@@ -199,7 +228,10 @@ async fn serve_join<S>(
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    let Some(code) = joining.peek() else {
+    // Charges a guess up front. Every path out of this function below is
+    // therefore already accounted for, including the two that return without
+    // running a ceremony at all — previously those were free retries.
+    let Some(code) = joining.begin_attempt() else {
         // The window closed between the handshake and here.
         return;
     };
@@ -214,7 +246,9 @@ async fn serve_join<S>(
         }
     };
 
-    match crate::peer::pair::run(
+    // The failure arm is deliberately empty: `begin_attempt` already charged
+    // this guess, so there is nothing left to record when the ceremony fails.
+    if let Ok(paired) = crate::peer::pair::run(
         tls,
         crate::peer::pair::Role::Responder,
         identity,
@@ -224,25 +258,45 @@ async fn serve_join<S>(
     )
     .await
     {
-        Ok(paired) => {
-            // Single use: the invitation is spent whether or not the pin
-            // write below succeeds, because the code has now been seen on the
-            // wire by whoever answered.
-            joining.consume();
-            let _ = crate::fleet::record_pairing(
-                pins,
-                paired.node,
-                &paired.public_key,
-                atlasctl_protocol::fleet::DisplayName::new(&paired.name),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_secs()),
-                None,
+        // Single use: the invitation is spent whether or not the pin
+        // write below succeeds, because the code has now been seen on the
+        // wire by whoever answered.
+        //
+        // Losing this race means another ceremony already spent the
+        // invitation. Both peers hold a valid code, so neither is
+        // necessarily hostile — but "one invitation, one machine" is the
+        // property, and admitting the loser would quietly break it.
+        if !joining.consume() {
+            eprintln!(
+                "refusing {}: that invitation was already used by another machine. \
+                     Mint a fresh one to add this node.",
+                paired.node.short()
             );
-            let _ = fleet;
-            eprintln!("paired with {} ({})", paired.name, paired.node.short());
+            return;
         }
-        Err(_) => joining.attempt_failed(),
+        if let Err(e) = crate::fleet::record_pairing(
+            pins,
+            paired.node,
+            &paired.public_key,
+            atlasctl_protocol::fleet::DisplayName::new(&paired.name),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
+            None,
+        ) {
+            // Announcing a pairing whose pin never reached disk is how a
+            // fleet ends up with one side believing it is paired and the
+            // other rejecting it on the next connection, with nothing
+            // anywhere saying why.
+            eprintln!(
+                "pairing with {} completed but could not be recorded: {e:#}. \
+                     The peer believes it is paired; this machine does not.",
+                paired.node.short()
+            );
+            return;
+        }
+        let _ = fleet;
+        eprintln!("paired with {} ({})", paired.name, paired.node.short());
     }
 }
 
@@ -253,6 +307,7 @@ fn spawn_peer_poll(
     pins: crate::identity::PinStore,
     events: broadcast::Sender<ServerMsg>,
     port: u16,
+    accelerator: String,
 ) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(PEER_POLL_INTERVAL);
@@ -263,7 +318,18 @@ fn spawn_peer_poll(
                 continue;
             };
             for (id, addr) in peers {
-                let Ok(sock) = format!("{addr}:{port}").parse() else {
+                // Parse the IP and attach the port, rather than formatting
+                // "{addr}:{port}" and parsing that. A SocketAddr string needs
+                // an IPv6 literal in brackets — `[fe80::1]:34334` — so the
+                // formatted form failed to parse for EVERY IPv6 peer, and the
+                // `continue` below turned that into silence: the node stayed in
+                // the fleet, was never polled, and simply aged into "stale"
+                // forever with no error anywhere.
+                let Some(sock) = addr
+                    .parse::<std::net::IpAddr>()
+                    .ok()
+                    .map(|ip| std::net::SocketAddr::new(ip, port))
+                else {
                     continue;
                 };
                 let link = fleet.classify_peer_address(&addr);
@@ -273,7 +339,7 @@ fn spawn_peer_poll(
                     sock,
                     id,
                     link,
-                    &crate::peer::link::SelfIntro::new(fleet.can_launch(), ""),
+                    &crate::peer::link::SelfIntro::new(fleet.can_launch(), &accelerator),
                     &fleet.local_addresses(),
                 )
                 .await
@@ -355,74 +421,6 @@ fn spawn_discovery(
                         event: FleetEvent::NodeGone { node: id },
                     });
                 }
-            }
-        }
-    });
-}
-
-/// Sample this machine and push the result.
-fn spawn_vitals(fleet: Arc<LocalFleet>, events: broadcast::Sender<ServerMsg>) {
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(VITALS_INTERVAL);
-        // If a sample takes longer than the interval, skip rather than queue:
-        // catching up on stale samples is worse than missing them.
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            tick.tick().await;
-            // Nobody is watching, so do not spawn a process to find out.
-            if events.receiver_count() == 0 {
-                continue;
-            }
-            let fleet = Arc::clone(&fleet);
-            // Sampling shells out, so it must not run on the async runtime.
-            let sampled = tokio::task::spawn_blocking(move || {
-                // Both shell out, so they share the blocking hop.
-                let changed = fleet.refresh_running().is_some();
-                // Re-read after refreshing, so a node whose running model just
-                // changed is described as it is now rather than as it was.
-                let local = changed.then(|| fleet.nodes().into_iter().next());
-                (fleet.local_vitals_and_id(), local)
-            })
-            .await;
-            let sampled = match sampled {
-                Ok((v, local)) => {
-                    if let Some(Some(node)) = local {
-                        let _ = events.send(ServerMsg::FleetEvent {
-                            event: FleetEvent::NodeChanged {
-                                node: Box::new(node),
-                            },
-                        });
-                    }
-                    Ok(v)
-                }
-                Err(e) => Err(e),
-            };
-            if let Ok(Some((id, vitals))) = sampled {
-                let _ = events.send(ServerMsg::FleetEvent {
-                    event: FleetEvent::Vitals {
-                        node: id,
-                        vitals: Box::new(vitals),
-                    },
-                });
-            }
-        }
-    });
-}
-
-/// Age out sightings of machines that have gone away.
-fn spawn_prune(fleet: Arc<LocalFleet>, events: broadcast::Sender<ServerMsg>) {
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(PRUNE_INTERVAL);
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            tick.tick().await;
-            let before: Vec<_> = fleet.nodes().into_iter().map(|n| n.id).collect();
-            fleet.prune();
-            let after: Vec<_> = fleet.nodes().into_iter().map(|n| n.id).collect();
-            for gone in before.iter().filter(|id| !after.contains(id)) {
-                let _ = events.send(ServerMsg::FleetEvent {
-                    event: FleetEvent::NodeGone { node: *gone },
-                });
             }
         }
     });

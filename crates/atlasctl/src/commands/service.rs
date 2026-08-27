@@ -30,6 +30,11 @@ pub fn install(args: &crate::cli::AgentInstallArgs) -> Result<()> {
         client: args.client,
         discovery: !args.no_discovery,
         browser: !args.no_browser,
+        // Only when the operator chose one. Recording the resolved default
+        // would pin today's default into a unit that outlives it, which is the
+        // same trap the port comment warns about — except this one would move
+        // the node's identity rather than its port.
+        config_dir: std::env::var_os(crate::configdir::DIR_ENV).map(std::path::PathBuf::from),
     };
     let done = crate::service::install(
         &atlasctl_core::io::StdFileSystem,
@@ -39,7 +44,16 @@ pub fn install(args: &crate::cli::AgentInstallArgs) -> Result<()> {
         uid_of(&home),
     )?;
 
-    println!("agent installed and started");
+    if done.running {
+        println!("agent installed and started");
+    } else {
+        // Installed is true; started is not. Saying "started" here is how an
+        // operator ends up pairing a browser against a five-second crash loop.
+        println!("agent installed, but it is NOT running");
+        println!("  the unit is enabled and the supervisor accepted it, so this is");
+        println!("  the agent exiting at startup. See why with:");
+        println!("    journalctl --user -u atlasctl-agent -n 50");
+    }
     println!("  unit: {}", done.unit_path.display());
     println!("  port: {}", args.port);
     if args.client {

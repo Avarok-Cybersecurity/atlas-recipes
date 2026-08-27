@@ -84,7 +84,7 @@ pub enum AgentCmd {
     /// Print the pairing token to paste into the website.
     Token(AgentTokenArgs),
     /// Report whether an agent is reachable.
-    Status,
+    Status(AgentStatusArgs),
     /// Print a code for joining this machine to a fleet.
     ///
     /// The code is shown HERE, on the machine being added, and typed on the
@@ -217,6 +217,20 @@ pub struct AgentRunArgs {
     /// starting at all.
     #[arg(long)]
     pub no_browser: bool,
+}
+
+/// `agent status` arguments.
+#[derive(Args, Debug)]
+pub struct AgentStatusArgs {
+    /// Browser port to probe.
+    ///
+    /// Asked for rather than assumed: `agent install --port 9000` is a
+    /// first-class option, and a status check that only ever probed 34333 told
+    /// those operators "not running — start it with agent run", which is advice
+    /// to start a SECOND agent that then fails to bind against the one that was
+    /// running all along.
+    #[arg(long, default_value_t = atlasctl_agent::DEFAULT_PORT)]
+    pub port: u16,
 }
 
 /// `agent token` arguments.

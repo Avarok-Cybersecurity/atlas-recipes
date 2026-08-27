@@ -2,11 +2,11 @@
 
 //! `agent run`, `agent token`, `agent status`.
 
-use crate::cli::{AgentRunArgs, AgentTokenArgs};
+use crate::cli::{AgentRunArgs, AgentStatusArgs, AgentTokenArgs};
 use crate::hostinfo;
 use anyhow::{Context, Result, bail};
 use atlasctl_agent::launcher::DockerLauncher;
-use atlasctl_agent::server::{AgentState, serve};
+use atlasctl_agent::server::AgentState;
 use atlasctl_agent::token;
 use atlasctl_core::docker::profile::{NvidiaDevices, ROOTLESS_V1};
 use atlasctl_core::io::{ProcessRunner, StdProcessRunner};
@@ -173,7 +173,14 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     )));
 
     let fleet = Arc::new(fleet);
-    let (events, _keep) = tokio::sync::broadcast::channel(256);
+    // The Receiver is dropped, deliberately. Holding it for the process
+    // lifetime made `events.receiver_count()` permanently non-zero, which
+    // killed the "nobody is watching, do not spawn a process to find out"
+    // guard in the vitals loop: the agent shelled out to `docker ps` and
+    // sampled the GPU every second forever, including under `--no-browser`
+    // where nothing can ever subscribe. Every `send` on this channel already
+    // ignores its error, so there is nothing to keep alive.
+    let (events, _) = tokio::sync::broadcast::channel(256);
 
     let renderer: Arc<dyn atlasctl_agent::rank::RankService> =
         Arc::new(crate::rankservice::LocalRankService::new(
@@ -254,6 +261,16 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         });
     }
 
+    // Claim the port BEFORE announcing it. Everything below — the address, the
+    // docker status, the pairing token — is a promise about an agent that is
+    // about to exist, and on a port conflict it was all printed and then
+    // contradicted. The operator was handed a token for nothing.
+    let listener = if args.no_browser {
+        None
+    } else {
+        Some(rt.block_on(atlasctl_agent::server::bind(args.port))?)
+    };
+
     if args.no_browser {
         // Do not claim a port that was never bound. The whole point of this
         // mode is that there is no browser channel.
@@ -313,15 +330,16 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         // Serving the peer channel is what turns a pairing into a working
         // link: it is how a peer's real vitals and verified link class arrive,
         // rather than a beacon's unauthenticated word for them.
-        atlasctl_agent::daemon::spawn_peer_work(
-            Arc::clone(&fleet),
-            Arc::clone(&identity),
+        atlasctl_agent::daemon::spawn_peer_work(atlasctl_agent::daemon::PeerWork {
+            fleet: Arc::clone(&fleet),
+            identity: Arc::clone(&identity),
             pins,
-            events.clone(),
-            atlasctl_agent::peer::DEFAULT_PEER_PORT,
-            Arc::clone(&renderer),
-            Arc::clone(&joining),
-        );
+            events: events.clone(),
+            peer_port: atlasctl_agent::peer::DEFAULT_PEER_PORT,
+            rank: Arc::clone(&renderer),
+            joining: Arc::clone(&joining),
+            accelerator: accelerator.clone(),
+        });
 
         atlasctl_agent::daemon::spawn_all(
             Arc::clone(&fleet),
@@ -337,20 +355,20 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
             },
         );
 
-        if args.no_browser {
+        let Some(listener) = listener else {
             // Nothing to serve; the peer channel and discovery are the point.
             // Park until signalled rather than returning, which would tear the
             // runtime down and take those with it.
             std::future::pending::<()>().await;
             return Ok(());
-        }
-        serve(state, args.port).await
+        };
+        atlasctl_agent::server::serve_on(state, listener).await
     })
 }
 
 /// Print, or rotate, the pairing token.
 pub fn token(args: &AgentTokenArgs) -> Result<()> {
-    let dir = hostinfo::config_dir()?;
+    let dir = hostinfo::usable_config_dir()?;
     let tok = if args.rotate {
         let t = token::rotate(&dir)?;
         eprintln!("token rotated — any browser already paired must be given the new one");
@@ -362,18 +380,79 @@ pub fn token(args: &AgentTokenArgs) -> Result<()> {
     Ok(())
 }
 
-/// Report whether an agent is reachable on the default port.
-pub fn status() -> Result<()> {
-    let addr = format!("127.0.0.1:{}", atlasctl_agent::DEFAULT_PORT);
+/// What to suggest when nothing answered on `port`.
+///
+/// Pure so it can be tested: the probe itself is a socket connect, and the
+/// interesting behaviour is which advice an operator gets, not whether the
+/// kernel can refuse a connection.
+#[must_use]
+pub fn status_advice(port: u16) -> Vec<String> {
+    let mut out = Vec::new();
+    if port == atlasctl_agent::DEFAULT_PORT {
+        // Naming the flag matters more than it looks: an operator who installed
+        // on another port has no reason to suspect this command only ever
+        // asked one, and the old advice ("start it with agent run") told them
+        // to launch a second agent that would then fail to bind.
+        out.push(
+            "if you installed it on another port, check that one:\n  \
+             atlasctl agent status --port <PORT>"
+                .to_owned(),
+        );
+    }
+    out.push("or start it with: atlasctl agent run".to_owned());
+    out
+}
+
+/// Report whether an agent is reachable.
+///
+/// Probes the port asked for rather than assuming the default. An agent
+/// installed with `--port 9000` was reported as "not running", followed by
+/// advice to start another one — which then failed to bind against the agent
+/// that was running the whole time.
+pub fn status(args: &AgentStatusArgs) -> Result<()> {
+    let addr = format!("127.0.0.1:{}", args.port);
     match std::net::TcpStream::connect(&addr) {
         Ok(_) => {
             println!("agent: running (listening on {addr})");
             Ok(())
         }
         Err(e) => {
-            println!("agent: not running ({e})");
-            println!("start it with: atlasctl agent run");
+            println!("agent: not running on {addr} ({e})");
+            for line in status_advice(args.port) {
+                println!("{line}");
+            }
             bail!("no agent is listening on {addr}")
         }
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::status_advice;
+
+    /// An operator on the default port may simply not know the flag exists.
+    #[test]
+    fn the_default_port_suggests_looking_elsewhere_first() {
+        let a = status_advice(atlasctl_agent::DEFAULT_PORT);
+        assert!(
+            a.iter().any(|l| l.contains("--port")),
+            "must name the flag: {a:?}"
+        );
+    }
+
+    /// But an operator who NAMED a port has already answered that question.
+    /// Repeating it there would be noise, and worse, it would imply the port
+    /// they gave was not the one probed.
+    #[test]
+    fn an_explicit_port_is_not_second_guessed() {
+        let a = status_advice(9000);
+        assert!(
+            !a.iter().any(|l| l.contains("--port")),
+            "must not re-suggest the flag: {a:?}"
+        );
+        assert!(
+            a.iter().any(|l| l.contains("agent run")),
+            "still offers a start"
+        );
     }
 }
