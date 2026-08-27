@@ -3,5 +3,5 @@
   "crates/atlasctl": "0.1.5",
   "crates/atlasctl-agent": "0.1.5",
   "crates/atlasctl-core": "0.1.5",
-  "crates/atlasctl-protocol": "0.2.0"
+  "crates/atlasctl-protocol": "0.3.0"
 }
