@@ -176,7 +176,9 @@ fn spawn_peer_listener(
             Ok(l) => l,
             Err(e) => {
                 eprintln!(
-                    "peer channel disabled: could not bind {port}: {e}\n                       other machines will not be able to reach this one"
+                    "peer channel disabled: could not bind {port}: {e}\n\
+                     other machines will not be able to reach this one, and this \
+                     one cannot be added to a fleet"
                 );
                 return;
             }
