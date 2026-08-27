@@ -18,6 +18,8 @@ use std::sync::Mutex;
 pub(super) struct RecordingFleet {
     pub(super) outcome: PairOutcome,
     trusted: Mutex<Vec<String>>,
+    /// Nodes whose pin was written WITH the controller grant.
+    granted: Mutex<Vec<NodeId>>,
     pub(super) fail_pin: bool,
     /// Make the ceremony itself fail, as an unreachable address does.
     ///
@@ -38,6 +40,7 @@ impl RecordingFleet {
                 verification: "amber-koala-drift".to_owned(),
             },
             trusted: Mutex::new(Vec::new()),
+            granted: Mutex::new(Vec::new()),
             fail_pin: false,
             fail_exchange: Mutex::new(false),
         }
@@ -45,6 +48,10 @@ impl RecordingFleet {
 
     pub(super) fn keys_pinned(&self) -> Vec<String> {
         self.trusted.lock().expect("poisoned").clone()
+    }
+
+    pub(super) fn grants(&self) -> Vec<NodeId> {
+        self.granted.lock().expect("poisoned").clone()
     }
 }
 
@@ -61,7 +68,7 @@ impl FleetView for RecordingFleet {
         self.exchange()
     }
 
-    fn trust(&self, outcome: &PairOutcome) -> anyhow::Result<()> {
+    fn trust(&self, outcome: &PairOutcome, allow_control: bool) -> anyhow::Result<()> {
         if self.fail_pin {
             anyhow::bail!("disk full");
         }
@@ -69,6 +76,9 @@ impl FleetView for RecordingFleet {
             .lock()
             .expect("poisoned")
             .push(outcome.public_key.clone());
+        if allow_control {
+            self.granted.lock().expect("poisoned").push(outcome.node);
+        }
         Ok(())
     }
 

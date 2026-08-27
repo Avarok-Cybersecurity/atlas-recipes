@@ -130,6 +130,7 @@ fn a_paired_node_that_is_switched_off_stays_in_the_fleet_as_unreachable() {
         DisplayName::new("spark-43fa"),
         1_756_000_000,
         None,
+        false,
     )
     .expect("pin");
 
@@ -159,6 +160,7 @@ fn a_paired_node_that_is_answering_is_reported_as_paired() {
         DisplayName::new("spark-43fa"),
         0,
         None,
+        false,
     )
     .expect("pin");
     f.observe(beacon(peer.id(), "spark-43fa", true));
@@ -187,6 +189,7 @@ fn a_node_is_listed_once_even_when_pinned_and_seen() {
         DisplayName::new("p"),
         0,
         None,
+        false,
     )
     .expect("pin");
     f.observe(beacon(peer.id(), "p", true));
@@ -256,6 +259,7 @@ fn a_paired_peer_we_have_spoken_to_is_launchable_without_a_beacon() {
         DisplayName::new("spark-43fa"),
         0,
         None,
+        false,
     )
     .expect("pin");
     // No `observe`: nothing was ever heard on multicast.
@@ -290,6 +294,7 @@ fn an_authenticated_report_outranks_a_beacon_that_disagrees() {
         DisplayName::new("laptop"),
         0,
         None,
+        false,
     )
     .expect("pin");
     // The beacon says it can launch; the machine itself says it cannot.
@@ -341,6 +346,7 @@ fn unpairing_reports_whether_there_was_anything_to_undo() {
         DisplayName::new("p"),
         0,
         None,
+        false,
     )
     .expect("pin");
 
@@ -418,6 +424,7 @@ fn a_paired_peers_address_survives_this_agent_restarting() {
         DisplayName::new("spark-43fa"),
         0,
         None,
+        false,
     )
     .expect("pin");
 

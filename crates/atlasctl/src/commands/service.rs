@@ -128,6 +128,9 @@ fn join_fleet(join: &crate::joinarg::Join) -> Result<()> {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs()),
         Some(addr.ip().to_string()),
+        // Pairing authenticates only: the controller grant stays a
+        // separate, explicit act (`atlasctl peer grant-control`).
+        false,
     )?;
 
     println!("joined {} ({})", paired.name, paired.node.short());

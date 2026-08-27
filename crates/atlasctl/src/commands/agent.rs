@@ -40,8 +40,12 @@ impl atlasctl_agent::fleet::FleetView for FleetHandle {
         self.0.pair_at(target, code)
     }
 
-    fn trust(&self, outcome: &atlasctl_agent::fleet::PairOutcome) -> anyhow::Result<()> {
-        self.0.trust(outcome)
+    fn trust(
+        &self,
+        outcome: &atlasctl_agent::fleet::PairOutcome,
+        allow_control: bool,
+    ) -> anyhow::Result<()> {
+        self.0.trust(outcome, allow_control)
     }
 
     fn unpair(&self, node: atlasctl_protocol::fleet::NodeId) -> anyhow::Result<bool> {
@@ -274,6 +278,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
             )),
         ))),
         cluster: Some(Arc::clone(&cluster) as Arc<dyn atlasctl_agent::session::ClusterControl>),
+        relay: None,
         events: events.clone(),
     });
 

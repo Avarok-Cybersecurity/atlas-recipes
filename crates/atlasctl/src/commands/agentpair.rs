@@ -130,6 +130,9 @@ pub fn pair(args: &crate::cli::AgentPairArgs) -> Result<()> {
             .map_or(0, |d| d.as_secs()),
         // The responder learns the initiator's address from the connection.
         None,
+        // Pairing authenticates only: the controller grant stays a
+        // separate, explicit act (`atlasctl peer grant-control`).
+        false,
     )?;
     println!("Paired with {} ({}).", paired.name, paired.node.short());
     Ok(())

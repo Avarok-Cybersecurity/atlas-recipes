@@ -338,7 +338,7 @@ impl FleetView for LocalFleet {
         })
     }
 
-    fn trust(&self, outcome: &PairOutcome) -> Result<()> {
+    fn trust(&self, outcome: &PairOutcome, allow_control: bool) -> Result<()> {
         super::record_pairing(
             &self.pins,
             outcome.node,
@@ -348,6 +348,7 @@ impl FleetView for LocalFleet {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs()),
             Some(outcome.address.clone()),
+            allow_control,
         )
     }
 

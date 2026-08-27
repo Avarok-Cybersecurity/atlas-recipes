@@ -31,11 +31,14 @@ impl Session<'_> {
     /// The addresses go out with the code because the joining machine has to
     /// dial back and cannot discover this one — it is not paired yet, and a
     /// beacon is not something to build a command on.
-    pub(super) fn mint_join(&mut self, id: u32) -> Vec<ServerMsg> {
+    /// `allow_control` grants the machine that joins through this window the
+    /// `controller` right at the moment its pin is written — consent said by
+    /// the human minting, not implied.
+    pub(super) fn mint_join(&mut self, id: u32, allow_control: bool) -> Vec<ServerMsg> {
         let Some(joining) = self.deps.joining else {
             return vec![err(Some(id), AgentError::NotReady)];
         };
-        match joining.mint() {
+        match joining.mint(allow_control) {
             Ok(code) => vec![ServerMsg::JoinInvitation {
                 id,
                 code: Some(code),
@@ -180,7 +183,16 @@ impl Session<'_> {
     }
 
     /// Trust the exchange this session is holding.
-    pub(super) fn confirm_pairing(&mut self, id: u32, node: NodeId) -> Vec<ServerMsg> {
+    ///
+    /// `allow_control` rides the same human decision: the grant is written
+    /// with the pin, atomically, so the operator can never end up believing
+    /// consent was recorded when nothing was.
+    pub(super) fn confirm_pairing(
+        &mut self,
+        id: u32,
+        node: NodeId,
+        allow_control: bool,
+    ) -> Vec<ServerMsg> {
         // `take` FIRST, before any other precondition. Whatever the answer,
         // this exchange is spent: a decision that failed for an unrelated
         // reason must not leave the words live for a later confirm to reuse.
@@ -211,7 +223,7 @@ impl Session<'_> {
         let Some(fleet) = self.deps.fleet else {
             return vec![err(Some(id), AgentError::NotReady)];
         };
-        match fleet.trust(&pending.outcome) {
+        match fleet.trust(&pending.outcome, allow_control) {
             Ok(()) => vec![decision(id, node, true, "")],
             // The pin did not reach disk, so this machine does NOT trust the
             // peer — even though the peer may already trust it. Saying so is

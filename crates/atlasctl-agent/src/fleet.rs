@@ -70,9 +70,14 @@ pub trait FleetView: Send + Sync {
     /// words matched. The caller holds the [`PairOutcome`] in the meantime; if
     /// it never confirms, no pin is ever written and there is nothing to undo.
     ///
+    /// `allow_control` writes the `controller` grant with the pin — one
+    /// atomic decision, taken at the moment a human is already deciding to
+    /// trust the machine. It defaults to nothing: pairing authenticates, and
+    /// only this explicit flag (or `atlasctl peer grant-control`) authorizes.
+    ///
     /// # Errors
     /// If the pin store cannot be written.
-    fn trust(&self, outcome: &PairOutcome) -> Result<()>;
+    fn trust(&self, outcome: &PairOutcome, allow_control: bool) -> Result<()>;
 
     /// Drop trust in a peer. Returns whether it was trusted.
     ///
@@ -442,6 +447,7 @@ pub fn record_pairing(
     name: DisplayName,
     now_unix: u64,
     last_address: Option<String>,
+    controller: bool,
 ) -> Result<()> {
     pins.add(Pin {
         id: node,
@@ -449,10 +455,12 @@ pub fn record_pairing(
         name,
         paired_at: now_unix,
         last_address,
-        // Pairing authenticates; it does not authorize control. The grant is
-        // a separate, explicit act (`atlasctl peer grant-control`), so a
-        // ceremony can never hand out remote-stop authority as a side effect.
-        controller: false,
+        // Pairing authenticates; it does not authorize control. `controller`
+        // is true only when a human said so in the same breath as trusting
+        // the machine (`allow_control` on the confirm or the join window) —
+        // never as a side effect of the ceremony itself, and otherwise the
+        // grant stays a separate act (`atlasctl peer grant-control`).
+        controller,
     })
 }
 

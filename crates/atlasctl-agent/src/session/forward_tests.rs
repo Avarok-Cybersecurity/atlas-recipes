@@ -1,26 +1,34 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The protocol-4 forwarding surface, in the build that carries it ahead of
-//! the router.
+//! The session's remote-routing surface: rule O1, the relay hand-off, and
+//! the provenance every reply must state.
 //!
-//! The `on` annotation and `allow_control` exist on the wire before the code
-//! that honours them (the session router and the `Pin::controller` store are
-//! later steps of the forwarding design). These tests pin the placeholder
-//! behaviour that makes the intermediate build safe: a request aimed at
-//! another machine is REFUSED, never executed here as if it were local, and
-//! consent that cannot be recorded is refused rather than silently dropped.
-//! Each would fail loudly if someone made the placeholders "helpful".
+//! O2–O5 live behind the [`ControlRelay`] trait and are proven against the
+//! real planner in `fleet/routing_tests.rs` and the three-agent suite in
+//! `daemon/relay_tests.rs`; here a fake relay proves the SESSION's half:
+//! which verbs route, what gets executed locally, and that the page is told
+//! exactly what was done.
 
 use super::fleet_fake::RecordingFleet;
 use super::pairing_tests::{exchange, ready_with_fleet};
-use super::tests::Fixture;
-use atlasctl_protocol::fleet::NodeId;
-use atlasctl_protocol::msg::AgentError;
+use super::tests::{Fixture, TOKEN};
+use super::{ControlRelay, Session, SessionDeps};
+use atlasctl_protocol::fleet::{Launchability, NodeDescriptor, NodeId, PairingState};
+use atlasctl_protocol::msg::{AgentError, ControlRep, ControlReq};
 use atlasctl_protocol::{ClientMsg, ServerMsg};
 use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 fn target() -> NodeId {
     NodeId::from_bytes([0xd6; 32])
+}
+
+fn local_id() -> NodeId {
+    NodeId::from_bytes([0x11; 32])
+}
+
+fn relay_id() -> NodeId {
+    NodeId::from_bytes([0x22; 32])
 }
 
 fn recipe() -> atlasctl_protocol::RecipeId {
@@ -64,6 +72,152 @@ fn forwarded(on: NodeId) -> Vec<ClientMsg> {
     ]
 }
 
+/// A fleet that knows only which node is this machine — the one fact O1
+/// needs.
+struct SelfAwareFleet;
+
+impl crate::fleet::FleetView for SelfAwareFleet {
+    fn nodes(&self) -> Vec<NodeDescriptor> {
+        vec![NodeDescriptor {
+            id: local_id(),
+            name: atlasctl_protocol::fleet::DisplayName::new("this-box"),
+            is_local: true,
+            pairing: PairingState::Paired,
+            addresses: Vec::new(),
+            launchability: Launchability::yes(),
+            agent_version: String::new(),
+            accelerator: String::new(),
+            os: String::new(),
+            vitals: None,
+            alerts: Vec::new(),
+            running: None,
+            vouched_by: None,
+            reached_via: None,
+        }]
+    }
+    fn pair(&self, _: NodeId, _: &str) -> anyhow::Result<crate::fleet::PairOutcome> {
+        anyhow::bail!("not under test")
+    }
+    fn pair_at(&self, _: &str, _: &str) -> anyhow::Result<crate::fleet::PairOutcome> {
+        anyhow::bail!("not under test")
+    }
+    fn trust(&self, _: &crate::fleet::PairOutcome, _: bool) -> anyhow::Result<()> {
+        anyhow::bail!("not under test")
+    }
+    fn unpair(&self, _: NodeId) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+}
+
+/// What a scripted relay answers with.
+type Scripted = Result<(ControlRep, Option<NodeId>), AgentError>;
+
+/// Scripted relay: records what it was asked, answers from a table.
+struct FakeRelay {
+    calls: Mutex<Vec<(NodeId, ControlReq)>>,
+    answer: Box<dyn Fn(&ControlReq) -> Scripted + Send + Sync>,
+}
+
+impl FakeRelay {
+    fn new(answer: impl Fn(&ControlReq) -> Scripted + Send + Sync + 'static) -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+            answer: Box::new(answer),
+        }
+    }
+
+    fn calls(&self) -> Vec<(NodeId, ControlReq)> {
+        self.calls.lock().expect("lock").clone()
+    }
+}
+
+impl ControlRelay for FakeRelay {
+    fn control(
+        &self,
+        target: NodeId,
+        req: ControlReq,
+    ) -> Result<(ControlRep, Option<NodeId>), AgentError> {
+        self.calls.lock().expect("lock").push((target, req.clone()));
+        (self.answer)(&req)
+    }
+}
+
+/// A ready session over a self-aware fleet and the given relay.
+fn routed_session<'a>(
+    f: &'a Fixture,
+    fleet: &'a SelfAwareFleet,
+    relay: Option<&'a dyn ControlRelay>,
+) -> Session<'a> {
+    let (mut s, _) = Session::new(SessionDeps {
+        registry: &f.registry,
+        launcher: &f.launcher,
+        token: TOKEN,
+        can_launch: f.can_launch.clone(),
+        fleet: Some(fleet),
+        cluster: None,
+        telemetry: None,
+        joining: None,
+        relay,
+    });
+    let out = s.handle(ClientMsg::Hello {
+        protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
+        token: TOKEN.into(),
+    });
+    assert!(matches!(out[0], ServerMsg::Ready { .. }));
+    s
+}
+
+/// The verb-for-verb answer a well-behaved relay would give.
+fn answer_in_kind(req: &ControlReq) -> Scripted {
+    let rep = match req {
+        ControlReq::ListRecipes => ControlRep::Recipes {
+            recipes: Vec::new(),
+        },
+        ControlReq::Preview { .. } => ControlRep::Previewed {
+            command: "docker run …".into(),
+            unapplied: Vec::new(),
+        },
+        ControlReq::Launch { recipe, .. } => ControlRep::Started {
+            recipe: recipe.clone(),
+            container: "atlas-remote".into(),
+            endpoint: None,
+        },
+        ControlReq::Stop { recipe } => ControlRep::Stopped {
+            recipe: recipe.clone(),
+        },
+        ControlReq::Status => ControlRep::Status {
+            running: Vec::new(),
+        },
+        ControlReq::Stats { recipe } => ControlRep::Stats {
+            recipe: recipe.clone(),
+            stats: atlasctl_protocol::msg::LaunchReading::default(),
+        },
+        ControlReq::Logs { recipe, .. } => ControlRep::Logs {
+            recipe: recipe.clone(),
+            container: "atlas-remote".into(),
+            lines: Vec::new(),
+            running: true,
+        },
+    };
+    Ok((rep, Some(relay_id())))
+}
+
+/// The provenance pair a reply states, or a panic for shapes without one.
+fn provenance(msg: &ServerMsg) -> (Option<NodeId>, Option<NodeId>) {
+    match msg {
+        ServerMsg::Recipes { on, via, .. }
+        | ServerMsg::Preview { on, via, .. }
+        | ServerMsg::Started { on, via, .. }
+        | ServerMsg::Stopped { on, via, .. }
+        | ServerMsg::Status { on, via, .. }
+        | ServerMsg::Stats { on, via, .. }
+        | ServerMsg::Logs { on, via, .. } => (*on, *via),
+        other => panic!("not a control reply: {other:?}"),
+    }
+}
+
+/// No relay, no fleet: exactly the old refusal, so a single-node agent is
+/// not degraded by the router existing.
 #[test]
 fn a_verb_aimed_at_another_node_is_refused_not_executed_here() {
     // The dangerous failure mode is a Launch{on: dgx2} starting a model on
@@ -116,7 +270,7 @@ fn a_verb_aimed_at_another_node_is_refused_not_executed_here() {
 
 #[test]
 fn an_unauthenticated_socket_cannot_probe_the_routing_surface() {
-    // The refusal happens after the handshake gate, so an unauthenticated
+    // The routing happens after the handshake gate, so an unauthenticated
     // client gets the same NotReady-and-close as for any other verb — it
     // must not learn whether this agent can route anywhere.
     let f = Fixture::new();
@@ -135,37 +289,172 @@ fn an_unauthenticated_socket_cannot_probe_the_routing_surface() {
     assert!(s.is_closed());
 }
 
+/// O1 — `on: Some(local id)` is this machine: executed locally through the
+/// unchanged path, relay never consulted, provenance `(None, None)`.
 #[test]
-fn minting_with_allow_control_is_refused_not_silently_dropped() {
-    // The grant store does not exist in this build. Minting the code anyway
-    // would hand the operator a pairing they believe carries the controller
-    // grant when nothing recorded it — so the request is refused, typed.
+fn a_verb_aimed_at_this_machine_by_id_runs_locally_and_never_dials() {
     let f = Fixture::new();
-    let mut s = f.ready();
-    let out = s.handle(ClientMsg::MintJoinCode {
-        id: 9,
-        allow_control: true,
+    let fleet = SelfAwareFleet;
+    let relay = FakeRelay::new(|_| panic!("O1 must never reach the relay"));
+    let mut s = routed_session(&f, &fleet, Some(&relay));
+
+    let out = s.handle(ClientMsg::Status {
+        id: 5,
+        on: Some(local_id()),
+    });
+    assert_eq!(
+        provenance(&out[0]),
+        (None, None),
+        "local means (None, None)"
+    );
+    assert!(relay.calls().is_empty());
+    assert!(
+        f.launcher
+            .calls()
+            .iter()
+            .any(|c| matches!(c, crate::launcher::Call::Running)),
+        "the local launcher answered"
+    );
+}
+
+/// Every forwardable verb maps onto its `ControlReq` twin and comes back as
+/// the matching reply with honest provenance `(Some(target), via)`.
+#[test]
+fn each_remote_verb_maps_to_its_control_twin_with_stated_provenance() {
+    let f = Fixture::new();
+    let fleet = SelfAwareFleet;
+    let relay = FakeRelay::new(answer_in_kind);
+    let mut s = routed_session(&f, &fleet, Some(&relay));
+
+    for msg in forwarded(target()) {
+        let out = s.handle(msg);
+        assert_eq!(
+            provenance(&out[0]),
+            (Some(target()), Some(relay_id())),
+            "forwarded means (Some(target), Some(relay)): {:?}",
+            out[0]
+        );
+    }
+    let asked: Vec<ControlReq> = relay.calls().into_iter().map(|(_, r)| r).collect();
+    assert_eq!(
+        asked,
+        vec![
+            ControlReq::ListRecipes,
+            ControlReq::Preview {
+                recipe: recipe(),
+                settings: BTreeMap::new(),
+            },
+            ControlReq::Launch {
+                recipe: recipe(),
+                settings: BTreeMap::new(),
+            },
+            ControlReq::Stop { recipe: recipe() },
+            ControlReq::Status,
+            ControlReq::Stats { recipe: recipe() },
+            ControlReq::Logs {
+                recipe: recipe(),
+                lines: 50,
+            },
+        ]
+    );
+    assert!(
+        f.launcher.calls().is_empty(),
+        "a remote verb must not touch this machine's launcher"
+    );
+}
+
+/// A direct dial reports `via: None` — the page may claim end-to-end
+/// authentication only then.
+#[test]
+fn a_direct_answer_reports_no_relay() {
+    let f = Fixture::new();
+    let fleet = SelfAwareFleet;
+    let relay = FakeRelay::new(|req| answer_in_kind(req).map(|(rep, _)| (rep, None)));
+    let mut s = routed_session(&f, &fleet, Some(&relay));
+
+    let out = s.handle(ClientMsg::Status {
+        id: 5,
+        on: Some(target()),
+    });
+    assert_eq!(provenance(&out[0]), (Some(target()), None));
+}
+
+/// A refusal from the chain surfaces typed, under the browser's correlation
+/// id — never dressed up as a successful reply.
+#[test]
+fn a_chain_refusal_surfaces_typed_under_the_request_id() {
+    let f = Fixture::new();
+    let fleet = SelfAwareFleet;
+    let relay = FakeRelay::new(|_| {
+        Ok((
+            ControlRep::Refused {
+                by: relay_id(),
+                error: AgentError::RelayRefused {
+                    node: target(),
+                    detail: "dial failed".into(),
+                },
+            },
+            Some(relay_id()),
+        ))
+    });
+    let mut s = routed_session(&f, &fleet, Some(&relay));
+
+    let out = s.handle(ClientMsg::Stop {
+        id: 4,
+        recipe: recipe(),
+        on: Some(target()),
     });
     assert!(
         matches!(
             &out[0],
             ServerMsg::Error {
-                id: Some(9),
+                id: Some(4),
+                error: AgentError::RelayRefused { node, .. },
+            } if *node == target()
+        ),
+        "got {:?}",
+        out[0]
+    );
+}
+
+/// A relay answering `Stop` with someone's `Recipes` is lying or confused;
+/// rendering the mismatch as the reply would misattribute it. Fail closed.
+#[test]
+fn a_mismatched_answer_shape_is_refused_not_rendered() {
+    let f = Fixture::new();
+    let fleet = SelfAwareFleet;
+    let relay = FakeRelay::new(|_| {
+        Ok((
+            ControlRep::Recipes {
+                recipes: Vec::new(),
+            },
+            Some(relay_id()),
+        ))
+    });
+    let mut s = routed_session(&f, &fleet, Some(&relay));
+
+    let out = s.handle(ClientMsg::Stop {
+        id: 4,
+        recipe: recipe(),
+        on: Some(target()),
+    });
+    assert!(
+        matches!(
+            &out[0],
+            ServerMsg::Error {
+                id: Some(4),
                 error: AgentError::InvalidMessage { .. },
             }
         ),
-        "expected a typed refusal, got {out:?}"
+        "got {:?}",
+        out[0]
     );
-    assert!(!s.is_closed(), "a refusal is an answer, not a fault");
 }
 
-/// The grant half of protocol 4, in the build that carries the field ahead of
-/// the store. `Pin::controller` is a later step of the forwarding design, so
-/// a confirm asking for the grant is refused whole: writing the pin while
-/// dropping the grant would leave the operator believing consent to remote
-/// control was recorded when nothing was.
+/// Confirming with `allow_control` writes the grant with the pin — one
+/// human decision, recorded atomically.
 #[test]
-fn confirming_with_allow_control_is_refused_and_pins_nothing() {
+fn confirming_with_allow_control_records_the_grant_with_the_trust() {
     let f = Fixture::new();
     let node = NodeId::from_bytes([6; 32]);
     let fleet = RecordingFleet::new(node);
@@ -180,16 +469,77 @@ fn confirming_with_allow_control_is_refused_and_pins_nothing() {
     assert!(
         matches!(
             &out[0],
-            ServerMsg::Error {
-                id: Some(2),
-                error: AgentError::InvalidMessage { .. },
+            ServerMsg::PairDecision {
+                id: 2,
+                trusted: true,
+                ..
             }
         ),
-        "expected a typed refusal, got {out:?}"
+        "got {out:?}"
     );
+    assert_eq!(fleet.keys_pinned().len(), 1);
+    assert_eq!(fleet.grants(), vec![node], "the grant rode the confirm");
+}
+
+/// And without it, nothing is granted — consent must be said, not implied.
+#[test]
+fn confirming_without_allow_control_grants_nothing() {
+    let f = Fixture::new();
+    let node = NodeId::from_bytes([6; 32]);
+    let fleet = RecordingFleet::new(node);
+    let mut s = ready_with_fleet(&f, &fleet);
+    exchange(&mut s, node);
+
+    let out = s.handle(ClientMsg::ConfirmPairing {
+        id: 2,
+        node,
+        allow_control: false,
+    });
+    assert!(matches!(
+        &out[0],
+        ServerMsg::PairDecision { trusted: true, .. }
+    ));
+    assert_eq!(fleet.keys_pinned().len(), 1);
+    assert!(fleet.grants().is_empty());
+}
+
+/// Minting with `allow_control` stamps the window, so the machine that
+/// joins through it is pinned WITH the grant the human chose.
+#[test]
+fn minting_with_allow_control_stamps_the_join_window() {
+    let f = Fixture::new();
+    let fleet = SelfAwareFleet;
+    let joining = crate::joining::JoinWindow::default();
+    let (mut s, _) = Session::new(SessionDeps {
+        registry: &f.registry,
+        launcher: &f.launcher,
+        token: TOKEN,
+        can_launch: f.can_launch.clone(),
+        fleet: Some(&fleet),
+        cluster: None,
+        telemetry: None,
+        joining: Some(&joining),
+        relay: None,
+    });
+    let out = s.handle(ClientMsg::Hello {
+        protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
+        token: TOKEN.into(),
+    });
+    assert!(matches!(out[0], ServerMsg::Ready { .. }));
+
+    let out = s.handle(ClientMsg::MintJoinCode {
+        id: 9,
+        allow_control: true,
+    });
     assert!(
-        fleet.keys_pinned().is_empty(),
-        "a refused confirm must trust nothing: {:?}",
-        fleet.keys_pinned()
+        matches!(&out[0], ServerMsg::JoinInvitation { code: Some(_), .. }),
+        "got {out:?}"
+    );
+    assert_eq!(
+        joining.consume(),
+        Some(crate::joining::Consumed {
+            allow_control: true
+        }),
+        "the window must carry the grant to the pin write"
     );
 }

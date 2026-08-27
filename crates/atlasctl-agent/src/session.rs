@@ -54,6 +54,11 @@ pub struct SessionDeps<'a> {
     /// `None` on an agent that cannot take members — there is nothing to open,
     /// and saying so is better than minting a code nothing will honour.
     pub joining: Option<&'a crate::joining::JoinWindow>,
+    /// Routes a control verb toward another machine.
+    ///
+    /// `None` means this agent cannot reach other machines: a verb aimed at
+    /// one is answered with a typed `NotRoutable` rather than pretended.
+    pub relay: Option<&'a dyn ControlRelay>,
 }
 
 /// A single client connection.
@@ -141,15 +146,15 @@ impl<'a> Session<'a> {
         if self.phase == Phase::Closed {
             return Vec::new();
         }
-        // A verb aimed at another machine is refused here, before dispatch —
+        // A verb aimed at another machine is routed here, before dispatch —
         // executing it on THIS machine instead would be the silent
         // misattribution the provenance fields exist to prevent. Only once
         // authenticated, so an unauthenticated socket still learns nothing.
-        // Every arm below therefore handles `on: None` only.
+        // Every arm below therefore handles only this machine's own verbs.
         if self.phase == Phase::Ready
-            && let Some(refusal) = launch::refuse_forward(&msg)
+            && let Some(replies) = self.route_remote(&msg)
         {
-            return vec![refusal];
+            return replies;
         }
         match (&self.phase, msg) {
             (
@@ -223,41 +228,11 @@ impl<'a> Session<'a> {
                     node,
                     allow_control,
                 },
-            ) => {
-                if allow_control {
-                    // Refused rather than ignored: the grant store
-                    // (`Pin::controller`) is a later step of the forwarding
-                    // design, and writing the pin while dropping the grant
-                    // would leave the operator believing consent was
-                    // recorded when nothing was.
-                    vec![err(
-                        Some(id),
-                        AgentError::InvalidMessage {
-                            detail: "allow_control is not implemented in this build; \
-                                     confirm the pairing without it"
-                                .into(),
-                        },
-                    )]
-                } else {
-                    self.confirm_pairing(id, node)
-                }
-            }
+            ) => self.confirm_pairing(id, node, allow_control),
             (Phase::Ready, ClientMsg::RejectPairing { id, node }) => self.reject_pairing(id, node),
             (Phase::Ready, ClientMsg::UnpairPeer { id, node }) => self.unpair(id, node),
             (Phase::Ready, ClientMsg::MintJoinCode { id, allow_control }) => {
-                if allow_control {
-                    // Same refusal, same reason, as `ConfirmPairing`.
-                    vec![err(
-                        Some(id),
-                        AgentError::InvalidMessage {
-                            detail: "allow_control is not implemented in this build; \
-                                     mint the code without it"
-                                .into(),
-                        },
-                    )]
-                } else {
-                    self.mint_join(id)
-                }
+                self.mint_join(id, allow_control)
             }
             (Phase::Ready, ClientMsg::RevokeJoinCode { id }) => self.revoke_join(id),
 
@@ -394,6 +369,12 @@ pub use cluster_control::ClusterControl;
 
 #[path = "session/launch.rs"]
 mod launch;
+
+// The remote router and its relay trait. Split on the 500-line cap along the
+// trust seam: where a verb GOES, versus what this machine does.
+#[path = "session/remote.rs"]
+mod remote;
+pub use remote::ControlRelay;
 pub mod telemetry;
 pub use telemetry::LaunchTelemetry;
 

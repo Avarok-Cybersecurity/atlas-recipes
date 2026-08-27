@@ -101,7 +101,7 @@ fn a_completed_ceremony_records_the_pin_and_returns_the_words() {
     );
 
     // And accepting it writes one.
-    f.trust(&out).expect("trusts");
+    f.trust(&out, false).expect("trusts");
     assert!(PinStore::new(&t.0).is_pinned(node).expect("reads"));
 
     // Dialled the address the beacon advertised, on the peer port, with the

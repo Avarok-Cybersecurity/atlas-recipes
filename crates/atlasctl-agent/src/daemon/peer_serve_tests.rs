@@ -154,8 +154,16 @@ fn sender() -> NodeId {
 }
 
 fn pin_sender(pins: &PinStore, granted: bool) {
-    crate::fleet::record_pairing(pins, sender(), "aa", DisplayName::new("requester"), 0, None)
-        .expect("pin");
+    crate::fleet::record_pairing(
+        pins,
+        sender(),
+        "aa",
+        DisplayName::new("requester"),
+        0,
+        None,
+        false,
+    )
+    .expect("pin");
     if granted {
         assert!(pins.set_controller(sender(), true).expect("grant"));
     }
@@ -419,7 +427,7 @@ async fn a_pinned_target_with_no_known_address_is_refused_not_guessed() {
     let r = rig("r4");
     pin_sender(&r.pins, true);
     let target = NodeId::from_bytes([0x7a; 32]);
-    crate::fleet::record_pairing(&r.pins, target, "bb", DisplayName::new("t"), 0, None)
+    crate::fleet::record_pairing(&r.pins, target, "bb", DisplayName::new("t"), 0, None, false)
         .expect("pin");
     let (mut c, task) = connected(&r).await;
 

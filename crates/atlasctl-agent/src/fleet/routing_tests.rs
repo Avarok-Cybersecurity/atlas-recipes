@@ -68,6 +68,7 @@ fn pin(f: &LocalFleet, node: NodeId, last_address: Option<&str>) {
         DisplayName::new("pinned"),
         0,
         last_address.map(ToOwned::to_owned),
+        false,
     )
     .expect("pin");
 }

@@ -56,6 +56,7 @@ impl Fixture {
             cluster: None,
             telemetry: None,
             joining: None,
+            relay: None,
         });
         s
     }
@@ -87,6 +88,7 @@ fn the_agent_speaks_first_with_a_version_range() {
         cluster: None,
         telemetry: None,
         joining: None,
+        relay: None,
     });
     assert!(matches!(welcome, ServerMsg::Welcome { .. }));
 }

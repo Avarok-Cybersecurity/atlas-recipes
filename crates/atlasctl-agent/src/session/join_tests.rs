@@ -22,6 +22,7 @@ fn ready_with_window<'a>(f: &'a Fixture, w: &'a crate::joining::JoinWindow) -> S
         cluster: None,
         telemetry: None,
         joining: Some(w),
+        relay: None,
     });
     s.handle(ClientMsg::Hello {
         protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
@@ -104,6 +105,7 @@ fn minting_before_the_handshake_is_refused() {
         cluster: None,
         telemetry: None,
         joining: Some(&w),
+        relay: None,
     });
     let out = s.handle(ClientMsg::MintJoinCode {
         id: 1,

@@ -278,14 +278,14 @@ async fn serve_join<S>(
         // invitation. Both peers hold a valid code, so neither is
         // necessarily hostile — but "one invitation, one machine" is the
         // property, and admitting the loser would quietly break it.
-        if !joining.consume() {
+        let Some(consumed) = joining.consume() else {
             eprintln!(
                 "refusing {}: that invitation was already used by another machine. \
                      Mint a fresh one to add this node.",
                 paired.node.short()
             );
             return;
-        }
+        };
         if let Err(e) = crate::fleet::record_pairing(
             pins,
             paired.node,
@@ -295,6 +295,9 @@ async fn serve_join<S>(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs()),
             None,
+            // The grant the human chose when they minted this invitation,
+            // written with the pin so consent and trust land atomically.
+            consumed.allow_control,
         ) {
             // Announcing a pairing whose pin never reached disk is how a
             // fleet ends up with one side believing it is paired and the
@@ -357,6 +360,17 @@ fn spawn_peer_poll(
                 .await
                 {
                     Ok(report) => {
+                        // The digest is recorded beside the report, from the
+                        // same authenticated exchange. `None` = the peer did
+                        // not say (old build) and its previous claims stand;
+                        // `Some` = its complete current statement, replacing
+                        // them wholesale. Vouches deliberately survive the
+                        // error arm below: `clear_report` keeps them, and
+                        // routing stays safe because choose_voucher requires
+                        // a live report.
+                        if let Some(digest) = report.vouched.clone() {
+                            fleet.record_vouches(id, digest);
+                        }
                         fleet.record_report(report);
                         if let Some(node) = fleet.nodes().into_iter().find(|n| n.id == id) {
                             let _ = events.send(ServerMsg::FleetEvent {

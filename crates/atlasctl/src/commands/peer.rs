@@ -100,6 +100,9 @@ pub fn add(args: &PeerAddArgs) -> Result<()> {
         DisplayName::new(&paired.name),
         now_unix(),
         Some(addr.ip().to_string()),
+        // Pairing authenticates only: the controller grant stays a
+        // separate, explicit act (`atlasctl peer grant-control`).
+        false,
     )?;
     println!("Paired with {} ({}).", paired.name, paired.node.short());
     Ok(())

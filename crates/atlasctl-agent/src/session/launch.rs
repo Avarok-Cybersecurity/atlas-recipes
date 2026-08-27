@@ -15,7 +15,7 @@
 
 use super::{Session, err};
 use atlasctl_protocol::RecipeId;
-use atlasctl_protocol::msg::{AgentError, ClientMsg, ServerMsg};
+use atlasctl_protocol::msg::ServerMsg;
 use atlasctl_protocol::settings::SettingValue;
 use std::collections::BTreeMap;
 
@@ -89,46 +89,4 @@ impl Session<'_> {
             Err(e) => vec![err(Some(id), e)],
         }
     }
-}
-
-/// Refuse a single-node control verb aimed at another machine, or `None` for
-/// anything local.
-///
-/// Protocol 4 carries the `on` annotation ahead of the router that honours
-/// it: the session router is a later step of the forwarding design and does
-/// not exist in this build. Until it does, every `Some` target — even one
-/// that happens to name this machine — is refused as unroutable, typed and
-/// naming the node, because executing the request here while the page
-/// believes it addressed another machine is the exact misattribution the
-/// provenance fields exist to prevent.
-pub(super) fn refuse_forward(msg: &ClientMsg) -> Option<ServerMsg> {
-    let (id, node) = match msg {
-        ClientMsg::ListRecipes { id, on: Some(n) }
-        | ClientMsg::Preview {
-            id, on: Some(n), ..
-        }
-        | ClientMsg::Launch {
-            id, on: Some(n), ..
-        }
-        | ClientMsg::Stop {
-            id, on: Some(n), ..
-        }
-        | ClientMsg::Status { id, on: Some(n) }
-        | ClientMsg::LaunchStats {
-            id, on: Some(n), ..
-        }
-        | ClientMsg::LaunchLogs {
-            id, on: Some(n), ..
-        } => (*id, *n),
-        _ => return None,
-    };
-    Some(err(
-        Some(id),
-        AgentError::NotRoutable {
-            node,
-            reason: "control forwarding is not implemented in this build; \
-                     only this machine can be addressed"
-                .into(),
-        },
-    ))
 }

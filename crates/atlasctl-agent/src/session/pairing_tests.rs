@@ -121,6 +121,7 @@ pub(super) fn ready_with_fleet<'a>(f: &'a Fixture, fleet: &'a dyn FleetView) -> 
         cluster: None,
         telemetry: None,
         joining: None,
+        relay: None,
     });
     s.handle(ClientMsg::Hello {
         protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
@@ -415,7 +416,7 @@ impl FleetView for WirelessFleet {
     fn pair_at(&self, _target: &str, _code: &str) -> anyhow::Result<PairOutcome> {
         anyhow::bail!("not used")
     }
-    fn trust(&self, _outcome: &PairOutcome) -> anyhow::Result<()> {
+    fn trust(&self, _outcome: &PairOutcome, _allow_control: bool) -> anyhow::Result<()> {
         Ok(())
     }
     fn unpair(&self, _node: NodeId) -> anyhow::Result<bool> {
@@ -441,6 +442,7 @@ fn an_invitation_from_a_wireless_machine_still_carries_an_address() {
         cluster: None,
         telemetry: None,
         joining: Some(&window),
+        relay: None,
     });
     s.handle(ClientMsg::Hello {
         protocol_version: atlasctl_protocol::PROTOCOL_VERSION,

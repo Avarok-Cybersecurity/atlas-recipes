@@ -25,6 +25,7 @@ fn session<'a>(f: &'a Fixture, fleet: &'a RecordingFleet) -> super::Session<'a> 
         cluster: None,
         telemetry: None,
         joining: None,
+        relay: None,
     });
     s.handle(ClientMsg::Hello {
         protocol_version: atlasctl_protocol::PROTOCOL_VERSION,

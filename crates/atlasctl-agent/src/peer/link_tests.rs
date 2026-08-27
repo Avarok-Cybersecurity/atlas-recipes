@@ -291,8 +291,16 @@ fn a_received_vouch_never_enters_this_agents_own_digest() {
 
     // First-hand: a pin this agent holds, with a live report.
     let pinned = NodeId::from_bytes([4; 32]);
-    crate::fleet::record_pairing(&pins, pinned, "aa", DisplayName::new("mine"), 0, None)
-        .expect("pin");
+    crate::fleet::record_pairing(
+        &pins,
+        pinned,
+        "aa",
+        DisplayName::new("mine"),
+        0,
+        None,
+        false,
+    )
+    .expect("pin");
     fleet.record_report(PeerReport {
         node: pinned,
         name: "mine".to_owned(),

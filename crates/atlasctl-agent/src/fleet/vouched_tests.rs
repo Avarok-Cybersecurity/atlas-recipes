@@ -119,6 +119,7 @@ fn first_hand_evidence_beats_a_vouch_and_the_rows_merge_to_one() {
         DisplayName::new("spark-43fa"),
         0,
         Some("10.10.10.10".to_owned()),
+        false,
     )
     .expect("pin");
     let mut first_hand = report_over(target, LinkClass::Roce);

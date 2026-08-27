@@ -55,6 +55,11 @@ pub struct AgentState {
     pub cluster: Option<std::sync::Arc<dyn crate::session::ClusterControl>>,
     /// Sampling a running launch, when this agent can.
     pub telemetry: Option<Box<dyn crate::session::LaunchTelemetry>>,
+    /// Routes a control verb toward another machine.
+    ///
+    /// `None` on an agent with no peer transport, which answers such verbs
+    /// with a typed refusal rather than pretending.
+    pub relay: Option<std::sync::Arc<dyn crate::session::ControlRelay>>,
     /// Fleet changes pushed to every authenticated session.
     ///
     /// A broadcast channel rather than a per-session queue: a slow tab must not
@@ -161,6 +166,7 @@ async fn run_session(mut socket: ws::WebSocket, state: Arc<AgentState>) {
         cluster: state.cluster.as_deref(),
         telemetry: state.telemetry.as_deref(),
         joining: state.joining.as_deref(),
+        relay: state.relay.as_deref(),
     });
 
     if send(&mut socket, &welcome).await.is_err() {

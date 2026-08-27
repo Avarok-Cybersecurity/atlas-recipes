@@ -62,7 +62,7 @@ impl FleetView for FixtureFleet {
     fn pair_at(&self, _: &str, _: &str) -> anyhow::Result<PairOutcome> {
         unreachable!("the driver never pairs")
     }
-    fn trust(&self, _: &PairOutcome) -> anyhow::Result<()> {
+    fn trust(&self, _: &PairOutcome, _: bool) -> anyhow::Result<()> {
         unreachable!("the driver never pairs")
     }
     fn unpair(&self, _: NodeId) -> anyhow::Result<bool> {
