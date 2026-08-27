@@ -199,7 +199,10 @@ async fn serve_join<S>(
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    let Some(code) = joining.peek() else {
+    // Charges a guess up front. Every path out of this function below is
+    // therefore already accounted for, including the two that return without
+    // running a ceremony at all — previously those were free retries.
+    let Some(code) = joining.begin_attempt() else {
         // The window closed between the handshake and here.
         return;
     };
@@ -214,7 +217,9 @@ async fn serve_join<S>(
         }
     };
 
-    match crate::peer::pair::run(
+    // The failure arm is deliberately empty: `begin_attempt` already charged
+    // this guess, so there is nothing left to record when the ceremony fails.
+    if let Ok(paired) = crate::peer::pair::run(
         tls,
         crate::peer::pair::Role::Responder,
         identity,
@@ -224,25 +229,45 @@ async fn serve_join<S>(
     )
     .await
     {
-        Ok(paired) => {
-            // Single use: the invitation is spent whether or not the pin
-            // write below succeeds, because the code has now been seen on the
-            // wire by whoever answered.
-            joining.consume();
-            let _ = crate::fleet::record_pairing(
-                pins,
-                paired.node,
-                &paired.public_key,
-                atlasctl_protocol::fleet::DisplayName::new(&paired.name),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_secs()),
-                None,
+        // Single use: the invitation is spent whether or not the pin
+        // write below succeeds, because the code has now been seen on the
+        // wire by whoever answered.
+        //
+        // Losing this race means another ceremony already spent the
+        // invitation. Both peers hold a valid code, so neither is
+        // necessarily hostile — but "one invitation, one machine" is the
+        // property, and admitting the loser would quietly break it.
+        if !joining.consume() {
+            eprintln!(
+                "refusing {}: that invitation was already used by another machine. \
+                     Mint a fresh one to add this node.",
+                paired.node.short()
             );
-            let _ = fleet;
-            eprintln!("paired with {} ({})", paired.name, paired.node.short());
+            return;
         }
-        Err(_) => joining.attempt_failed(),
+        if let Err(e) = crate::fleet::record_pairing(
+            pins,
+            paired.node,
+            &paired.public_key,
+            atlasctl_protocol::fleet::DisplayName::new(&paired.name),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
+            None,
+        ) {
+            // Announcing a pairing whose pin never reached disk is how a
+            // fleet ends up with one side believing it is paired and the
+            // other rejecting it on the next connection, with nothing
+            // anywhere saying why.
+            eprintln!(
+                "pairing with {} completed but could not be recorded: {e:#}. \
+                     The peer believes it is paired; this machine does not.",
+                paired.node.short()
+            );
+            return;
+        }
+        let _ = fleet;
+        eprintln!("paired with {} ({})", paired.name, paired.node.short());
     }
 }
 
