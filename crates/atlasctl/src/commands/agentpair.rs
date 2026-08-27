@@ -54,9 +54,14 @@ pub fn pair(args: &crate::cli::AgentPairArgs) -> Result<()> {
     println!("  Pairing code:  {}", code.grouped());
     println!();
     println!("  On the other machine, run:");
+    // The port belongs in the command whenever it is not the one `peer add`
+    // assumes. Printing a bare host while listening on 34444 hands the operator
+    // a line that dials the wrong port and times out — on the far machine,
+    // where they have the least context and no reason to suspect the command
+    // they were told to run.
     println!(
         "      atlasctl peer add {} --code {}",
-        hostname_hint(),
+        dial_hint(&hostname_hint(), args.port),
         code.as_str()
     );
     println!();
@@ -234,5 +239,47 @@ mod tests {
                  something: {msg}"
             );
         }
+    }
+}
+
+/// `host`, or `host:port` when the port is not the one `peer add` assumes.
+///
+/// Bracketed for an IPv6 literal, because `fe80::1:34444` is not parseable as
+/// a host and a port — the colons are ambiguous, and the operator would be the
+/// one to discover it.
+#[must_use]
+pub fn dial_hint(host: &str, port: u16) -> String {
+    if port == atlasctl_agent::peer::DEFAULT_PEER_PORT {
+        return host.to_owned();
+    }
+    if host.contains(':') && !host.starts_with('[') {
+        return format!("[{host}]:{port}");
+    }
+    format!("{host}:{port}")
+}
+
+#[cfg(test)]
+mod dial_tests {
+    use super::dial_hint;
+    use atlasctl_agent::peer::DEFAULT_PEER_PORT;
+
+    #[test]
+    fn the_default_port_is_left_off_because_peer_add_assumes_it() {
+        assert_eq!(dial_hint("spark-256a", DEFAULT_PEER_PORT), "spark-256a");
+    }
+
+    /// The bug: `agent pair --port 34444` printed a bare host, so the line it
+    /// told the operator to run dialled 34334 and timed out.
+    #[test]
+    fn a_non_default_port_is_carried_into_the_command() {
+        assert_eq!(dial_hint("spark-256a", 34444), "spark-256a:34444");
+        assert_eq!(dial_hint("10.10.10.2", 34444), "10.10.10.2:34444");
+    }
+
+    #[test]
+    fn an_ipv6_literal_is_bracketed_so_the_port_is_unambiguous() {
+        assert_eq!(dial_hint("fe80::1", 34444), "[fe80::1]:34444");
+        // Already bracketed input is not double-wrapped.
+        assert_eq!(dial_hint("[fe80::1]", 34444), "[fe80::1]:34444");
     }
 }
