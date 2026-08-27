@@ -109,13 +109,22 @@ install_agent() {
         if "$exe" agent install --join "$2"; then
             return
         fi
-        warn "installed, but joining the fleet did not succeed."
-        warn "The code is single-use and expires; mint a fresh one and run:"
+        # One exit code covers two steps. Saying which failed would need the
+        # installer to report them separately, so say plainly that either could
+        # have, and give the check that distinguishes them — rather than
+        # asserting the install worked and only the join did not, which sent
+        # operators to mint a fresh code for a service that was never created.
+        warn "the agent install, the fleet join, or both did not succeed."
+        warn "Check which with:  $BIN_NAME agent status"
+        warn "A join code is single-use and expires. To retry just the join:"
         warn "    $BIN_NAME agent install --join <code>@<host>"
         return
     fi
-    if "$exe" agent install >/dev/null 2>&1; then
-        info "the agent is running and will start on login."
+    # NOT silenced. `agent install` deliberately reports two things the
+    # operator can only act on if they see them: that enable-linger failed, so
+    # the agent will stop at logout on a headless box, and that the unit was
+    # accepted but the agent is not actually running.
+    if "$exe" agent install; then
         info "pair your browser with: $BIN_NAME agent token"
         return
     fi
