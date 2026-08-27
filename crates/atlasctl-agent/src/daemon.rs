@@ -46,7 +46,14 @@ pub const PEER_POLL_INTERVAL: Duration = Duration::from_secs(5);
 // timers over local state; this file is the machine-to-machine half.
 mod housekeeping;
 mod peer_serve;
-use peer_serve::serve_rank_requests;
+
+#[cfg(test)]
+#[path = "daemon/peer_serve_tests.rs"]
+mod peer_serve_tests;
+
+#[cfg(test)]
+#[path = "daemon/relay_tests.rs"]
+mod relay_tests;
 
 use housekeeping::{spawn_prune, spawn_vitals};
 
@@ -92,6 +99,9 @@ pub struct PeerWork {
     pub joining: Arc<crate::joining::JoinWindow>,
     /// This machine's accelerator tag, probed once at startup.
     pub accelerator: String,
+    /// The control core a peer's terminal `Control` executes through — the
+    /// same seven verbs, the same validation, as this machine's own browser.
+    pub control: Arc<crate::control::ControlHost>,
 }
 
 pub fn spawn_peer_work(w: PeerWork) {
@@ -102,6 +112,7 @@ pub fn spawn_peer_work(w: PeerWork) {
         w.peer_port,
         w.rank,
         w.joining,
+        w.control,
     );
     spawn_peer_poll(
         w.fleet,
@@ -121,7 +132,19 @@ fn spawn_peer_listener(
     port: u16,
     rank: Arc<dyn RankService>,
     joining: Arc<crate::joining::JoinWindow>,
+    control: Arc<crate::control::ControlHost>,
 ) {
+    // One serving context for every connection, so the answer budget and the
+    // control core cannot differ between two peers of the same agent.
+    let serve = Arc::new(peer_serve::PeerServe {
+        identity: Arc::clone(&identity),
+        pins: pins.clone(),
+        fleet: Arc::clone(&fleet),
+        rank,
+        control,
+        peer_port: port,
+        answer_budget: crate::peer::control::RELAY_ANSWER_BUDGET,
+    });
     tokio::spawn(async move {
         // Pinned peers always; a stranger only while a human has a join code
         // outstanding. Decided during the handshake, so for all the time nobody
@@ -160,10 +183,10 @@ fn spawn_peer_listener(
             };
             let acceptor = acceptor.clone();
             let fleet = Arc::clone(&fleet);
-            let rank = Arc::clone(&rank);
             let joining = Arc::clone(&joining);
             let pins = pins.clone();
             let identity = Arc::clone(&identity);
+            let serve = Arc::clone(&serve);
             tokio::spawn(async move {
                 let Ok(mut tls) = acceptor.accept(tcp).await else {
                     // An unpaired caller failing the handshake is the system
@@ -181,31 +204,13 @@ fn spawn_peer_listener(
                     serve_join(&mut tls, &identity, &pins, &joining, &fleet).await;
                     return;
                 }
-
-                let vitals = fleet.local_vitals_and_id().map(|(_, v)| v);
-                // An unreadable pin store degrades to "did not say" (the
-                // intro's `vouched` stays `None`), never to an affirmative
-                // "no pins" that would retract every vouch this agent
-                // previously made.
-                let mut intro = crate::peer::link::SelfIntro::new(fleet.can_launch(), "");
-                if let Ok(digest) = crate::peer::link::fleet_digest(&pins, &fleet) {
-                    intro = intro.with_vouched(digest);
-                }
-                if crate::peer::link::serve_query(
-                    &mut tls,
-                    &intro,
-                    vitals,
-                    &fleet.local_addresses(),
-                )
-                .await
-                .is_err()
-                {
+                let Some(sender) = peer else {
                     return;
-                }
-                // The peer may go on to ask this rank to describe what it would
-                // run. Rendering happens here, on the machine that would
-                // execute it, from this machine's own vendored recipe.
-                serve_rank_requests(&mut tls, &rank, identity.id()).await;
+                };
+                // Introduce ourselves, then answer rank and control frames.
+                // Rendering — and any relayed control verb — happens here, on
+                // the machine that executes it, from its own vendored recipe.
+                peer_serve::serve_peer_connection(&mut tls, &serve, sender).await;
             });
         }
     });

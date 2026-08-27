@@ -232,6 +232,27 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         atlasctl_agent::peer::DEFAULT_PEER_PORT,
     ));
 
+    // The peer channel's control core. Its own instances of the same
+    // stateless launcher and telemetry the browser state holds, because the
+    // listener outlives any session and cannot borrow from `AgentState` —
+    // the checks are identical because both are the one `LocalControl`.
+    let control_host = Arc::new(atlasctl_agent::control::ControlHost::new(
+        crate::commands::registry_set()?,
+        Box::new(DockerLauncher::new(
+            Arc::clone(&runner),
+            hostinfo::snapshot()?,
+            &ROOTLESS_V1,
+            Box::new(NvidiaDevices),
+        )),
+        Some(Box::new(crate::launchtelemetry::LocalLaunchTelemetry::new(
+            Arc::clone(&runner),
+            atlasctl_agent::launchstats::LaunchSampler::new(Box::new(
+                crate::httpscrape::HttpScraper,
+            )),
+        ))),
+        can_launch.clone(),
+    ));
+
     let state = Arc::new(AgentState {
         registry: crate::commands::registry_set()?,
         launcher: Box::new(DockerLauncher::new(
@@ -358,6 +379,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
             rank: Arc::clone(&renderer),
             joining: Arc::clone(&joining),
             accelerator: accelerator.clone(),
+            control: control_host,
         });
 
         atlasctl_agent::daemon::spawn_all(

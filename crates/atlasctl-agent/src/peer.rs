@@ -15,6 +15,7 @@
 //! parameters", not remote code execution.
 
 pub mod cluster;
+pub mod control;
 pub mod join;
 pub mod link;
 pub mod pair;

@@ -481,8 +481,13 @@ pub fn no_vitals() -> NodeVitals {
 }
 
 mod listing;
+pub mod routing;
 pub mod vitals;
 pub mod vouched;
+
+#[cfg(test)]
+#[path = "fleet/routing_tests.rs"]
+mod routing_tests;
 
 #[cfg(test)]
 #[path = "fleet/vouched_tests.rs"]
