@@ -102,6 +102,13 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         &config_dir,
     )?);
     use atlasctl_agent::fabric::FabricProvider as _;
+    // Chosen at compile time so the selection policy above the provider stays
+    // one shared path. On macOS the Linux provider found no /sys/class/net and
+    // enumerated zero interfaces, so a MacBook advertised no address, was
+    // undiscoverable, and minted join invitations with an empty command bar.
+    #[cfg(target_os = "macos")]
+    let fabric = atlasctl_agent::fabric::macos::MacFabric::new();
+    #[cfg(not(target_os = "macos"))]
     let fabric = atlasctl_agent::fabric::linux::LinuxFabric::new();
     let addresses = fabric.addresses().unwrap_or_default();
     let launchability = match &can_launch {

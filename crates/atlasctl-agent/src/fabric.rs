@@ -66,6 +66,23 @@ const ARPHRD_LOOPBACK: u32 = 772;
 /// precisely nowhere.
 const VIRTUAL_PREFIXES: [&str; 7] = ["docker", "br-", "veth", "virbr", "dummy", "tun", "tap"];
 
+/// Interface name prefixes that are software constructs on macOS.
+///
+/// A separate list so the Linux one above stays exactly what it was, but
+/// checked unconditionally: [`classify`] must stay pure so a Linux CI box can
+/// assert the macOS verdicts, and none of these prefixes names physical
+/// hardware on Linux either — an interface called `bridge0` or `utun2` is a
+/// software construct wherever it appears. The stakes are the same as for
+/// `dummy`: `awdl`/`llw` (AWDL) and `utun` (VPNs) carry only link-local
+/// addresses, and `bridge0` is the Thunderbolt Bridge — every one of them
+/// looks like a link and is dialable from nowhere, so offering one mints a
+/// join invitation that cannot connect back. `ap1` is the Wi-Fi card's
+/// access-point personality, `anpi`/`gif`/`stf` are Apple debug and tunnel
+/// devices.
+const MACOS_VIRTUAL_PREFIXES: [&str; 9] = [
+    "bridge", "utun", "awdl", "llw", "ap1", "vmenet", "anpi", "gif", "stf",
+];
+
 /// Decide what kind of link an interface is.
 ///
 /// Pure. Order matters: loopback first because it is unambiguous, then the
@@ -75,7 +92,11 @@ pub fn classify(raw: &RawIface) -> LinkClass {
     if raw.arp_type == ARPHRD_LOOPBACK || raw.name == "lo" {
         return LinkClass::Loopback;
     }
-    if VIRTUAL_PREFIXES.iter().any(|p| raw.name.starts_with(p)) {
+    if VIRTUAL_PREFIXES
+        .iter()
+        .chain(&MACOS_VIRTUAL_PREFIXES)
+        .any(|p| raw.name.starts_with(p))
+    {
         return LinkClass::Virtual;
     }
     if raw.rdma {
