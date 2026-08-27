@@ -119,13 +119,63 @@ impl Session<'_> {
             // A failed pairing is reported as a result rather than an error:
             // the page has a designed state for "that did not work", and the
             // reason is the useful part.
-            Err(e) => vec![ServerMsg::PairResult {
-                id,
-                node,
-                exchanged: false,
-                verification: None,
-                detail: e.to_string(),
-            }],
+            Err(e) => {
+                // Clear any previous exchange. The success arm replaces it, and
+                // a failure that left the old one live meant words the operator
+                // had already watched fail could still be confirmed minutes
+                // later — the dialog said "that did not work" while a stale
+                // exchange sat behind it, confirmable.
+                self.pending_pairing = None;
+                vec![ServerMsg::PairResult {
+                    id,
+                    node,
+                    exchanged: false,
+                    verification: None,
+                    detail: e.to_string(),
+                }]
+            }
+        }
+    }
+
+    /// Pair with a machine at an address the operator typed.
+    pub(super) fn pair_at(&mut self, id: u32, target: &str, code: &str) -> Vec<ServerMsg> {
+        let Some(fleet) = self.deps.fleet else {
+            return vec![err(Some(id), AgentError::NotReady)];
+        };
+        match fleet.pair_at(target, code) {
+            Ok(outcome) => {
+                let (node, name, address, verification) = (
+                    outcome.node,
+                    outcome.name.clone(),
+                    outcome.address.clone(),
+                    outcome.verification.clone(),
+                );
+                self.pending_pairing = Some(super::PendingPairing {
+                    outcome,
+                    at: std::time::Instant::now(),
+                });
+                vec![ServerMsg::PairAtResult {
+                    id,
+                    node: Some(node),
+                    name,
+                    address,
+                    exchanged: true,
+                    verification: Some(verification),
+                    detail: String::new(),
+                }]
+            }
+            Err(e) => {
+                self.pending_pairing = None;
+                vec![ServerMsg::PairAtResult {
+                    id,
+                    node: None,
+                    name: String::new(),
+                    address: String::new(),
+                    exchanged: false,
+                    verification: None,
+                    detail: e.to_string(),
+                }]
+            }
         }
     }
 

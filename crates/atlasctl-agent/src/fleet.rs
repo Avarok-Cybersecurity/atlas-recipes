@@ -51,6 +51,19 @@ pub trait FleetView: Send + Sync {
     /// If the peer is unknown, unreachable, or the ceremony fails.
     fn pair(&self, node: NodeId, code: &str) -> Result<PairOutcome>;
 
+    /// Run the ceremony against an address the operator typed.
+    ///
+    /// Distinct from [`Self::pair`] because there is no expected identity to
+    /// verify against — nothing was discovered, so the caller learns who
+    /// answered from the returned outcome. That is not weaker: `pair`'s
+    /// identity check exists to stop a machine at a beacon's address being
+    /// pinned under the identity of the one the operator *selected*, and here
+    /// the operator selected an address, not an identity.
+    ///
+    /// # Errors
+    /// If the target does not resolve, is unreachable, or the ceremony fails.
+    fn pair_at(&self, target: &str, code: &str) -> Result<PairOutcome>;
+
     /// Write the pin for an exchange a human has accepted.
     ///
     /// Split from [`Self::pair`] so nothing is trusted until somebody says the

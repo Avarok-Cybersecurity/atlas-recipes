@@ -280,6 +280,9 @@ impl<'a> Session<'a> {
             // the socket layer keeps the authorization decision in one place.
             (Phase::Ready, ClientMsg::WatchFleet { id, vitals: _ }) => self.nodes(id),
             (Phase::Ready, ClientMsg::PairPeer { id, node, code }) => self.pair(id, node, &code),
+            (Phase::Ready, ClientMsg::PairPeerAt { id, target, code }) => {
+                self.pair_at(id, &target, &code)
+            }
             (Phase::Ready, ClientMsg::ConfirmPairing { id, node }) => {
                 self.confirm_pairing(id, node)
             }
@@ -449,6 +452,12 @@ pub use telemetry::LaunchTelemetry;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+#[path = "session/fleet_fake.rs"]
+mod fleet_fake;
+#[cfg(test)]
+#[path = "session/pair_at_tests.rs"]
+mod pair_at_tests;
 #[cfg(test)]
 #[path = "session/pairing_tests.rs"]
 mod pairing_tests;

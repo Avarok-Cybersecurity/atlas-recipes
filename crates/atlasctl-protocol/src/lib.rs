@@ -36,4 +36,8 @@ pub use telemetry::{DeviceStats, EngineStats, LaunchPhase, Stats, TelemetryCaps}
 ///   read `exchanged` as "trusted" and show a machine as paired that this
 ///   agent has not accepted, so the exact-match gate refusing it is the point
 ///   rather than an inconvenience.
-pub const PROTOCOL_VERSION: u32 = 2;
+/// * 3 — `PairPeerAt` added, so the browser can pair with a machine at an
+///   address the operator typed. mDNS is link-local, so without it the browser
+///   could only reach machines on the same broadcast domain. Additive, but the
+///   handshake is an exact match by design, so it still takes a version.
+pub const PROTOCOL_VERSION: u32 = 3;

@@ -102,6 +102,31 @@ pub enum ClientMsg {
         code: String,
     },
 
+    /// Pair with a machine at an address the operator typed, rather than one
+    /// that was discovered.
+    ///
+    /// Discovery is mDNS, which is link-local: it cannot cross a router, and it
+    /// is switched off on plenty of managed networks. Without this the browser
+    /// could only ever pair with machines on the same broadcast domain, and an
+    /// operator who knows exactly where their machine is had no way to say so.
+    /// The CLI has had `atlasctl peer add <host[:port]>` for this all along.
+    ///
+    /// Unlike [`Self::PairPeer`] there is no expected identity to check
+    /// against: nothing has been discovered, so whoever answers that address is
+    /// whoever answers. The reply therefore carries the identity that WAS
+    /// reached, and the operator judges it at the same word-comparison step —
+    /// which is the one place a human is already looking at who they are about
+    /// to trust.
+    PairPeerAt {
+        /// Correlates the reply.
+        id: u32,
+        /// `host`, `host:port`, or `[v6]:port`. The peer port is assumed when
+        /// none is given.
+        target: String,
+        /// The digits the user read off the other machine.
+        code: String,
+    },
+
     /// Open a window in which one new machine may join this fleet.
     ///
     /// The inverse direction of [`Self::PairPeer`]: this machine mints the code

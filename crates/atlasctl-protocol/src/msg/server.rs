@@ -109,6 +109,33 @@ pub enum ServerMsg {
     },
 
     /// A pairing finished, one way or the other.
+    /// The outcome of pairing with a typed address.
+    ///
+    /// Separate from [`Self::PairResult`] because the node is not known up
+    /// front and may never be known: if nothing answers the address, there is
+    /// no identity to name. `PairResult` requires one, and filling it with a
+    /// zero id to satisfy the type would be a claim about a machine that was
+    /// never reached.
+    PairAtResult {
+        /// Correlates the request.
+        id: u32,
+        /// Who answered. `None` when nothing did.
+        node: Option<crate::fleet::NodeId>,
+        /// What that machine calls itself, for the operator to weigh alongside
+        /// the words. Empty when nothing answered.
+        name: String,
+        /// Where it was reached. Empty when nothing answered.
+        address: String,
+        /// Whether the exchange completed.
+        ///
+        /// Invariant, as for `PairResult`: `exchanged == verification.is_some()`.
+        exchanged: bool,
+        /// Words for the two humans to compare, when the exchange completed.
+        verification: Option<String>,
+        /// Why not, when it did not.
+        detail: String,
+    },
+
     PairResult {
         /// Correlates the request.
         id: u32,

@@ -20,6 +20,12 @@ use anyhow::Result;
 use atlasctl_protocol::fleet::{LinkClass, NodeAddress};
 
 pub mod linux;
+// Compiled for every test build, not only on macOS, because no Mac exists in
+// CI or on the dev boxes: the recorded-output parsers are the only part of the
+// backend a test can ever exercise, and gating them on `target_os` would leave
+// them tested nowhere. A Linux release build still never contains this module.
+#[cfg(any(test, target_os = "macos"))]
+pub mod macos;
 
 #[cfg(test)]
 mod tests;

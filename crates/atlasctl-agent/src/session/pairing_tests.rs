@@ -102,61 +102,9 @@ fn a_protocol_1_client_is_refused_because_it_would_misread_exchanged() {
 // is the decision logic under test — every branch below is the real
 // `Session::confirm_pairing`.
 
+use super::fleet_fake::RecordingFleet;
 use crate::fleet::{FleetView, PairOutcome};
 use atlasctl_protocol::fleet::{NodeDescriptor, NodeId};
-use std::sync::Mutex;
-
-/// A fleet that records what it was asked to trust.
-struct RecordingFleet {
-    outcome: PairOutcome,
-    trusted: Mutex<Vec<String>>,
-    fail_pin: bool,
-}
-
-impl RecordingFleet {
-    fn new(node: NodeId) -> Self {
-        Self {
-            outcome: PairOutcome {
-                node,
-                public_key: "1a2b3c".repeat(10),
-                name: "spark-b".to_owned(),
-                address: "10.10.10.2:8765".to_owned(),
-                verification: "amber-koala-drift".to_owned(),
-            },
-            trusted: Mutex::new(Vec::new()),
-            fail_pin: false,
-        }
-    }
-
-    fn keys_pinned(&self) -> Vec<String> {
-        self.trusted.lock().expect("poisoned").clone()
-    }
-}
-
-impl FleetView for RecordingFleet {
-    fn nodes(&self) -> Vec<NodeDescriptor> {
-        Vec::new()
-    }
-
-    fn pair(&self, _node: NodeId, _code: &str) -> anyhow::Result<PairOutcome> {
-        Ok(self.outcome.clone())
-    }
-
-    fn trust(&self, outcome: &PairOutcome) -> anyhow::Result<()> {
-        if self.fail_pin {
-            anyhow::bail!("disk full");
-        }
-        self.trusted
-            .lock()
-            .expect("poisoned")
-            .push(outcome.public_key.clone());
-        Ok(())
-    }
-
-    fn unpair(&self, _node: NodeId) -> anyhow::Result<bool> {
-        Ok(false)
-    }
-}
 
 /// A handshaken session wired to `fleet`.
 fn ready_with_fleet<'a>(f: &'a Fixture, fleet: &'a dyn FleetView) -> super::Session<'a> {
@@ -426,6 +374,10 @@ impl FleetView for WirelessFleet {
         vec![self.0.clone()]
     }
     fn pair(&self, _node: NodeId, _code: &str) -> anyhow::Result<PairOutcome> {
+        anyhow::bail!("not used")
+    }
+
+    fn pair_at(&self, _target: &str, _code: &str) -> anyhow::Result<PairOutcome> {
         anyhow::bail!("not used")
     }
     fn trust(&self, _outcome: &PairOutcome) -> anyhow::Result<()> {

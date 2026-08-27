@@ -195,14 +195,28 @@ impl FleetView for LocalFleet {
         // The beacon says where it is; the ceremony decides whether it is who
         // it claims. An address from an unauthenticated beacon is safe to dial
         // precisely because dialling it proves nothing on its own.
-        let addr = seen
+        //
+        // EVERY address, in the order advertised, not just the first. The
+        // advertiser ranks its own links best-first, so the head of that list
+        // is its fabric — and its fabric is frequently the one link the dialler
+        // cannot reach. A laptop pairing with a DGX is handed 10.10.10.1 (RoCE,
+        // rank 4) ahead of the LAN address it actually shares, so dialling only
+        // the first timed out against a machine sitting on the same switch.
+        // Preference is still honoured; it is now a preference rather than the
+        // only attempt.
+        let addrs: Vec<std::net::SocketAddr> = seen
             .beacon
             .addresses
-            .first()
+            .iter()
             .map(|ip| std::net::SocketAddr::new(*ip, seen.beacon.peer_port))
-            .ok_or_else(|| anyhow::anyhow!("{} advertised no address to dial", seen.beacon.name))?;
+            .collect();
+        anyhow::ensure!(
+            !addrs.is_empty(),
+            "{} advertised no address to dial",
+            seen.beacon.name
+        );
 
-        let paired = driver.pair(addr, code)?;
+        let (addr, paired) = dial_first_reachable(driver.as_ref(), &addrs, code)?;
 
         // The ceremony authenticates the peer; this checks it is the peer the
         // operator asked for. Without it, a machine answering on that address
@@ -217,6 +231,41 @@ impl FleetView for LocalFleet {
         // No pin is written here. The exchange proves both machines derived the
         // same key; it does not prove the operator meant to trust this one, and
         // that is what the words are for. `trust` writes it once they say so.
+        Ok(PairOutcome {
+            node: paired.node,
+            public_key: paired.public_key,
+            name: paired.name,
+            address: addr.ip().to_string(),
+            verification: paired.verification,
+        })
+    }
+
+    fn pair_at(&self, target: &str, code: &str) -> Result<PairOutcome> {
+        anyhow::ensure!(
+            crate::pairing::looks_like_code(code),
+            "a pairing code is {} digits",
+            crate::pairing::CODE_DIGITS
+        );
+
+        let Some(driver) = self.pairing.as_ref() else {
+            anyhow::bail!("this agent has no peer transport, so it cannot run a pairing ceremony");
+        };
+
+        // A name can resolve to several addresses, and a machine on two subnets
+        // usually does. Try them all rather than whichever the resolver put
+        // first.
+        let addrs = crate::discovery::resolve_manual(target, crate::peer::DEFAULT_PEER_PORT)?;
+        anyhow::ensure!(!addrs.is_empty(), "{target} resolved to no address");
+
+        let (addr, paired) = dial_first_reachable(driver.as_ref(), &addrs, code)?;
+
+        // No identity assertion here, deliberately. `pair` checks that the
+        // machine which answered is the one the operator SELECTED from a list;
+        // here they selected an address, and there is no prior claim about who
+        // lives at it to check against. The identity that answered goes back in
+        // the outcome, and the operator judges it at the word comparison — the
+        // one step where a human is already deciding whether to trust this
+        // machine. Inventing an expectation to assert would only assert itself.
         Ok(PairOutcome {
             node: paired.node,
             public_key: paired.public_key,
@@ -268,4 +317,31 @@ fn addresses_of(beacon: &Beacon) -> Vec<NodeAddress> {
             rdma: false,
         })
         .collect()
+}
+
+/// Dial each candidate in order until one completes the ceremony.
+///
+/// Returns the address that answered together with its outcome, so the pin
+/// records where the machine actually was rather than where it was first
+/// guessed to be.
+///
+/// The errors are accumulated and reported together. Reporting only the last
+/// one would name whichever address happened to sort last — usually the least
+/// interesting failure — and hide the fact that several links were tried.
+fn dial_first_reachable(
+    driver: &dyn super::PeerPairing,
+    addrs: &[std::net::SocketAddr],
+    code: &str,
+) -> Result<(std::net::SocketAddr, crate::peer::pair::Paired)> {
+    let mut why: Vec<String> = Vec::new();
+    for addr in addrs {
+        match driver.pair(*addr, code) {
+            Ok(paired) => return Ok((*addr, paired)),
+            Err(e) => why.push(format!("{addr}: {e:#}")),
+        }
+    }
+    anyhow::bail!(
+        "could not pair over any advertised address — {}",
+        why.join("; ")
+    )
 }
