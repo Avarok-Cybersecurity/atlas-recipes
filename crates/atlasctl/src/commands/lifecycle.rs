@@ -14,9 +14,16 @@ fn container_of(recipe: &str) -> String {
 
 /// Stop one recipe, or everything atlasctl started.
 pub fn stop(args: &StopArgs) -> Result<()> {
-    let runner = StdProcessRunner;
+    stop_with(&StdProcessRunner, args)
+}
+
+/// `stop`, with the process runner injected so the failure paths are testable.
+///
+/// The interesting behaviour here is entirely about what happens when docker
+/// says no, and that cannot be reached through a real `docker` without one.
+fn stop_with(runner: &dyn ProcessRunner, args: &StopArgs) -> Result<()> {
     let targets: Vec<String> = if args.all {
-        managed_containers(&runner)?
+        managed_containers(runner)?
     } else {
         let Some(recipe) = &args.recipe else {
             bail!("name a recipe to stop, or pass --all");
@@ -28,13 +35,29 @@ pub fn stop(args: &StopArgs) -> Result<()> {
         println!("nothing running");
         return Ok(());
     }
+    // Failures are collected rather than only printed. Reporting each one to
+    // stderr and then returning Ok meant `atlasctl stop --all` exited 0 with
+    // every container still running — so a script that checked the exit code,
+    // or an operator who ran it before a reboot, was told the fleet was idle
+    // when it was not.
+    let mut failed: Vec<String> = Vec::new();
     for name in targets {
         let out = runner.run(&["docker".into(), "stop".into(), name.clone()])?;
         if out.success() {
             println!("stopped {name}");
         } else {
-            eprintln!("could not stop {name}: {}", out.stderr.trim());
+            let why = out.stderr.trim();
+            eprintln!("could not stop {name}: {why}");
+            failed.push(name);
         }
+    }
+    if !failed.is_empty() {
+        // Named, because "1 of 3 failed" sends the operator to check all three.
+        bail!(
+            "could not stop {} container(s): {}",
+            failed.len(),
+            failed.join(", ")
+        );
     }
     Ok(())
 }
@@ -146,5 +169,100 @@ mod tests {
     fn the_recipe_label_is_what_ties_a_container_back_to_its_recipe() {
         assert_eq!(LABEL_RECIPE, "io.atlasctl.recipe");
         assert_eq!(container_of("qwen3.6-27b-fp8"), "atlas-qwen3.6-27b-fp8");
+    }
+}
+
+#[cfg(test)]
+mod stop_tests {
+    use super::*;
+    use atlasctl_core::io::RecordingRunner;
+    use atlasctl_core::io::process::Output;
+
+    fn ok() -> Output {
+        Output {
+            status: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        }
+    }
+    fn fail(why: &str) -> Output {
+        Output {
+            status: 1,
+            stdout: String::new(),
+            stderr: why.into(),
+        }
+    }
+
+    /// The bug: every stop failed and the command exited 0, so a script that
+    /// checked the exit code — or an operator running this before a reboot —
+    /// was told the fleet was idle while every container was still up.
+    #[test]
+    fn a_failed_stop_is_a_failed_command() {
+        let r = RecordingRunner::new();
+        r.push_result(Output {
+            status: 0,
+            stdout: "atlas-a\natlas-b\n".into(),
+            stderr: String::new(),
+        });
+        r.push_result(fail("permission denied"));
+        r.push_result(fail("no such container"));
+
+        let e = stop_with(
+            &r,
+            &StopArgs {
+                recipe: None,
+                all: true,
+            },
+        )
+        .expect_err("two failures must not report success");
+        let msg = e.to_string();
+        assert!(msg.contains("atlas-a") && msg.contains("atlas-b"), "{msg}");
+    }
+
+    /// A partial failure is still a failure, and the survivors are named —
+    /// "1 of 3 failed" sends the operator to check all three.
+    #[test]
+    fn a_partial_failure_names_only_what_did_not_stop() {
+        let r = RecordingRunner::new();
+        r.push_result(Output {
+            status: 0,
+            stdout: "atlas-a\natlas-b\n".into(),
+            stderr: String::new(),
+        });
+        r.push_result(ok());
+        r.push_result(fail("device busy"));
+
+        let e = stop_with(
+            &r,
+            &StopArgs {
+                recipe: None,
+                all: true,
+            },
+        )
+        .expect_err("one failure is a failure");
+        let msg = e.to_string();
+        assert!(msg.contains("atlas-b"), "{msg}");
+        assert!(
+            !msg.contains("atlas-a"),
+            "the one that stopped is not a problem: {msg}"
+        );
+    }
+
+    #[test]
+    fn stopping_everything_when_nothing_runs_is_success() {
+        let r = RecordingRunner::new();
+        r.push_result(Output {
+            status: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
+        stop_with(
+            &r,
+            &StopArgs {
+                recipe: None,
+                all: true,
+            },
+        )
+        .expect("nothing to do is fine");
     }
 }
