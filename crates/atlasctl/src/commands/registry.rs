@@ -57,10 +57,35 @@ pub fn add(args: &RegistryAddArgs) -> Result<()> {
     // Validate the name before touching the network.
     store.add(registry)?;
 
-    println!("cloning {} ...", args.url);
-    let code = StdProcessRunner.run_streaming(&git_clone_argv(&args.url, &dest))?;
-    if code != 0 {
-        bail!("`git clone` failed with status {code}; registry not added");
+    // `remove` deliberately leaves the clone on disk, and says so. Re-adding the
+    // same registry therefore meets a non-empty destination, where `git clone`
+    // fails with "destination path already exists and is not an empty
+    // directory" — a message about a directory, for what the operator
+    // experienced as re-adding a registry they had just removed.
+    match reuse(&dest, &args.url) {
+        Reuse::Clone => {
+            println!("cloning {} ...", args.url);
+            let code = StdProcessRunner.run_streaming(&git_clone_argv(&args.url, &dest))?;
+            if code != 0 {
+                bail!("`git clone` failed with status {code}; registry not added");
+            }
+        }
+        Reuse::Existing => {
+            println!(
+                "reusing the clone already at {} — run `atlasctl registry update {}` to refresh it",
+                dest.display(),
+                args.name
+            );
+        }
+        Reuse::Conflict(found) => {
+            bail!(
+                "{} already holds a clone of {found}, not {}.\n\
+                 Delete that directory or choose another registry name; atlasctl will not \
+                 replace a checkout it did not make in this run.",
+                dest.display(),
+                args.url
+            );
+        }
     }
 
     store.save(&StdFileSystem, &path)?;
@@ -128,4 +153,120 @@ pub fn update(args: &RegistryUpdateArgs) -> Result<()> {
         println!("done");
     }
     Ok(())
+}
+
+/// What to do about a destination that may already hold a checkout.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Reuse {
+    /// Nothing there — clone normally.
+    Clone,
+    /// A checkout of the same URL is already there; keep it.
+    Existing,
+    /// Something else is there. Named, never overwritten.
+    Conflict(String),
+}
+
+/// Decide from what is on disk, so the decision is testable without a network.
+fn reuse(dest: &std::path::Path, want: &str) -> Reuse {
+    let empty = std::fs::read_dir(dest).map(|mut d| d.next().is_none());
+    match empty {
+        Err(_) => Reuse::Clone,   // does not exist — the ordinary case
+        Ok(true) => Reuse::Clone, // exists but empty — git is happy with that
+        Ok(false) => {
+            let found = StdProcessRunner
+                .run(&[
+                    "git".into(),
+                    "-C".into(),
+                    dest.display().to_string(),
+                    "remote".into(),
+                    "get-url".into(),
+                    "origin".into(),
+                ])
+                .ok()
+                .filter(|o| o.success())
+                .map(|o| o.stdout.trim().to_owned())
+                .unwrap_or_default();
+            if same_remote(&found, want) {
+                Reuse::Existing
+            } else {
+                // An unreadable or absent origin is a conflict, not a match:
+                // reusing a directory we cannot identify would silently serve
+                // recipes from somewhere nobody asked for.
+                Reuse::Conflict(if found.is_empty() {
+                    "something that is not a git checkout".to_owned()
+                } else {
+                    found
+                })
+            }
+        }
+    }
+}
+
+/// Whether two remote URLs name the same repository.
+///
+/// Compared with a trailing `.git` and any trailing slash ignored, because
+/// `…/atlas-recipes` and `…/atlas-recipes.git` are the same place and refusing
+/// the second would be a distinction the operator never made.
+fn same_remote(a: &str, b: &str) -> bool {
+    let norm = |u: &str| {
+        u.trim()
+            .trim_end_matches('/')
+            .trim_end_matches(".git")
+            .to_owned()
+    };
+    !a.is_empty() && norm(a) == norm(b)
+}
+
+#[cfg(test)]
+mod reuse_tests {
+    use super::{Reuse, reuse, same_remote};
+
+    #[test]
+    fn a_url_is_the_same_place_with_or_without_dot_git() {
+        let a = "https://github.com/x/atlas-recipes";
+        assert!(same_remote(a, "https://github.com/x/atlas-recipes.git"));
+        assert!(same_remote("https://github.com/x/atlas-recipes.git/", a));
+        assert!(same_remote(a, a));
+    }
+
+    #[test]
+    fn a_different_repository_is_not_the_same_place() {
+        assert!(!same_remote(
+            "https://github.com/x/atlas-recipes",
+            "https://github.com/y/atlas-recipes"
+        ));
+        // An unreadable origin must never match: reusing a directory we cannot
+        // identify would silently serve recipes from somewhere nobody asked for.
+        assert!(!same_remote("", "https://github.com/x/atlas-recipes"));
+    }
+
+    #[test]
+    fn a_destination_that_does_not_exist_is_an_ordinary_clone() {
+        let missing = std::path::Path::new("/definitely/not/here/atlas-registry-test");
+        assert_eq!(reuse(missing, "https://example.invalid/r"), Reuse::Clone);
+    }
+
+    #[test]
+    fn an_empty_destination_is_still_an_ordinary_clone() {
+        // git accepts an existing empty directory, so this must not be treated
+        // as a conflict — that would refuse a case that works today.
+        let dir = std::env::temp_dir().join(format!("atlasctl-reuse-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        assert_eq!(reuse(&dir, "https://example.invalid/r"), Reuse::Clone);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The sequence that motivated this: `remove` leaves the clone on disk and
+    /// says so, then re-adding met git's "destination path already exists".
+    #[test]
+    fn a_non_git_directory_is_a_named_conflict_never_an_overwrite() {
+        let dir = std::env::temp_dir().join(format!("atlasctl-reuse-x-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(dir.join("stray"), b"not a checkout").expect("write");
+        match reuse(&dir, "https://example.invalid/r") {
+            Reuse::Conflict(found) => assert!(found.contains("not a git checkout"), "{found}"),
+            other => panic!("a directory we cannot identify must not be reused: {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
