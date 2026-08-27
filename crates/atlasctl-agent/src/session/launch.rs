@@ -7,6 +7,11 @@
 //! reason stated there: these verbs reach the container runtime on this box,
 //! those reach another machine over the authenticated peer channel. Keeping
 //! them apart is what keeps each surface small enough to read in one sitting.
+//!
+//! Every verb here delegates to [`crate::control::LocalControl`] — the same
+//! core the peer channel's terminal `Control` handler executes through — and
+//! keeps for itself only what is session-shaped: the correlation `id`, the
+//! `ServerMsg` envelope, and the denied-attempt log.
 
 use super::{Session, err};
 use atlasctl_protocol::RecipeId;
@@ -21,15 +26,7 @@ impl Session<'_> {
         recipe_id: &RecipeId,
         requested: &BTreeMap<String, SettingValue>,
     ) -> Vec<ServerMsg> {
-        let recipe = match self.resolve(recipe_id) {
-            Ok(r) => r,
-            Err(e) => return vec![err(Some(id), e)],
-        };
-        let overrides = match self.check_settings(requested) {
-            Ok(o) => o,
-            Err(e) => return vec![err(Some(id), e)],
-        };
-        match self.deps.launcher.preview(&recipe, &overrides) {
+        match self.control().preview(recipe_id, requested) {
             Ok(p) => vec![ServerMsg::Preview {
                 id,
                 command: p.command,
@@ -40,7 +37,10 @@ impl Session<'_> {
                 on: None,
                 via: None,
             }],
-            Err(e) => vec![err(Some(id), e)],
+            Err(e) => {
+                self.note_denied(&e);
+                vec![err(Some(id), e)]
+            }
         }
     }
 
@@ -50,33 +50,7 @@ impl Session<'_> {
         recipe_id: &RecipeId,
         requested: &BTreeMap<String, SettingValue>,
     ) -> Vec<ServerMsg> {
-        if let Err(why) = &self.deps.can_launch {
-            return vec![err(
-                Some(id),
-                AgentError::NotLaunchable {
-                    recipe: recipe_id.clone(),
-                    reason: why.clone(),
-                },
-            )];
-        }
-        let recipe = match self.resolve(recipe_id) {
-            Ok(r) => r,
-            Err(e) => return vec![err(Some(id), e)],
-        };
-        if let Err(why) = recipe.launchable() {
-            return vec![err(
-                Some(id),
-                AgentError::NotLaunchable {
-                    recipe: recipe_id.clone(),
-                    reason: why.to_string(),
-                },
-            )];
-        }
-        let overrides = match self.check_settings(requested) {
-            Ok(o) => o,
-            Err(e) => return vec![err(Some(id), e)],
-        };
-        match self.deps.launcher.launch(&recipe, &overrides) {
+        match self.control().launch(recipe_id, requested) {
             Ok(started) => vec![ServerMsg::Started {
                 id,
                 recipe: recipe_id.clone(),
@@ -85,12 +59,15 @@ impl Session<'_> {
                 on: None,
                 via: None,
             }],
-            Err(e) => vec![err(Some(id), e)],
+            Err(e) => {
+                self.note_denied(&e);
+                vec![err(Some(id), e)]
+            }
         }
     }
 
     pub(super) fn stop(&mut self, id: u32, recipe_id: &RecipeId) -> Vec<ServerMsg> {
-        match self.deps.launcher.stop(recipe_id.as_str()) {
+        match self.control().stop(recipe_id) {
             Ok(()) => vec![ServerMsg::Stopped {
                 id,
                 recipe: recipe_id.clone(),
@@ -102,7 +79,7 @@ impl Session<'_> {
     }
 
     pub(super) fn status(&mut self, id: u32) -> Vec<ServerMsg> {
-        match self.deps.launcher.running() {
+        match self.control().status() {
             Ok(running) => vec![ServerMsg::Status {
                 id,
                 running,

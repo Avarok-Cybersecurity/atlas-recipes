@@ -6,6 +6,7 @@
 
 pub mod cluster;
 pub mod clusterdriver;
+pub mod control;
 pub mod daemon;
 pub mod discovery;
 pub mod fabric;

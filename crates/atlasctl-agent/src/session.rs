@@ -10,12 +10,10 @@
 
 use crate::launcher::Launcher;
 use crate::token;
-use atlasctl_core::registry::{RecipeRef, RegistrySet};
+use atlasctl_core::registry::RegistrySet;
 use atlasctl_core::settings;
+use atlasctl_protocol::PROTOCOL_VERSION;
 use atlasctl_protocol::msg::{AgentError, ClientMsg, RecipeInfo, ServerMsg};
-use atlasctl_protocol::settings::SettingValue;
-use atlasctl_protocol::{PROTOCOL_VERSION, RecipeId};
-use std::collections::BTreeMap;
 
 /// Where a connection has got to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -347,74 +345,37 @@ impl<'a> Session<'a> {
         }]
     }
 
-    /// Resolve a recipe id against the compiled-in set.
+    /// The shared control core over this session's dependencies.
     ///
-    /// The id is already syntactically valid — it could not have been
-    /// deserialized otherwise — so this only answers "does it exist here".
-    fn resolve(&self, id: &RecipeId) -> Result<atlasctl_core::Recipe, AgentError> {
-        self.deps
-            .registry
-            .resolve(&RecipeRef::Bare(id.as_str().to_string()))
-            .map_err(|_| AgentError::UnknownRecipe {
-                recipe: id.to_string(),
-            })
+    /// Built per call, from borrows: the same [`crate::control::LocalControl`]
+    /// the peer channel's terminal `Control` handler executes through, so a
+    /// relayed verb cannot reach a check the local one skips or vice versa.
+    fn control(&self) -> crate::control::LocalControl<'_> {
+        crate::control::LocalControl {
+            registry: self.deps.registry,
+            launcher: self.deps.launcher,
+            telemetry: self.deps.telemetry,
+            can_launch: &self.deps.can_launch,
+        }
     }
 
-    /// Check requested settings, recording any denied-key attempts.
-    fn check_settings(
-        &mut self,
-        requested: &BTreeMap<String, SettingValue>,
-    ) -> Result<BTreeMap<String, atlasctl_core::ScalarValue>, AgentError> {
-        settings::validate(requested).map_err(|errors| {
-            for e in &errors {
+    /// Record denied-key attempts carried inside a settings refusal.
+    ///
+    /// The control core returns them typed in `BadSettings` rather than
+    /// logging them itself, because only this session knows they came from
+    /// the local browser — the caller the log exists to say something about.
+    fn note_denied(&mut self, error: &AgentError) {
+        if let AgentError::BadSettings { errors } = error {
+            for e in errors {
                 if let atlasctl_protocol::settings::SettingError::Denied { key, .. } = e {
                     self.denied_attempts.push(key.clone());
                 }
             }
-            AgentError::BadSettings { errors }
-        })
+        }
     }
 
     fn inventory(&self) -> Vec<RecipeInfo> {
-        self.deps
-            .registry
-            .list()
-            .into_iter()
-            .filter_map(|entry| {
-                let id = RecipeId::parse(&entry.name).ok()?;
-                let r = self
-                    .deps
-                    .registry
-                    .resolve(&RecipeRef::Bare(entry.name))
-                    .ok()?;
-                let (runnable, reason) = match r.launchable() {
-                    Ok(()) => (true, None),
-                    Err(why) => (false, Some(why.to_string())),
-                };
-                Some(RecipeInfo {
-                    id,
-                    model: r.model.clone(),
-                    nodes: r.topology.min_nodes,
-                    runnable,
-                    reason,
-                    defaults: r
-                        .defaults
-                        .iter()
-                        .map(|(k, v)| (k.clone(), to_wire(v)))
-                        .collect(),
-                })
-            })
-            .collect()
-    }
-}
-
-fn to_wire(v: &atlasctl_core::ScalarValue) -> SettingValue {
-    use atlasctl_core::ScalarValue as S;
-    match v {
-        S::Bool(b) => SettingValue::Bool(*b),
-        S::Int(i) => SettingValue::Int(*i),
-        S::Float(f) => SettingValue::Float(*f),
-        S::Str(s) => SettingValue::Str(s.clone()),
+        self.control().recipes()
     }
 }
 

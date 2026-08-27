@@ -2,7 +2,9 @@
 
 use super::*;
 use crate::launcher::{Call, RecordingLauncher};
-use atlasctl_protocol::settings::SettingError;
+use atlasctl_protocol::RecipeId;
+use atlasctl_protocol::settings::{SettingError, SettingValue};
+use std::collections::BTreeMap;
 
 pub(super) const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 /// A recipe that really is in the compiled-in corpus.
