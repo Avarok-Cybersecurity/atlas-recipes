@@ -12,6 +12,13 @@
 //!    `Unverified`, never a guess, and it carries no vitals at all.
 //! 3. A **pin with a remembered address** keeps a paired machine listed while it
 //!    is switched off, because it is still part of your fleet when it is off.
+//! 4. A **vouch** — a pinned peer's claim about a peer of ITS own — contributes
+//!    a descriptor only when none of the first-hand tiers above know the node
+//!    at all. It lists as [`PairingState::Vouched`] with `vouched_by` naming
+//!    the claimant, because rendering a claim with the same face as evidence
+//!    would lie to the operator about who verified what. When first-hand
+//!    evidence exists, the vouch contributes exactly one thing: `vouched_by`
+//!    as labeled corroboration. Fields are never blended across tiers.
 //!
 //! Anything seen but not pinned is listed, trusted by nobody, and shows no
 //! vitals: telemetry from a machine you have not paired is not evidence about
@@ -39,6 +46,10 @@ impl FleetView for LocalFleet {
     fn nodes(&self) -> Vec<NodeDescriptor> {
         let mut out = vec![self.local_node()];
         let pinned = self.pins.load().unwrap_or_default();
+        // Snapshotted before any guard below is taken: building it re-locks
+        // the report cache, and a std mutex re-acquired on this same thread
+        // would deadlock, not error.
+        let vouches = self.vouch_view();
         let seen = self.lock_seen();
         let alerts = self.alerts.lock().ok();
 
@@ -48,7 +59,7 @@ impl FleetView for LocalFleet {
         let reports = self.reports.lock().ok();
         for (id, pin) in &pinned {
             let sighting = seen.as_ref().and_then(|s| s.get(id));
-            let report = reports.as_ref().and_then(|r| r.get(id));
+            let report = reports.as_ref().and_then(|r| r.get(id)).map(|(r, _)| r);
             // A completed handshake is better evidence of liveness than a
             // beacon in either direction: a wedged agent can still broadcast,
             // and a healthy one goes quiet the moment a switch filters
@@ -144,11 +155,12 @@ impl FleetView for LocalFleet {
                     .and_then(|a| a.get(id).cloned())
                     .unwrap_or_default(),
                 running: None,
-                // First-hand knowledge (a pin), reached directly. The vouch
-                // tier that fills these is a later step; until it exists,
-                // claiming a voucher or a relay here would be invented
-                // provenance.
-                vouched_by: None,
+                // First-hand knowledge wins every attribute above, but a
+                // vouch for a node we ALSO pinned is still worth labeling:
+                // corroboration, and the operator's map of who claims what.
+                vouched_by: vouches.get(id).map(|(voucher, _, _)| *voucher),
+                // A pinned target is dialled directly (the router's rule O2);
+                // claiming a relay here would show a route never taken.
                 reached_via: None,
             });
         }
@@ -174,12 +186,53 @@ impl FleetView for LocalFleet {
                     vitals: None,
                     alerts: Vec::new(),
                     running: None,
-                    // Seen on the wire ourselves: nobody vouches, nothing
-                    // routes through anyone.
-                    vouched_by: None,
+                    // A sighting is first-hand placement; a vouch for the
+                    // same node is corroboration worth labeling, nothing
+                    // more — no field above came from it.
+                    vouched_by: vouches.get(id).map(|(voucher, _, _)| *voucher),
+                    // Seen on the wire ourselves: nothing routes through
+                    // anyone.
                     reached_via: None,
                 });
             }
+        }
+
+        // Rung 4: nodes known ONLY through a voucher's claim. Everything on
+        // this descriptor is that claim, labeled as such — `Vouched`, never a
+        // treatment shared with `Paired`, because the one thing this tier
+        // must not do is make second-hand knowledge look verified.
+        for (target, (voucher, claim, route)) in &vouches {
+            if pinned.contains_key(target)
+                || seen.as_ref().is_some_and(|s| s.contains_key(target))
+                || *target == self.id()
+            {
+                continue;
+            }
+            out.push(NodeDescriptor {
+                id: *target,
+                name: claim.name.clone(),
+                is_local: false,
+                pairing: PairingState::Vouched,
+                // Display data only: control toward a vouched node rides its
+                // voucher, never a dial to an address someone else relayed.
+                addresses: claim.addresses.clone(),
+                launchability: as_launchability(claim.can_launch),
+                agent_version: String::new(),
+                accelerator: claim.accelerator.clone(),
+                os: claim.os.clone(),
+                // Second-hand vitals are shown only with a stated age inside
+                // the same staleness bound everything else uses. Vitals whose
+                // age is missing are dropped outright — an unknown age is not
+                // zero, and rendering them would present old data as fresh.
+                vitals: match claim.vitals_age_s {
+                    Some(age) if age <= UNREACHABLE_AFTER.as_secs() => claim.vitals.clone(),
+                    _ => None,
+                },
+                alerts: Vec::new(),
+                running: None,
+                vouched_by: Some(*voucher),
+                reached_via: *route,
+            });
         }
         out
     }
@@ -299,6 +352,11 @@ impl FleetView for LocalFleet {
     }
 
     fn unpair(&self, node: NodeId) -> Result<bool> {
+        // Its vouches go with the pin, atomically from the caller's view:
+        // trust withdrawn from a machine withdraws every claim it made, so no
+        // route or listing row survives on the word of a peer no longer
+        // trusted to say anything.
+        self.clear_vouches(node);
         self.pins.remove(node)
     }
 }

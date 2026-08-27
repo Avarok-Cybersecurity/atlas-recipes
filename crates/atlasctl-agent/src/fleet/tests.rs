@@ -234,6 +234,8 @@ fn report(id: NodeId, name: &str, can_launch: bool) -> crate::peer::link::PeerRe
         vitals: None,
         link: LinkClass::Roce,
         addresses: vec![roce("10.10.10.10")],
+        vouched: None,
+        peer_version_max: crate::peer::wire::PEER_PROTOCOL_VERSION,
     }
 }
 

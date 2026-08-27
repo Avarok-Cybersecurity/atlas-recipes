@@ -153,7 +153,14 @@ pub struct LocalFleet {
     /// Separate from `seen`, and it must stay separate: a beacon says where a
     /// machine claims to be, while this is what a machine holding the key we
     /// pinned actually said. Only the second is evidence.
-    reports: Mutex<BTreeMap<NodeId, crate::peer::link::PeerReport>>,
+    ///
+    /// The instant is when the report was recorded, so a vouch built from it
+    /// can state how old its vitals are instead of presenting them as fresh.
+    reports: Mutex<BTreeMap<NodeId, (crate::peer::link::PeerReport, Instant)>>,
+    /// Second-hand knowledge: what pinned peers say about THEIR pins.
+    /// Everything about it lives in [`vouched`], including the rule that it
+    /// never feeds this agent's own digest.
+    vouches: vouched::VouchTable,
     /// How to run the ceremony, when this agent can.
     pairing: Option<Box<dyn PeerPairing>>,
 }
@@ -190,6 +197,7 @@ impl LocalFleet {
             alerts: Mutex::new(BTreeMap::new()),
             running: Mutex::new(None),
             reports: Mutex::new(BTreeMap::new()),
+            vouches: vouched::VouchTable::default(),
             pairing: None,
         }
     }
@@ -282,15 +290,21 @@ impl LocalFleet {
     /// Record what a peer said over the authenticated channel.
     pub fn record_report(&self, report: crate::peer::link::PeerReport) {
         if let Ok(mut r) = self.reports.lock() {
-            r.insert(report.node, report);
+            r.insert(report.node, (report, Instant::now()));
         }
     }
 
     /// Forget what a peer said, because it stopped answering.
+    ///
+    /// Its vouches go with it: a claim we can no longer re-confirm within one
+    /// poll must not keep steering routes or populating the listing. When the
+    /// peer answers again, the next digest restores them within
+    /// `PEER_POLL_INTERVAL`.
     pub fn clear_report(&self, node: NodeId) {
         if let Ok(mut r) = self.reports.lock() {
             r.remove(&node);
         }
+        self.clear_vouches(node);
     }
 
     /// Peers this agent should try to reach, with the address to use.
@@ -357,6 +371,7 @@ impl LocalFleet {
         if let Ok(mut seen) = self.seen.lock() {
             seen.retain(|id, s| pinned.contains_key(id) || s.at.elapsed() < UNREACHABLE_AFTER);
         }
+        self.prune_vouches();
     }
 
     pub(crate) fn lock_seen(&self) -> Option<MutexGuard<'_, BTreeMap<NodeId, Seen>>> {
@@ -429,6 +444,10 @@ pub fn record_pairing(
         name,
         paired_at: now_unix,
         last_address,
+        // Pairing authenticates; it does not authorize control. The grant is
+        // a separate, explicit act (`atlasctl peer grant-control`), so a
+        // ceremony can never hand out remote-stop authority as a side effect.
+        controller: false,
     })
 }
 
@@ -458,6 +477,11 @@ pub fn no_vitals() -> NodeVitals {
 
 mod listing;
 pub mod vitals;
+pub mod vouched;
+
+#[cfg(test)]
+#[path = "fleet/vouched_tests.rs"]
+mod vouched_tests;
 
 pub use vitals::{
     DockerRunning, RunningSource, SystemVitals, VitalsSource, docker_probe_argv,

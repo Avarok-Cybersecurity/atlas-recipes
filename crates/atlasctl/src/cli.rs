@@ -165,7 +165,13 @@ pub enum PeerCmd {
     /// Pair with a machine by address, using a code read off that machine.
     Add(PeerAddArgs),
     /// Drop trust in a machine. Takes effect on its next connection.
-    Remove(PeerRemoveArgs),
+    Remove(PeerNodeArgs),
+    /// Let a paired machine drive this one's launch surface, as its own
+    /// browser would. Consent to remote stop must be said, not implied by
+    /// pairing.
+    GrantControl(PeerNodeArgs),
+    /// Withdraw that grant. Takes effect on the machine's next connection.
+    RevokeControl(PeerNodeArgs),
 }
 
 /// `peer add` arguments.
@@ -179,9 +185,10 @@ pub struct PeerAddArgs {
     pub code: String,
 }
 
-/// `peer remove` arguments.
+/// Arguments naming one paired machine: `peer remove`, `peer grant-control`,
+/// `peer revoke-control`.
 #[derive(Args, Debug)]
-pub struct PeerRemoveArgs {
+pub struct PeerNodeArgs {
     /// Fingerprint, or a unique prefix of one.
     pub node: String,
 }

@@ -81,6 +81,7 @@ fn pin_for(id: NodeId, key: &VerifyingKey) -> Pin {
         name: DisplayName::new("spark-43fa"),
         paired_at: 1_756_000_000,
         last_address: None,
+        controller: false,
     }
 }
 
@@ -195,4 +196,74 @@ fn malformed_key_and_signature_material_is_rejected_rather_than_panicking() {
     assert!(verify_from(peer.id(), "zzzz", b"m", &sig.to_bytes()).is_err());
     assert!(verify_from(peer.id(), "aabb", b"m", &sig.to_bytes()).is_err());
     assert!(verify_from(peer.id(), &key_hex, b"m", b"short").is_err());
+}
+
+#[test]
+fn a_pin_file_written_before_the_grant_existed_loads_ungranted() {
+    // The retroactive-widening hazard: if a pre-upgrade `peers.json` came
+    // back with `controller: true` — or refused to parse — upgrading the
+    // fleet would either hand every existing peer remote-stop authority or
+    // break every pairing. It must load, and it must load powerless.
+    let tmp = Tmp::new("oldpins");
+    let peer = Identity::generate();
+    let old_json = format!(
+        r#"[{{"id":"{}","public_key":"{}","name":"spark-43fa","paired_at":1756000000}}]"#,
+        peer.id(),
+        hex::encode(peer.public().as_bytes()),
+    );
+    std::fs::write(tmp.0.join(PINS_FILE), old_json).expect("write a v1-era pin file");
+
+    let pins = PinStore::new(&tmp.0)
+        .load()
+        .expect("a pre-grant file loads");
+    assert!(
+        !pins[&peer.id()].controller,
+        "an upgrade must never mint a control grant out of an old pin"
+    );
+}
+
+#[test]
+fn a_grant_persists_across_a_re_read_and_is_revocable() {
+    let tmp = Tmp::new("grant");
+    let store = PinStore::new(&tmp.0);
+    let peer = Identity::generate();
+    store.add(pin_for(peer.id(), &peer.public())).expect("add");
+
+    assert!(store.set_controller(peer.id(), true).expect("grants"));
+    // A fresh store over the same file is what every new connection does; the
+    // grant has to be in the file, not in a cache.
+    let reread = PinStore::new(&tmp.0).load().expect("reads");
+    assert!(reread[&peer.id()].controller);
+
+    assert!(store.set_controller(peer.id(), false).expect("revokes"));
+    let reread = PinStore::new(&tmp.0).load().expect("reads");
+    assert!(
+        !reread[&peer.id()].controller,
+        "a revocation that does not reach the file is not a revocation"
+    );
+}
+
+#[test]
+fn granting_control_to_a_machine_that_is_not_pinned_grants_nothing() {
+    // `set_controller` must not invent a pin: a grant is an annotation on an
+    // existing trust decision, never a way to create one.
+    let tmp = Tmp::new("nograntee");
+    let store = PinStore::new(&tmp.0);
+    let stranger = Identity::generate();
+    assert!(!store.set_controller(stranger.id(), true).expect("reads"));
+    assert!(store.load().expect("reads").is_empty());
+}
+
+#[test]
+fn removing_a_pin_removes_its_grant_with_it() {
+    // `peer remove` stays the one big revocation switch: dropping trust must
+    // drop the control grant too, not leave it waiting for a re-pair.
+    let tmp = Tmp::new("removegrant");
+    let store = PinStore::new(&tmp.0);
+    let peer = Identity::generate();
+    store.add(pin_for(peer.id(), &peer.public())).expect("add");
+    store.set_controller(peer.id(), true).expect("grants");
+
+    assert!(store.remove(peer.id()).expect("removes"));
+    assert!(store.load().expect("reads").is_empty());
 }

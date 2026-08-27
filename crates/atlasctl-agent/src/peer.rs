@@ -30,6 +30,10 @@ mod tls_tests;
 mod link_tests;
 
 #[cfg(test)]
+#[path = "peer/wire_tests.rs"]
+mod wire_tests;
+
+#[cfg(test)]
 #[path = "peer/pair_tests.rs"]
 mod pair_tests;
 

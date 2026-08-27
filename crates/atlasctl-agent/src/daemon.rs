@@ -45,6 +45,8 @@ pub const PEER_POLL_INTERVAL: Duration = Duration::from_secs(5);
 // The vitals and prune timers live in `daemon/housekeeping.rs`. They are
 // timers over local state; this file is the machine-to-machine half.
 mod housekeeping;
+mod peer_serve;
+use peer_serve::serve_rank_requests;
 
 use housekeeping::{spawn_prune, spawn_vitals};
 
@@ -181,12 +183,17 @@ fn spawn_peer_listener(
                 }
 
                 let vitals = fleet.local_vitals_and_id().map(|(_, v)| v);
+                // An unreadable pin store degrades to "did not say" (the
+                // intro's `vouched` stays `None`), never to an affirmative
+                // "no pins" that would retract every vouch this agent
+                // previously made.
+                let mut intro = crate::peer::link::SelfIntro::new(fleet.can_launch(), "");
+                if let Ok(digest) = crate::peer::link::fleet_digest(&pins, &fleet) {
+                    intro = intro.with_vouched(digest);
+                }
                 if crate::peer::link::serve_query(
                     &mut tls,
-                    crate::discovery::local_display_name().as_str(),
-                    fleet.can_launch(),
-                    "",
-                    &crate::discovery::local_os(),
+                    &intro,
                     vitals,
                     &fleet.local_addresses(),
                 )
@@ -198,7 +205,7 @@ fn spawn_peer_listener(
                 // The peer may go on to ask this rank to describe what it would
                 // run. Rendering happens here, on the machine that would
                 // execute it, from this machine's own vendored recipe.
-                serve_rank_requests(&mut tls, &rank).await;
+                serve_rank_requests(&mut tls, &rank, identity.id()).await;
             });
         }
     });
@@ -424,66 +431,4 @@ fn spawn_discovery(
             }
         }
     });
-}
-
-/// Answer a paired peer's questions about what this rank would run.
-///
-/// Only reached after the TLS verifier confirmed the caller is pinned, so there
-/// is no authorization decision here — only rendering, from this machine's own
-/// copy of the recipe.
-async fn serve_rank_requests<S>(stream: &mut S, rank: &Arc<dyn RankService>)
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
-    use crate::peer::wire::{PeerFrame, read_frame, write_frame};
-    loop {
-        let Ok(frame) = read_frame(stream).await else {
-            return;
-        };
-        let reply = match frame {
-            PeerFrame::PreviewRank { assignment } => match rank.render(&assignment) {
-                Ok((command, unmapped)) => PeerFrame::RankPreviewed { command, unmapped },
-                Err(e) => PeerFrame::RankRefused {
-                    reason: e.to_string(),
-                },
-            },
-            PeerFrame::Prepare { assignment, epoch } => PeerFrame::Prepared {
-                reply: rank.prepare(&epoch, &assignment),
-                epoch,
-            },
-            // Commit deliberately carries no assignment: what starts is what
-            // this machine rendered and stored at prepare time, so a head
-            // compromised between the phases cannot substitute anything.
-            PeerFrame::Commit { epoch } => match rank.commit(&epoch) {
-                Ok(container) => PeerFrame::Committed { epoch, container },
-                Err(e) => PeerFrame::RankRefused {
-                    reason: e.to_string(),
-                },
-            },
-            // Abort is acknowledged rather than answered with a result: the
-            // head is already rolling back, and a failure to release must not
-            // mask whatever caused the rollback.
-            // Acknowledged whether or not the container was there: a rollback
-            // asking twice, or asking about a rank that never started, is an
-            // ordinary race and not something the head can act on.
-            PeerFrame::IsRankAlive { container } => PeerFrame::RankLiveness {
-                // Unaskable is not alive: a rank whose state we cannot read
-                // must not be counted as part of a whole cluster.
-                running: rank.alive(&container).unwrap_or(false),
-                container,
-            },
-            PeerFrame::StopRank { container } => {
-                let _ = rank.stop(&container);
-                PeerFrame::RankStopped { container }
-            }
-            PeerFrame::Abort { epoch } => {
-                rank.abort(&epoch);
-                PeerFrame::Aborted { epoch }
-            }
-            _ => return,
-        };
-        if write_frame(stream, &reply).await.is_err() {
-            return;
-        }
-    }
 }

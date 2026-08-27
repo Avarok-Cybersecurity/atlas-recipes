@@ -66,6 +66,8 @@ fn run() -> Result<()> {
         Command::Peer(PeerCmd::List) => commands::peer::list(),
         Command::Peer(PeerCmd::Add(a)) => commands::peer::add(&a),
         Command::Peer(PeerCmd::Remove(a)) => commands::peer::remove(&a),
+        Command::Peer(PeerCmd::GrantControl(a)) => commands::peer::grant_control(&a),
+        Command::Peer(PeerCmd::RevokeControl(a)) => commands::peer::revoke_control(&a),
         Command::Doctor => commands::doctor::run(),
     }
 }

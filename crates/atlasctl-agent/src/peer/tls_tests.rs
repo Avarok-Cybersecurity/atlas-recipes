@@ -48,6 +48,7 @@ fn pin_of(store: &PinStore, who: &Identity) {
             name: DisplayName::new("peer"),
             paired_at: 0,
             last_address: None,
+            controller: false,
         })
         .expect("pin");
 }

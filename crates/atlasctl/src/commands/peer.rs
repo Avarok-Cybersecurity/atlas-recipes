@@ -7,7 +7,7 @@
 //! single command that takes effect on the very next connection, because a
 //! revocation that needs a restart is not a revocation.
 
-use crate::cli::{PeerAddArgs, PeerRemoveArgs};
+use crate::cli::{PeerAddArgs, PeerNodeArgs};
 use anyhow::{Context, Result, bail};
 use atlasctl_agent::discovery::resolve_manual;
 use atlasctl_agent::identity::{Identity, PinStore};
@@ -109,36 +109,75 @@ pub fn add(args: &PeerAddArgs) -> Result<()> {
 ///
 /// # Errors
 /// If the prefix matches no peer, or more than one.
-pub fn remove(args: &PeerRemoveArgs) -> Result<()> {
-    let dir = crate::hostinfo::usable_config_dir()?;
-    let pins = PinStore::new(&dir);
-    let all = pins.load()?;
+pub fn remove(args: &PeerNodeArgs) -> Result<()> {
+    let pins = PinStore::new(&crate::hostinfo::usable_config_dir()?);
+    let (node, name) = resolve_prefix(&pins, &args.node)?;
+    pins.remove(node)?;
+    println!("Unpaired {name} ({}).", node.short());
+    println!("It will be refused on its next connection.");
+    Ok(())
+}
 
-    // A prefix is what people actually have to hand — the short form printed by
-    // `peer list`. Requiring uniqueness rather than taking the first match is
-    // what stops an ambiguous prefix from unpairing the wrong machine.
+/// Let a paired machine drive this one's launch surface.
+///
+/// # Errors
+/// If the prefix matches no peer, or more than one.
+pub fn grant_control(args: &PeerNodeArgs) -> Result<()> {
+    let pins = PinStore::new(&crate::hostinfo::usable_config_dir()?);
+    let (node, name) = resolve_prefix(&pins, &args.node)?;
+    // resolve_prefix just proved the pin exists; a false here means it
+    // vanished between the read and the write, which must not pass silently.
+    anyhow::ensure!(
+        pins.set_controller(node, true)?,
+        "{name} disappeared from the pin store before the grant was written"
+    );
+    println!("Granted control to {name} ({}).", node.short());
+    println!("It may now start, stop, and inspect launches on this machine,");
+    println!("and ask this machine to forward those verbs to its own peers.");
+    println!(
+        "Withdraw with `atlasctl peer revoke-control {}`.",
+        node.short()
+    );
+    Ok(())
+}
+
+/// Withdraw the control grant.
+///
+/// # Errors
+/// If the prefix matches no peer, or more than one.
+pub fn revoke_control(args: &PeerNodeArgs) -> Result<()> {
+    let pins = PinStore::new(&crate::hostinfo::usable_config_dir()?);
+    let (node, name) = resolve_prefix(&pins, &args.node)?;
+    anyhow::ensure!(
+        pins.set_controller(node, false)?,
+        "{name} disappeared from the pin store before the revocation was written"
+    );
+    println!("Revoked control from {name} ({}).", node.short());
+    println!("The machine stays paired; control is refused on its next request.");
+    Ok(())
+}
+
+/// Resolve a fingerprint prefix to exactly one pinned peer.
+///
+/// A prefix is what people actually have to hand — the short form printed by
+/// `peer list`. Requiring uniqueness rather than taking the first match is
+/// what stops an ambiguous prefix from unpairing — or granting control to —
+/// the wrong machine.
+fn resolve_prefix(pins: &PinStore, prefix: &str) -> Result<(NodeId, String)> {
+    let all = pins.load()?;
     let matches: Vec<NodeId> = all
         .keys()
-        .filter(|id| id.to_string().starts_with(&args.node.to_lowercase()))
+        .filter(|id| id.to_string().starts_with(&prefix.to_lowercase()))
         .copied()
         .collect();
 
     match matches.as_slice() {
-        [] => bail!("no paired machine matches {}", args.node),
-        [one] => {
-            let name = all[one].name.as_str().to_owned();
-            pins.remove(*one)?;
-            println!("Unpaired {name} ({}).", one.short());
-            println!("It will be refused on its next connection.");
-            Ok(())
-        }
-        many => {
-            bail!(
-                "{} matches {} machines; use more characters",
-                args.node,
-                many.len()
-            )
-        }
+        [] => bail!("no paired machine matches {prefix}"),
+        [one] => Ok((*one, all[one].name.as_str().to_owned())),
+        many => bail!(
+            "{prefix} matches {} machines; use more characters",
+            many.len()
+        ),
     }
 }
 
