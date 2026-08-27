@@ -58,87 +58,6 @@ pub struct SessionDeps<'a> {
     pub joining: Option<&'a crate::joining::JoinWindow>,
 }
 
-/// Asks every rank of a planned cluster what it would run.
-///
-/// A trait so the session stays transport-free: the preview needs to reach
-/// other machines, and a session that opened sockets itself could not be tested
-/// without them.
-pub trait ClusterControl: Send + Sync {
-    /// Plan the launch and collect each rank's own rendering. Reserves nothing.
-    ///
-    /// # Errors
-    /// If the plan is impossible, or a rank refuses or cannot be reached.
-    fn preview(
-        &self,
-        recipe: &RecipeId,
-        nodes: &[atlasctl_protocol::fleet::NodeId],
-        head: atlasctl_protocol::fleet::NodeId,
-        settings: &BTreeMap<String, SettingValue>,
-    ) -> Result<
-        (
-            Vec<atlasctl_protocol::msg::fleet::RankPreview>,
-            Option<String>,
-        ),
-        String,
-    >;
-
-    /// Ask every rank to validate and reserve. Nothing starts.
-    ///
-    /// Returns the epoch a later commit must quote, each rank's answer, and
-    /// whether a commit may proceed. A rank refusing is a normal outcome
-    /// reported in the answers, not an error.
-    ///
-    /// # Errors
-    /// If the plan itself is impossible, which is before any rank was asked.
-    fn prepare(
-        &self,
-        recipe: &RecipeId,
-        nodes: &[atlasctl_protocol::fleet::NodeId],
-        head: atlasctl_protocol::fleet::NodeId,
-        settings: &BTreeMap<String, SettingValue>,
-    ) -> Result<
-        (
-            String,
-            Vec<atlasctl_protocol::msg::fleet::RankPrepare>,
-            bool,
-        ),
-        String,
-    >;
-
-    /// Start what every rank prepared under this epoch.
-    ///
-    /// # Errors
-    /// If no such prepare is outstanding, or a rank fails to start — in which
-    /// case every rank that did start has already been stopped.
-    fn commit(
-        &self,
-        epoch: &str,
-    ) -> Result<Vec<atlasctl_protocol::msg::fleet::RankStarted>, String>;
-
-    /// Abandon a prepare, releasing every reservation.
-    fn abort(&self, epoch: &str);
-
-    /// Stop every rank of the cluster this agent started.
-    ///
-    /// # Errors
-    /// If no cluster is running, or a rank could not be stopped — and the
-    /// error names which, because a rank left running holds a whole GPU.
-    fn stop_cluster(&self) -> Result<Vec<atlasctl_protocol::msg::fleet::RankStarted>, String>;
-
-    /// Check a running cluster is still whole, and tear it down if it is not.
-    ///
-    /// The settle gate at commit is a liveness check by construction: weights
-    /// take minutes to load, so it cannot wait for readiness and only catches
-    /// a rank that dies immediately. A rank that dies four minutes in — during
-    /// model build, say — passed that gate, and the survivors then hold their
-    /// GPUs indefinitely serving nothing, because a half cluster waits at a
-    /// rendezvous that will never complete.
-    ///
-    /// Returns a description of what it tore down, or `None` when the cluster
-    /// is whole or absent.
-    fn supervise(&self) -> Option<String>;
-}
-
 /// A single client connection.
 /// How long a completed exchange waits for a human decision.
 ///
@@ -224,6 +143,16 @@ impl<'a> Session<'a> {
         if self.phase == Phase::Closed {
             return Vec::new();
         }
+        // A verb aimed at another machine is refused here, before dispatch —
+        // executing it on THIS machine instead would be the silent
+        // misattribution the provenance fields exist to prevent. Only once
+        // authenticated, so an unauthenticated socket still learns nothing.
+        // Every arm below therefore handles `on: None` only.
+        if self.phase == Phase::Ready
+            && let Some(refusal) = launch::refuse_forward(&msg)
+        {
+            return vec![refusal];
+        }
         match (&self.phase, msg) {
             (
                 Phase::AwaitingHello,
@@ -249,10 +178,14 @@ impl<'a> Session<'a> {
                     },
                 )]
             }
-            (Phase::Ready, ClientMsg::ListRecipes { id }) => {
+            (Phase::Ready, ClientMsg::ListRecipes { id, on: _ }) => {
                 vec![ServerMsg::Recipes {
                     id,
                     recipes: self.inventory(),
+                    // Answered locally over the browser socket: this
+                    // machine's own answer, carried by no relay.
+                    on: None,
+                    via: None,
                 }]
             }
             (
@@ -261,6 +194,7 @@ impl<'a> Session<'a> {
                     id,
                     recipe,
                     settings,
+                    on: _,
                 },
             ) => self.preview(id, &recipe, &settings),
             (
@@ -269,10 +203,11 @@ impl<'a> Session<'a> {
                     id,
                     recipe,
                     settings,
+                    on: _,
                 },
             ) => self.launch(id, &recipe, &settings),
-            (Phase::Ready, ClientMsg::Stop { id, recipe }) => self.stop(id, &recipe),
-            (Phase::Ready, ClientMsg::Status { id }) => self.status(id),
+            (Phase::Ready, ClientMsg::Stop { id, recipe, on: _ }) => self.stop(id, &recipe),
+            (Phase::Ready, ClientMsg::Status { id, on: _ }) => self.status(id),
 
             (Phase::Ready, ClientMsg::ListNodes { id }) => self.nodes(id),
             // A watch is answered with the current fleet; the transport pushes
@@ -283,12 +218,49 @@ impl<'a> Session<'a> {
             (Phase::Ready, ClientMsg::PairPeerAt { id, target, code }) => {
                 self.pair_at(id, &target, &code)
             }
-            (Phase::Ready, ClientMsg::ConfirmPairing { id, node }) => {
-                self.confirm_pairing(id, node)
+            (
+                Phase::Ready,
+                ClientMsg::ConfirmPairing {
+                    id,
+                    node,
+                    allow_control,
+                },
+            ) => {
+                if allow_control {
+                    // Refused rather than ignored: the grant store
+                    // (`Pin::controller`) is a later step of the forwarding
+                    // design, and writing the pin while dropping the grant
+                    // would leave the operator believing consent was
+                    // recorded when nothing was.
+                    vec![err(
+                        Some(id),
+                        AgentError::InvalidMessage {
+                            detail: "allow_control is not implemented in this build; \
+                                     confirm the pairing without it"
+                                .into(),
+                        },
+                    )]
+                } else {
+                    self.confirm_pairing(id, node)
+                }
             }
             (Phase::Ready, ClientMsg::RejectPairing { id, node }) => self.reject_pairing(id, node),
             (Phase::Ready, ClientMsg::UnpairPeer { id, node }) => self.unpair(id, node),
-            (Phase::Ready, ClientMsg::MintJoinCode { id }) => self.mint_join(id),
+            (Phase::Ready, ClientMsg::MintJoinCode { id, allow_control }) => {
+                if allow_control {
+                    // Same refusal, same reason, as `ConfirmPairing`.
+                    vec![err(
+                        Some(id),
+                        AgentError::InvalidMessage {
+                            detail: "allow_control is not implemented in this build; \
+                                     mint the code without it"
+                                .into(),
+                        },
+                    )]
+                } else {
+                    self.mint_join(id)
+                }
+            }
             (Phase::Ready, ClientMsg::RevokeJoinCode { id }) => self.revoke_join(id),
 
             // A preview is rendered by each rank in turn, on the machine that
@@ -327,11 +299,19 @@ impl<'a> Session<'a> {
 
             (Phase::Ready, ClientMsg::StopCluster { id }) => self.stop_cluster(id),
 
-            (Phase::Ready, ClientMsg::LaunchStats { id, recipe }) => self.launch_stats(id, &recipe),
-
-            (Phase::Ready, ClientMsg::LaunchLogs { id, recipe, lines }) => {
-                self.launch_logs(id, &recipe, lines)
+            (Phase::Ready, ClientMsg::LaunchStats { id, recipe, on: _ }) => {
+                self.launch_stats(id, &recipe)
             }
+
+            (
+                Phase::Ready,
+                ClientMsg::LaunchLogs {
+                    id,
+                    recipe,
+                    lines,
+                    on: _,
+                },
+            ) => self.launch_logs(id, &recipe, lines),
 
             (Phase::Closed, _) => Vec::new(),
         }
@@ -444,6 +424,13 @@ fn err(id: Option<u32>, error: AgentError) -> ServerMsg {
 
 mod fleet;
 
+// The cluster-control trait the session drives. Split from this file on the
+// 500-line cap, along the trait boundary: the seam is "what the session asks
+// of a cluster", and nothing else moved.
+#[path = "session/cluster_control.rs"]
+mod cluster_control;
+pub use cluster_control::ClusterControl;
+
 #[path = "session/launch.rs"]
 mod launch;
 pub mod telemetry;
@@ -455,6 +442,12 @@ mod tests;
 #[cfg(test)]
 #[path = "session/fleet_fake.rs"]
 mod fleet_fake;
+#[cfg(test)]
+#[path = "session/forward_tests.rs"]
+mod forward_tests;
+#[cfg(test)]
+#[path = "session/join_tests.rs"]
+mod join_tests;
 #[cfg(test)]
 #[path = "session/pair_at_tests.rs"]
 mod pair_at_tests;

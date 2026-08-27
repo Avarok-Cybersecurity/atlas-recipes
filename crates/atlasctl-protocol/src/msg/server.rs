@@ -46,6 +46,19 @@ pub enum ServerMsg {
         id: u32,
         /// The inventory.
         recipes: Vec<RecipeInfo>,
+        /// Which node's answer this is. `None` = this machine. The server
+        /// states it rather than letting the page infer it from its own
+        /// request, so a misrouted reply is visible instead of silently
+        /// misattributed.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
+        /// The relay that carried it, when one did. `None` = answered over a
+        /// direct authenticated channel. A reply with `via: Some(r)` is
+        /// exactly as trustworthy as `r`, and the page must say so. The six
+        /// other single-node replies carry the same pair with the same
+        /// meaning.
+        #[serde(default)]
+        via: Option<crate::fleet::NodeId>,
     },
 
     /// Reply to `Preview`.
@@ -60,6 +73,14 @@ pub enum ServerMsg {
         /// silently, which is how a stated correctness pin went unapplied for
         /// months without anyone noticing.
         unapplied: Vec<String>,
+        /// Which node's answer this is. `None` = this machine. See
+        /// [`Self::Recipes`] for why the server states it.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
+        /// The relay that carried it, when one did. `None` = answered over a
+        /// direct authenticated channel.
+        #[serde(default)]
+        via: Option<crate::fleet::NodeId>,
     },
 
     /// A launch was accepted and started.
@@ -72,6 +93,14 @@ pub enum ServerMsg {
         container: String,
         /// Where the model is served, when it serves.
         endpoint: Option<String>,
+        /// Which node's answer this is. `None` = this machine. See
+        /// [`Self::Recipes`] for why the server states it.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
+        /// The relay that carried it, when one did. `None` = answered over a
+        /// direct authenticated channel.
+        #[serde(default)]
+        via: Option<crate::fleet::NodeId>,
     },
 
     /// Reply to `Status`.
@@ -80,6 +109,14 @@ pub enum ServerMsg {
         id: u32,
         /// What is running.
         running: Vec<RunningLaunch>,
+        /// Which node's answer this is. `None` = this machine. See
+        /// [`Self::Recipes`] for why the server states it.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
+        /// The relay that carried it, when one did. `None` = answered over a
+        /// direct authenticated channel.
+        #[serde(default)]
+        via: Option<crate::fleet::NodeId>,
     },
 
     /// A launch was stopped.
@@ -88,6 +125,14 @@ pub enum ServerMsg {
         id: u32,
         /// Which recipe.
         recipe: RecipeId,
+        /// Which node's answer this is. `None` = this machine. See
+        /// [`Self::Recipes`] for why the server states it.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
+        /// The relay that carried it, when one did. `None` = answered over a
+        /// direct authenticated channel.
+        #[serde(default)]
+        via: Option<crate::fleet::NodeId>,
     },
 
     /// The fleet, in full. Sent in reply to `ListNodes` and once on `WatchFleet`.
@@ -239,6 +284,14 @@ pub enum ServerMsg {
         /// not report it, or that there is not yet a second sample to
         /// difference against — never zero.
         stats: crate::msg::LaunchReading,
+        /// Which node's answer this is. `None` = this machine. See
+        /// [`Self::Recipes`] for why the server states it.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
+        /// The relay that carried it, when one did. `None` = answered over a
+        /// direct authenticated channel.
+        #[serde(default)]
+        via: Option<crate::fleet::NodeId>,
     },
 
     /// The tail of a launch's log.
@@ -256,6 +309,14 @@ pub enum ServerMsg {
         /// Whether the container is still running. A tail from a container that
         /// has exited is the last thing it said, not the latest news.
         running: bool,
+        /// Which node's answer this is. `None` = this machine. See
+        /// [`Self::Recipes`] for why the server states it.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
+        /// The relay that carried it, when one did. `None` = answered over a
+        /// direct authenticated channel.
+        #[serde(default)]
+        via: Option<crate::fleet::NodeId>,
     },
 
     /// Something failed.

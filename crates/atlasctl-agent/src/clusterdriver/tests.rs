@@ -45,6 +45,8 @@ fn descriptor(seed: u8, local: bool) -> NodeDescriptor {
         vitals: None,
         alerts: Vec::new(),
         running: None,
+        vouched_by: None,
+        reached_via: None,
     }
 }
 

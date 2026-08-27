@@ -25,7 +25,11 @@ fn confirming_with_no_exchange_in_flight_trusts_nothing() {
     let f = Fixture::new();
     let mut s = f.ready();
     let node = atlasctl_protocol::fleet::NodeId::from_bytes([3u8; 32]);
-    let out = s.handle(ClientMsg::ConfirmPairing { id: 7, node });
+    let out = s.handle(ClientMsg::ConfirmPairing {
+        id: 7,
+        node,
+        allow_control: false,
+    });
     match &out[0] {
         ServerMsg::PairDecision {
             trusted, detail, ..
@@ -107,7 +111,7 @@ use crate::fleet::{FleetView, PairOutcome};
 use atlasctl_protocol::fleet::{NodeDescriptor, NodeId};
 
 /// A handshaken session wired to `fleet`.
-fn ready_with_fleet<'a>(f: &'a Fixture, fleet: &'a dyn FleetView) -> super::Session<'a> {
+pub(super) fn ready_with_fleet<'a>(f: &'a Fixture, fleet: &'a dyn FleetView) -> super::Session<'a> {
     let (mut s, _) = super::Session::new(super::SessionDeps {
         registry: &f.registry,
         launcher: &f.launcher,
@@ -126,7 +130,7 @@ fn ready_with_fleet<'a>(f: &'a Fixture, fleet: &'a dyn FleetView) -> super::Sess
 }
 
 /// Run the exchange, returning the words the operator would be shown.
-fn exchange(s: &mut super::Session<'_>, node: NodeId) -> String {
+pub(super) fn exchange(s: &mut super::Session<'_>, node: NodeId) -> String {
     let out = s.handle(ClientMsg::PairPeer {
         id: 1,
         node,
@@ -177,7 +181,11 @@ fn confirming_pins_exactly_the_key_whose_words_were_shown() {
     let mut s = ready_with_fleet(&f, &fleet);
     exchange(&mut s, node);
 
-    let out = s.handle(ClientMsg::ConfirmPairing { id: 2, node });
+    let out = s.handle(ClientMsg::ConfirmPairing {
+        id: 2,
+        node,
+        allow_control: false,
+    });
 
     match &out[0] {
         ServerMsg::PairDecision { trusted, .. } => assert!(trusted, "{out:?}"),
@@ -196,8 +204,16 @@ fn a_second_confirm_pins_nothing_further() {
     let mut s = ready_with_fleet(&f, &fleet);
     exchange(&mut s, node);
 
-    s.handle(ClientMsg::ConfirmPairing { id: 2, node });
-    let again = s.handle(ClientMsg::ConfirmPairing { id: 3, node });
+    s.handle(ClientMsg::ConfirmPairing {
+        id: 2,
+        node,
+        allow_control: false,
+    });
+    let again = s.handle(ClientMsg::ConfirmPairing {
+        id: 3,
+        node,
+        allow_control: false,
+    });
 
     match &again[0] {
         ServerMsg::PairDecision { trusted, .. } => {
@@ -225,7 +241,11 @@ fn confirming_a_node_the_exchange_was_not_about_pins_nothing() {
     let mut s = ready_with_fleet(&f, &fleet);
     exchange(&mut s, paired);
 
-    let out = s.handle(ClientMsg::ConfirmPairing { id: 2, node: other });
+    let out = s.handle(ClientMsg::ConfirmPairing {
+        id: 2,
+        node: other,
+        allow_control: false,
+    });
     match &out[0] {
         ServerMsg::PairDecision { trusted, .. } => assert!(!trusted, "{out:?}"),
         other => panic!("expected a decision, got {other:?}"),
@@ -235,6 +255,7 @@ fn confirming_a_node_the_exchange_was_not_about_pins_nothing() {
     let retry = s.handle(ClientMsg::ConfirmPairing {
         id: 3,
         node: paired,
+        allow_control: false,
     });
     match &retry[0] {
         ServerMsg::PairDecision { trusted, .. } => assert!(!trusted, "{retry:?}"),
@@ -254,7 +275,11 @@ fn rejecting_pins_nothing_and_spends_the_exchange() {
     exchange(&mut s, node);
 
     s.handle(ClientMsg::RejectPairing { id: 2, node });
-    let after = s.handle(ClientMsg::ConfirmPairing { id: 3, node });
+    let after = s.handle(ClientMsg::ConfirmPairing {
+        id: 3,
+        node,
+        allow_control: false,
+    });
 
     match &after[0] {
         ServerMsg::PairDecision { trusted, .. } => {
@@ -278,7 +303,11 @@ fn a_pin_that_cannot_be_written_is_not_reported_as_trust() {
     let mut s = ready_with_fleet(&f, &fleet);
     exchange(&mut s, node);
 
-    let out = s.handle(ClientMsg::ConfirmPairing { id: 2, node });
+    let out = s.handle(ClientMsg::ConfirmPairing {
+        id: 2,
+        node,
+        allow_control: false,
+    });
 
     match &out[0] {
         ServerMsg::PairDecision {
@@ -317,7 +346,11 @@ fn an_exchange_older_than_the_ttl_cannot_be_confirmed() {
         .checked_sub(super::PENDING_PAIRING_TTL + std::time::Duration::from_secs(1))
         .expect("clock underflow");
 
-    let out = s.handle(ClientMsg::ConfirmPairing { id: 2, node });
+    let out = s.handle(ClientMsg::ConfirmPairing {
+        id: 2,
+        node,
+        allow_control: false,
+    });
 
     match &out[0] {
         ServerMsg::PairDecision {
@@ -365,6 +398,8 @@ impl WirelessFleet {
             vitals: None,
             alerts: Vec::new(),
             running: None,
+            vouched_by: None,
+            reached_via: None,
         })
     }
 }
@@ -412,7 +447,10 @@ fn an_invitation_from_a_wireless_machine_still_carries_an_address() {
         token: TOKEN.into(),
     });
 
-    let out = s.handle(ClientMsg::MintJoinCode { id: 1 });
+    let out = s.handle(ClientMsg::MintJoinCode {
+        id: 1,
+        allow_control: false,
+    });
 
     match &out[0] {
         ServerMsg::JoinInvitation {

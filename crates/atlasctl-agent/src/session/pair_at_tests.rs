@@ -87,7 +87,11 @@ fn an_address_paired_exchange_is_confirmed_the_same_way() {
         code: "12345678".to_owned(),
     });
 
-    let out = s.handle(ClientMsg::ConfirmPairing { id: 2, node });
+    let out = s.handle(ClientMsg::ConfirmPairing {
+        id: 2,
+        node,
+        allow_control: false,
+    });
 
     match &out[0] {
         ServerMsg::PairDecision { trusted, .. } => assert!(trusted, "{out:?}"),
@@ -153,7 +157,11 @@ fn a_failed_attempt_spends_any_exchange_already_pending() {
         code: "12345678".to_owned(),
     });
 
-    let out = s.handle(ClientMsg::ConfirmPairing { id: 3, node });
+    let out = s.handle(ClientMsg::ConfirmPairing {
+        id: 3,
+        node,
+        allow_control: false,
+    });
     match &out[0] {
         ServerMsg::PairDecision { trusted, .. } => {
             assert!(!trusted, "the earlier exchange must not survive a failure");

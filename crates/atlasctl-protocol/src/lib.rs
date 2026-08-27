@@ -40,4 +40,11 @@ pub use telemetry::{DeviceStats, EngineStats, LaunchPhase, Stats, TelemetryCaps}
 ///   address the operator typed. mDNS is link-local, so without it the browser
 ///   could only reach machines on the same broadcast domain. Additive, but the
 ///   handshake is an exact match by design, so it still takes a version.
-pub const PROTOCOL_VERSION: u32 = 3;
+/// * 4 — control verbs gained `on`, replies gained `on`/`via`,
+///   `NodeDescriptor` gained `vouched_by`/`reached_via`, `PairingState`
+///   gained `Vouched`, and the pairing verbs gained `allow_control`. A
+///   version 3 page would render a vouched node with no provenance —
+///   showing second-hand knowledge as first-hand is the exact lie the new
+///   fields exist to prevent — so the exact-match gate refusing it is the
+///   point.
+pub const PROTOCOL_VERSION: u32 = 4;

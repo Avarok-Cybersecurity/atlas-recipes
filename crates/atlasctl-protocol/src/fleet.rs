@@ -306,10 +306,12 @@ pub struct NodeAddress {
 }
 
 pub mod node;
+pub mod vouch;
 
 pub use node::{
     AlertKind, Launchability, Metric, NodeAlert, NodeDescriptor, NodeVitals, PairingState, Severity,
 };
+pub use vouch::{MAX_VOUCHED, VouchedPeer};
 
 #[cfg(test)]
 mod tests;

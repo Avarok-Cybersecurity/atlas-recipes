@@ -31,6 +31,8 @@ fn node(byte: u8, name: &str, addrs: Vec<NodeAddress>) -> NodeDescriptor {
         vitals: None,
         alerts: Vec::new(),
         running: None,
+        vouched_by: None,
+        reached_via: None,
     }
 }
 

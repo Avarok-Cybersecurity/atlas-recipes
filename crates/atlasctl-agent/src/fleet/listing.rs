@@ -144,6 +144,12 @@ impl FleetView for LocalFleet {
                     .and_then(|a| a.get(id).cloned())
                     .unwrap_or_default(),
                 running: None,
+                // First-hand knowledge (a pin), reached directly. The vouch
+                // tier that fills these is a later step; until it exists,
+                // claiming a voucher or a relay here would be invented
+                // provenance.
+                vouched_by: None,
+                reached_via: None,
             });
         }
 
@@ -168,6 +174,10 @@ impl FleetView for LocalFleet {
                     vitals: None,
                     alerts: Vec::new(),
                     running: None,
+                    // Seen on the wire ourselves: nobody vouches, nothing
+                    // routes through anyone.
+                    vouched_by: None,
+                    reached_via: None,
                 });
             }
         }

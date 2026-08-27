@@ -40,6 +40,10 @@ impl Session<'_> {
                 id,
                 recipe: recipe_id.clone(),
                 stats,
+                // This machine answering its own browser directly; see the
+                // note in `session/launch.rs`.
+                on: None,
+                via: None,
             }],
             // NotLaunchable rather than LaunchFailed: a model that has not
             // finished loading is not answering yet, and calling that a launch
@@ -66,6 +70,8 @@ impl Session<'_> {
                 container: tail.container,
                 lines: tail.lines,
                 running: tail.running,
+                on: None,
+                via: None,
             }],
             Err(reason) => vec![err(
                 Some(id),

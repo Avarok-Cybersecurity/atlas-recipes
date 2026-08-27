@@ -84,4 +84,41 @@ pub enum AgentError {
         /// What went wrong.
         detail: String,
     },
+
+    /// This agent found no route to the target: not pinned, not vouched by
+    /// any currently-reachable pinned peer. Distinct from
+    /// [`Self::RelayRefused`] because no relay was ever asked — the
+    /// operator's fix is pairing or waking a voucher, not looking at a
+    /// relay's logs.
+    #[error("no route to `{node}`: {reason}")]
+    NotRoutable {
+        /// The unreachable target.
+        node: crate::fleet::NodeId,
+        /// What is missing, in words the operator can act on.
+        reason: String,
+    },
+
+    /// A relay declined or failed to forward: requester not granted control,
+    /// target not in the relay's own pin store, dial failed, or the answer
+    /// budget elapsed. `node` is the TARGET; the refusing relay is named in
+    /// `ControlRep::Refused.by` / the reply's `via`.
+    #[error("the relay did not forward to `{node}`: {detail}")]
+    RelayRefused {
+        /// The target the relay was asked to reach.
+        node: crate::fleet::NodeId,
+        /// The relay's stated reason.
+        detail: String,
+    },
+
+    /// The TARGET itself declined to be controlled by the adjacent sender:
+    /// its pin of that sender lacks the `controller` grant. Names the exact
+    /// command to run so the fix is copy-paste, not archaeology.
+    #[error("`{node}` refused control: {reason}")]
+    ControlRefused {
+        /// The machine that refused.
+        node: crate::fleet::NodeId,
+        /// The refusal, naming the `atlasctl peer grant-control` command to
+        /// run on that machine.
+        reason: String,
+    },
 }

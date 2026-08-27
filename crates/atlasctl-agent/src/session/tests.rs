@@ -73,102 +73,6 @@ impl Fixture {
     }
 }
 
-/// A session whose agent can take on a new machine.
-fn ready_with_window<'a>(f: &'a Fixture, w: &'a crate::joining::JoinWindow) -> Session<'a> {
-    let (mut s, _) = Session::new(SessionDeps {
-        registry: &f.registry,
-        launcher: &f.launcher,
-        token: TOKEN,
-        can_launch: Ok(()),
-        fleet: None,
-        cluster: None,
-        telemetry: None,
-        joining: Some(w),
-    });
-    s.handle(ClientMsg::Hello {
-        protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
-        token: TOKEN.into(),
-    });
-    s
-}
-
-#[test]
-fn minting_opens_the_window_and_hands_back_the_digits() {
-    let f = Fixture::new();
-    let w = crate::joining::JoinWindow::default();
-    let mut s = ready_with_window(&f, &w);
-
-    let out = s.handle(ClientMsg::MintJoinCode { id: 1 });
-    match &out[0] {
-        ServerMsg::JoinInvitation {
-            code, expires_in_s, ..
-        } => {
-            let code = code.as_deref().expect("a code");
-            assert!(crate::joining::looks_like_code(code), "{code}");
-            assert_eq!(*expires_in_s, crate::joining::JOIN_TTL.as_secs());
-        }
-        other => panic!("expected an invitation, got {other:?}"),
-    }
-    assert!(w.is_open(), "the listener must now admit a joining machine");
-}
-
-/// Revoking is how an operator shuts a window they opened by mistake, and the
-/// absent code is how the page knows it is shut.
-#[test]
-fn revoking_closes_the_window_and_says_so() {
-    let f = Fixture::new();
-    let w = crate::joining::JoinWindow::default();
-    let mut s = ready_with_window(&f, &w);
-    s.handle(ClientMsg::MintJoinCode { id: 1 });
-
-    let out = s.handle(ClientMsg::RevokeJoinCode { id: 2 });
-    match &out[0] {
-        ServerMsg::JoinInvitation { code, .. } => assert!(code.is_none()),
-        other => panic!("expected an invitation, got {other:?}"),
-    }
-    assert!(!w.is_open());
-}
-
-/// An agent with no window must not mint a code nothing will honour — that
-/// would send the operator to another machine to run a command that fails.
-#[test]
-fn an_agent_that_cannot_take_members_refuses_to_mint() {
-    let f = Fixture::new();
-    let mut s = f.ready();
-    let out = s.handle(ClientMsg::MintJoinCode { id: 1 });
-    assert!(
-        matches!(out[0], ServerMsg::Error { .. }),
-        "expected a refusal, got {out:?}"
-    );
-}
-
-/// Minting is a Ready-phase verb: an unauthenticated socket must not be able
-/// to open this machine to a stranger.
-#[test]
-fn minting_before_the_handshake_is_refused() {
-    let f = Fixture::new();
-    let w = crate::joining::JoinWindow::default();
-    let (mut s, _) = Session::new(SessionDeps {
-        registry: &f.registry,
-        launcher: &f.launcher,
-        token: TOKEN,
-        can_launch: Ok(()),
-        fleet: None,
-        cluster: None,
-        telemetry: None,
-        joining: Some(&w),
-    });
-    let out = s.handle(ClientMsg::MintJoinCode { id: 1 });
-    assert!(
-        matches!(out[0], ServerMsg::Error { .. }),
-        "expected a refusal, got {out:?}"
-    );
-    assert!(
-        !w.is_open(),
-        "an unauthenticated caller must not be able to open the window"
-    );
-}
-
 #[test]
 fn the_agent_speaks_first_with_a_version_range() {
     let f = Fixture::new();
@@ -190,12 +94,13 @@ fn nothing_is_answered_before_the_handshake() {
     // Not even the inventory: an unauthenticated client should not learn what
     // this machine can run.
     for msg in [
-        ClientMsg::ListRecipes { id: 1 },
-        ClientMsg::Status { id: 1 },
+        ClientMsg::ListRecipes { id: 1, on: None },
+        ClientMsg::Status { id: 1, on: None },
         ClientMsg::Launch {
             id: 1,
             recipe: id(REAL),
             settings: BTreeMap::new(),
+            on: None,
         },
     ] {
         let f = Fixture::new();
@@ -233,7 +138,10 @@ fn a_wrong_token_is_refused_and_ends_the_session() {
     ));
     assert!(s.is_closed());
     // And a follow-up gets nothing at all.
-    assert!(s.handle(ClientMsg::ListRecipes { id: 1 }).is_empty());
+    assert!(
+        s.handle(ClientMsg::ListRecipes { id: 1, on: None })
+            .is_empty()
+    );
 }
 
 #[test]
@@ -305,6 +213,7 @@ fn an_unknown_recipe_is_refused_without_reaching_the_launcher() {
         id: 1,
         recipe: id("no-such-recipe"),
         settings: BTreeMap::new(),
+        on: None,
     });
     assert!(matches!(
         out[0],
@@ -327,6 +236,7 @@ fn a_denied_setting_blocks_the_launch_and_is_recorded() {
         id: 1,
         recipe: id(REAL),
         settings: set(&[("model_from_path", SettingValue::Str("/etc/shadow".into()))]),
+        on: None,
     });
     let ServerMsg::Error {
         error: AgentError::BadSettings { errors },
@@ -353,6 +263,7 @@ fn an_out_of_range_setting_blocks_the_launch() {
         id: 1,
         recipe: id(REAL),
         settings: set(&[("port", SettingValue::Int(1))]),
+        on: None,
     });
     assert!(matches!(
         out[0],
@@ -372,6 +283,7 @@ fn a_valid_launch_reaches_the_launcher_with_exactly_the_checked_settings() {
         id: 7,
         recipe: id(REAL),
         settings: set(&[("port", SettingValue::Int(9001))]),
+        on: None,
     });
     assert!(
         matches!(out[0], ServerMsg::Started { id: 7, .. }),
@@ -400,11 +312,12 @@ fn a_multi_node_recipe_is_refused_with_its_reason() {
         id: 1,
         recipe: id("qwen3.5-122b-a10b-nvfp4-ep2"),
         settings: BTreeMap::new(),
+        on: None,
     });
     // It is launchable in principle, so what matters here is that the inventory
     // told the client it needs two nodes before it ever asked.
     assert!(!out.is_empty());
-    let inv = match &s.handle(ClientMsg::ListRecipes { id: 2 })[0] {
+    let inv = match &s.handle(ClientMsg::ListRecipes { id: 2, on: None })[0] {
         ServerMsg::Recipes { recipes, .. } => recipes.clone(),
         other => panic!("wrong reply: {other:?}"),
     };
@@ -423,6 +336,7 @@ fn a_recipe_carrying_executable_content_is_never_launched() {
         id: 1,
         recipe: id("diffusion-gemma-bf16"),
         settings: BTreeMap::new(),
+        on: None,
     });
     assert!(matches!(
         out[0],
@@ -442,6 +356,7 @@ fn a_machine_that_cannot_launch_says_so_and_refuses() {
         id: 1,
         recipe: id(REAL),
         settings: BTreeMap::new(),
+        on: None,
     });
     assert!(matches!(
         out[0],
@@ -461,6 +376,7 @@ fn preview_renders_without_launching_anything() {
         id: 1,
         recipe: id(REAL),
         settings: BTreeMap::new(),
+        on: None,
     });
     assert!(matches!(out[0], ServerMsg::Preview { id: 1, .. }));
     assert!(

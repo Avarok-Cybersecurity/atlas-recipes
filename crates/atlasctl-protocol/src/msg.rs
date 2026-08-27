@@ -6,11 +6,20 @@
 //! discriminated union so the browser narrows on `msg.type` without unwrapping
 //! a nesting level.
 //!
-//! The set of client messages *is* the capability surface. There is no relay,
-//! no forward, and no raw-command verb, and the enum is closed — an unknown
-//! `type` fails deserialization rather than reaching a handler. That is what
-//! keeps the agent from becoming an open proxy for whatever page is talking
-//! to it.
+//! The set of client messages *is* the capability surface. There is no
+//! raw-command verb, no nested-message verb, and no relay of opaque bytes,
+//! and the enum is closed — an unknown `type` fails deserialization rather
+//! than reaching a handler. One scoped exception exists and is stated here
+//! so the code cannot outgrow its own doctrine: the seven single-node
+//! control verbs carry an optional `on` target, which an agent honors by
+//! re-issuing the request AS ITSELF over its authenticated peer channel —
+//! one hop, only toward a machine the forwarding agent has itself pinned
+//! AND whose pin of the requester carries the explicit `controller` grant,
+//! and only within the closed [`ControlReq`] vocabulary, which cannot express
+//! pairing, joining, cluster reservation, or a further hop. Forwarding is an
+//! annotation on closed verbs, never a wrapper around arbitrary messages:
+//! that is what still keeps the agent from becoming an open proxy for
+//! whatever page is talking to it.
 
 use crate::id::RecipeId;
 use crate::settings::{SettingError, SettingValue};
@@ -33,6 +42,15 @@ pub enum ClientMsg {
     ListRecipes {
         /// Correlates the reply.
         id: u32,
+        /// Which node this is for. `None` (and `Some(local id)`) means this
+        /// machine, unchanged. Deliberately an annotation on a closed verb and
+        /// NOT a `Forward { inner }` wrapper: a nesting slot is an open proxy
+        /// waiting for one missed match arm, and an annotated verb keeps every
+        /// forwardable operation individually visible in this enum, which is
+        /// the capability surface. The six other single-node control verbs
+        /// carry the same field with the same meaning.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
     },
 
     /// Render the command a launch would run, without running it.
@@ -44,6 +62,11 @@ pub enum ClientMsg {
         /// Requested settings.
         #[serde(default)]
         settings: BTreeMap<String, SettingValue>,
+        /// Which node this is for. `None` (and `Some(local id)`) means this
+        /// machine, unchanged. See [`Self::ListRecipes`] for why this is an
+        /// annotation rather than a wrapper.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
     },
 
     /// Start a recipe.
@@ -55,6 +78,11 @@ pub enum ClientMsg {
         /// Requested settings, validated against the schema before use.
         #[serde(default)]
         settings: BTreeMap<String, SettingValue>,
+        /// Which node this is for. `None` (and `Some(local id)`) means this
+        /// machine, unchanged. See [`Self::ListRecipes`] for why this is an
+        /// annotation rather than a wrapper.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
     },
 
     /// Stop a running launch.
@@ -63,6 +91,11 @@ pub enum ClientMsg {
         id: u32,
         /// Which recipe to stop.
         recipe: RecipeId,
+        /// Which node this is for. `None` (and `Some(local id)`) means this
+        /// machine, unchanged. See [`Self::ListRecipes`] for why this is an
+        /// annotation rather than a wrapper.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
     },
 
     /// Ask for the current fleet: this node and every peer it knows about.
@@ -141,6 +174,12 @@ pub enum ClientMsg {
     MintJoinCode {
         /// Correlates the reply.
         id: u32,
+        /// Grant the peer being pinned the `controller` right (see
+        /// `Pin::controller`) at the moment a human is already deciding to
+        /// trust it. Defaults to false: consent to remote stop must be said,
+        /// not implied by upgrading.
+        #[serde(default)]
+        allow_control: bool,
     },
 
     /// Trust a peer whose exchange has completed.
@@ -154,6 +193,12 @@ pub enum ClientMsg {
         id: u32,
         /// The peer awaiting a decision.
         node: crate::fleet::NodeId,
+        /// Grant the peer being pinned the `controller` right (see
+        /// `Pin::controller`) at the moment a human is already deciding to
+        /// trust it. Defaults to false: consent to remote stop must be said,
+        /// not implied by upgrading.
+        #[serde(default)]
+        allow_control: bool,
     },
 
     /// Discard a completed exchange without trusting it.
@@ -252,6 +297,11 @@ pub enum ClientMsg {
         id: u32,
         /// Which launch.
         recipe: RecipeId,
+        /// Which node this is for. `None` (and `Some(local id)`) means this
+        /// machine, unchanged. See [`Self::ListRecipes`] for why this is an
+        /// annotation rather than a wrapper.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
     },
 
     /// Read the tail of a launch's log.
@@ -267,12 +317,22 @@ pub enum ClientMsg {
         recipe: RecipeId,
         /// How many lines to return, capped by the agent.
         lines: u32,
+        /// Which node this is for. `None` (and `Some(local id)`) means this
+        /// machine, unchanged. See [`Self::ListRecipes`] for why this is an
+        /// annotation rather than a wrapper.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
     },
 
     /// Ask what is running.
     Status {
         /// Correlates the reply.
         id: u32,
+        /// Which node this is for. `None` (and `Some(local id)`) means this
+        /// machine, unchanged. See [`Self::ListRecipes`] for why this is an
+        /// annotation rather than a wrapper.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
     },
 }
 
@@ -341,6 +401,12 @@ pub use server::ServerMsg;
 
 mod error;
 pub use error::AgentError;
+
+// The forwardable control vocabulary: what one agent may relay to another.
+// Its own file so the closed pair can be read — and reviewed — in isolation
+// from the browser surface it mirrors.
+mod control;
+pub use control::{ControlRep, ControlReq};
 
 #[cfg(test)]
 mod tests;

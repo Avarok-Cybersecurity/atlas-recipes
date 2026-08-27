@@ -399,6 +399,10 @@ impl LocalFleet {
                 .and_then(|a| a.get(&self.identity.id()).cloned())
                 .unwrap_or_default(),
             running: self.running.lock().ok().and_then(|r| r.clone()),
+            // This machine: identity is first-hand by definition, and a verb
+            // aimed at it never rides a relay.
+            vouched_by: None,
+            reached_via: None,
         }
     }
 }
