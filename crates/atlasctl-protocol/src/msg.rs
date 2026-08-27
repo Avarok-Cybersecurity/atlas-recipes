@@ -376,6 +376,19 @@ pub struct LaunchReading {
     pub accept_rate: Option<f64>,
     /// Share of prefix-cache lookups that hit, 0..1.
     pub prefix_hit_rate: Option<f64>,
+    /// Mean prompt tokens per request completed in the window (ISL).
+    ///
+    /// Absent when no request completed: a mean over nothing is undefined, and
+    /// 0 would assert that the traffic carried no prompt — a measurement nobody
+    /// made. A page must render that absence as absence, never as a zero.
+    ///
+    /// Defaulted, so a reading from an agent built before this existed decodes
+    /// as "did not say" rather than being refused.
+    #[serde(default)]
+    pub isl_mean: Option<f64>,
+    /// Mean generated tokens per request completed in the window (OSL).
+    #[serde(default)]
+    pub osl_mean: Option<f64>,
     /// Seconds the rates cover, so the page can say how fresh they are rather
     /// than implying they are instantaneous.
     pub window_s: Option<f64>,

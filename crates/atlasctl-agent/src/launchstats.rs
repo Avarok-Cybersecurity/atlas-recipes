@@ -50,6 +50,14 @@ pub struct LaunchStats {
     pub accept_rate: Option<f64>,
     /// Share of prefix-cache lookups that hit, 0..1.
     pub prefix_hit_rate: Option<f64>,
+    /// Mean prompt tokens per request completed in the window.
+    ///
+    /// `None` when no request completed: a mean over nothing is undefined, and
+    /// 0 would assert that the traffic carried no prompt — a measurement nobody
+    /// made. See `metrics::mean_per_request` for the bias this knowingly has.
+    pub isl_mean: Option<f64>,
+    /// Mean generated tokens per request completed in the window, likewise.
+    pub osl_mean: Option<f64>,
     /// Seconds the rates were measured over, so the page can say how fresh
     /// they are rather than implying they are instantaneous.
     pub window_s: Option<f64>,
@@ -122,6 +130,10 @@ impl LaunchSampler {
                     rate_of(previous, &current, "atlas_generation_tokens_total", secs);
                 out.prompt_tokens_per_s =
                     rate_of(previous, &current, "atlas_prompt_tokens_total", secs);
+                // Per-request means over the SAME interval as the rates, so the
+                // window caption already on screen describes them too.
+                out.isl_mean = mean_over(previous, &current, "atlas_prompt_tokens_total");
+                out.osl_mean = mean_over(previous, &current, "atlas_generation_tokens_total");
             }
         }
         *slot = Some((now, current));
@@ -142,6 +154,20 @@ fn rate_of(previous: &Scrape, current: &Scrape, name: &str, secs: f64) -> Option
     metrics::rate(previous.get(name)?, current.get(name)?, secs)
 }
 
+/// Mean of `name` per request completed between the two scrapes.
+///
+/// Needs both counters from both scrapes: an engine that stopped exporting one
+/// of them mid-window yields nothing rather than a mean computed against a
+/// missing half.
+fn mean_over(previous: &Scrape, current: &Scrape, name: &str) -> Option<f64> {
+    metrics::mean_per_request(
+        previous.get(name)?,
+        current.get(name)?,
+        previous.get("atlas_requests_total")?,
+        current.get("atlas_requests_total")?,
+    )
+}
+
 /// Draft acceptance, read per label because the sum of accepts and rejects is
 /// a number with no meaning.
 fn accept_rate(s: &Scrape) -> Option<f64> {
@@ -157,10 +183,10 @@ mod tests {
     use std::sync::Mutex as StdMutex;
 
     /// Serves scripted bodies in order.
-    struct Scripted(StdMutex<Vec<String>>);
+    pub(super) struct Scripted(StdMutex<Vec<String>>);
 
     impl Scripted {
-        fn new(bodies: &[&str]) -> Box<Self> {
+        pub(super) fn new(bodies: &[&str]) -> Box<Self> {
             Box::new(Self(StdMutex::new(
                 bodies.iter().rev().map(|s| (*s).to_owned()).collect(),
             )))
@@ -277,5 +303,60 @@ mod tests {
         let s = LaunchSampler::new(Scripted::new(&[&body(1, 1)]));
         let out = s.sample(8888, Instant::now()).expect("samples");
         assert_eq!(out.accept_rate, None);
+    }
+}
+
+#[cfg(test)]
+mod isl_osl_tests {
+    use super::*;
+
+    /// Two scrapes an interval apart: 4 requests finished, carrying 2048 prompt
+    /// tokens and 512 generated ones between them.
+    #[test]
+    fn the_means_are_per_request_over_the_same_window_as_the_rates() {
+        let sampler = LaunchSampler::new(super::tests::Scripted::new(&[
+            "atlas_requests_total 10\natlas_requests_active 0\n\
+             atlas_generation_tokens_total 1000\natlas_prompt_tokens_total 5000\n",
+            "atlas_requests_total 14\natlas_requests_active 0\n\
+             atlas_generation_tokens_total 1512\natlas_prompt_tokens_total 7048\n",
+        ]));
+        let t0 = Instant::now();
+        let first = sampler.sample(9000, t0).expect("first");
+        // No previous sample: no window, so no rates and no means.
+        assert_eq!(first.isl_mean, None, "a first poll measures no interval");
+        assert_eq!(first.osl_mean, None);
+
+        let second = sampler
+            .sample(9000, t0 + Duration::from_secs(4))
+            .expect("second");
+        assert_eq!(
+            second.isl_mean,
+            Some(512.0),
+            "2048 prompt tokens / 4 requests"
+        );
+        assert_eq!(second.osl_mean, Some(128.0), "512 generated / 4 requests");
+        assert_eq!(second.window_s, Some(4.0));
+    }
+
+    /// Tokens moved but nothing finished. The mean is undefined, and zero would
+    /// claim the window's traffic carried no tokens.
+    #[test]
+    fn tokens_without_a_completed_request_report_nothing_not_zero() {
+        let sampler = LaunchSampler::new(super::tests::Scripted::new(&[
+            "atlas_requests_total 10\natlas_generation_tokens_total 1000\n\
+             atlas_prompt_tokens_total 5000\n",
+            "atlas_requests_total 10\natlas_generation_tokens_total 1400\n\
+             atlas_prompt_tokens_total 5600\n",
+        ]));
+        let t0 = Instant::now();
+        sampler.sample(9000, t0).expect("first");
+        let out = sampler
+            .sample(9000, t0 + Duration::from_secs(4))
+            .expect("second");
+        assert_eq!(out.isl_mean, None);
+        assert_eq!(out.osl_mean, None);
+        // The rates still exist: tokens per second is defined over the window
+        // whether or not a request happened to finish inside it.
+        assert!(out.decode_tokens_per_s.is_some());
     }
 }

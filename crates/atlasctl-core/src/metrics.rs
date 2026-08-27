@@ -186,6 +186,41 @@ pub fn rate(previous: f64, current: f64, seconds: f64) -> Option<f64> {
     Some((current - previous) / seconds)
 }
 
+/// The mean of a per-request quantity over an interval: Δtotal ÷ Δrequests.
+///
+/// `None` rather than a number whenever the answer would be invented:
+///
+/// * no requests completed in the interval — a mean over nothing is undefined,
+///   and reporting 0 would say "requests in this window carried no tokens",
+///   which is a measurement nobody made;
+/// * either counter went backwards, which is a restart and tells us nothing
+///   about the interval it spans;
+/// * the result is not finite.
+///
+/// The value is APPROXIMATE and knowingly so: tokens accrue while a request is
+/// in flight, but `requests_total` only increments when it finishes, so a long
+/// request's tokens land in an earlier window than its completion. Over a
+/// steady stream the bias is small; over a handful of long requests it is not.
+/// That is why this is a mean labelled with its window rather than a per-request
+/// statistic, and why a percentile would need a histogram from the engine.
+#[must_use]
+pub fn mean_per_request(
+    prev_total: f64,
+    cur_total: f64,
+    prev_requests: f64,
+    cur_requests: f64,
+) -> Option<f64> {
+    if cur_total < prev_total || cur_requests < prev_requests {
+        return None;
+    }
+    let requests = cur_requests - prev_requests;
+    if requests <= 0.0 {
+        return None;
+    }
+    let mean = (cur_total - prev_total) / requests;
+    mean.is_finite().then_some(mean)
+}
+
 /// Estimate a quantile from cumulative histogram buckets.
 ///
 /// Linear interpolation within the containing bucket, which is what Prometheus
@@ -421,5 +456,38 @@ mod tests {
         fn a_rate_cannot_exceed_one_however_the_counters_disagree() {
             assert_eq!(accept_rate(9.0, 4.0), Some(1.0));
         }
+    }
+}
+
+#[cfg(test)]
+mod mean_tests {
+    use super::mean_per_request;
+
+    #[test]
+    fn a_mean_is_tokens_over_requests_in_the_same_interval() {
+        // 4 requests carried 2048 prompt tokens between them.
+        assert_eq!(mean_per_request(1000.0, 3048.0, 10.0, 14.0), Some(512.0));
+    }
+
+    /// The case that must never read as zero. No request finished, so nothing
+    /// was measured — and "0 tokens per request" is a claim about traffic that
+    /// did not happen.
+    #[test]
+    fn no_completed_requests_is_unknown_not_zero() {
+        assert_eq!(mean_per_request(1000.0, 1500.0, 10.0, 10.0), None);
+    }
+
+    /// A restart resets both counters. The interval spans two different engine
+    /// lifetimes and describes neither.
+    #[test]
+    fn a_counter_that_went_backwards_yields_nothing() {
+        assert_eq!(mean_per_request(1000.0, 5.0, 10.0, 14.0), None);
+        assert_eq!(mean_per_request(1000.0, 3048.0, 10.0, 2.0), None);
+    }
+
+    #[test]
+    fn a_non_finite_result_is_refused() {
+        assert_eq!(mean_per_request(0.0, f64::INFINITY, 0.0, 1.0), None);
+        assert_eq!(mean_per_request(0.0, f64::NAN, 0.0, 1.0), None);
     }
 }
