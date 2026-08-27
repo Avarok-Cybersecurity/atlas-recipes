@@ -380,3 +380,40 @@ fn an_unset_config_dir_writes_no_flag() {
         "no flag when the operator chose none: {joined}"
     );
 }
+
+/// Activation succeeding is not the agent running.
+///
+/// `systemctl enable --now` returns 0 once the supervisor has accepted the
+/// unit. An agent that exits at startup — a config dir it cannot write, a port
+/// already taken — is then relaunched every RestartSec and never seen. The
+/// install used to print "agent installed and started" on the strength of that
+/// zero and send the operator off to pair a browser against a five-second
+/// crash loop.
+#[test]
+fn an_install_asks_whether_the_agent_is_actually_up() {
+    let fs = Files::default();
+    let runner = Recorder::new();
+    let done = install(&fs, &runner, &agent(), &home(), 1000).expect("installs");
+    let calls = runner.calls();
+    assert!(
+        calls.iter().any(|c| c.contains("is-active")),
+        "the install must ask the supervisor, not infer from activation: {calls:?}"
+    );
+    assert!(done.running, "a healthy install reports running");
+}
+
+/// And a crash-looping agent must be reported as installed-but-not-running,
+/// not as a failed install: the unit IS on disk and enabled, and the two states
+/// have different next steps.
+#[test]
+fn a_crash_looping_agent_is_reported_rather_than_raised() {
+    let fs = Files::default();
+    let runner = Recorder::failing("is-active");
+    let done = install(&fs, &runner, &agent(), &home(), 1000)
+        .expect("a unit that will not stay up is still an install, not an error");
+    assert!(!done.running, "the operator must be told it is not running");
+    assert!(
+        !done.unit_path.as_os_str().is_empty(),
+        "the unit path is still reported so they can inspect it"
+    );
+}

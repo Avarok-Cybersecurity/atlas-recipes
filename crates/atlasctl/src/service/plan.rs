@@ -127,6 +127,15 @@ pub struct ServicePlan {
     pub unit_body: String,
     /// Commands to run after writing it, in order.
     pub activate: Vec<Vec<String>>,
+    /// The command that answers "is it actually running now?".
+    ///
+    /// Activation succeeding only means the supervisor accepted the unit. An
+    /// agent that exits immediately — a config dir it cannot write, a port
+    /// already taken — is restarted every RestartSec forever, and `enable
+    /// --now` still returned 0. Without this the install prints "installed and
+    /// started" and sends the operator off to pair a browser against a process
+    /// that never lived.
+    pub verify: Vec<String>,
     /// Commands whose failure is expected and must not fail the install.
     ///
     /// Separated rather than flagged inline: an install that reports success
@@ -209,6 +218,7 @@ fn systemd(agent: &AgentInvocation, home: &Path) -> ServicePlan {
             sc(&["enable", "--now", &unit]),
             sc(&["restart", &unit]),
         ],
+        verify: sc(&["is-active", &unit]),
         // A headless box logs nobody in, so without lingering the service stops
         // the moment the installing session ends. It is also exactly the call
         // that is unavailable in a container, so it cannot be required.
@@ -267,6 +277,13 @@ fn launchd(agent: &AgentInvocation, home: &Path, uid: u32) -> ServicePlan {
             target.clone(),
             path,
         ]],
+        // `launchctl print` exits non-zero when the label is not loaded, which
+        // is the same question `is-active` answers on systemd.
+        verify: vec![
+            "launchctl".to_owned(),
+            "print".to_owned(),
+            format!("{target}/{LAUNCHD_LABEL}"),
+        ],
         best_effort: Vec::new(),
         deactivate: vec![vec![
             "launchctl".to_owned(),

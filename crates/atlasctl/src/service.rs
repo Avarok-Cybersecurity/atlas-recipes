@@ -33,6 +33,12 @@ use std::path::PathBuf;
 /// What an install did, so the caller can describe it rather than guess.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Installed {
+    /// Whether the supervisor reports the agent actually up.
+    ///
+    /// Activation returning 0 only means the unit was accepted. An agent that
+    /// exits on startup is relaunched every RestartSec and never seen, so the
+    /// install has to ask separately rather than infer.
+    pub running: bool,
     /// Where the unit was written.
     pub unit_path: PathBuf,
     /// Which supervisor now owns the agent.
@@ -67,6 +73,7 @@ pub fn install(
     fs.create_dir_all(parent)?;
     fs.write_atomic(&p.unit_path, &p.unit_body)?;
 
+    let mut running = true;
     for argv in &p.activate {
         let out = runner.run(argv)?;
         if !out.success() {
@@ -94,7 +101,17 @@ pub fn install(
         }
     }
 
+    // Ask the supervisor whether it is up, rather than inferring it from an
+    // activation that only ever meant "unit accepted". A failure here is not an
+    // install failure — the unit is on disk and enabled — so it is reported, not
+    // raised: the operator needs to know the difference between "not installed"
+    // and "installed and crash-looping", and those have different next steps.
+    if !p.verify.is_empty() {
+        running = matches!(runner.run(&p.verify), Ok(out) if out.success());
+    }
+
     Ok(Installed {
+        running,
         unit_path: p.unit_path,
         kind: p.kind,
         skipped,
