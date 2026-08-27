@@ -267,7 +267,37 @@ fn the_voucher_choice_is_deterministic_and_prefers_the_better_leg() {
 }
 
 #[test]
-fn silencing_or_unpairing_a_voucher_takes_its_claims_with_it() {
+fn a_silent_voucher_stops_steering_but_its_machines_stay_listed() {
+    let t = Tmp::new("silent");
+    let f = fleet_at(&t.0);
+    let voucher = nid(3);
+    f.record_report(report_over(voucher, LinkClass::Roce));
+    f.record_vouches(voucher, vec![claim(nid(7), "seven")]);
+    assert!(row(&f, nid(7)).is_some());
+
+    // The voucher stops answering. It stops being a ROUTE immediately — a
+    // route through a silent relay is not a route.
+    f.clear_report(voucher);
+    assert_eq!(f.choose_voucher(nid(7)), None);
+
+    // But the machine behind it does not vanish. A fleet member that cannot be
+    // reached right now is still a fleet member, and a row disappearing reads
+    // as "you never paired that" — false, and nothing the operator can act on.
+    let still = row(&f, nid(7)).expect("a machine behind a silent voucher stays listed");
+    assert_eq!(still.pairing, PairingState::Vouched);
+    assert_eq!(
+        still.reached_via, None,
+        "no route while the voucher is silent, and the row must say so"
+    );
+    assert_eq!(
+        still.vouched_by,
+        Some(voucher),
+        "the page has to be able to name which machine it is waiting on"
+    );
+}
+
+#[test]
+fn unpairing_a_voucher_withdraws_every_claim_it_made() {
     let t = Tmp::new("revoke");
     let f = fleet_at(&t.0);
     let voucher = nid(3);
@@ -275,21 +305,15 @@ fn silencing_or_unpairing_a_voucher_takes_its_claims_with_it() {
     f.record_vouches(voucher, vec![claim(nid(7), "seven")]);
     assert!(row(&f, nid(7)).is_some());
 
-    // A voucher that stops answering stops steering: its claims cannot be
-    // re-confirmed, so they must not keep populating routes and rows.
-    f.clear_report(voucher);
-    assert!(row(&f, nid(7)).is_none());
-    assert_eq!(f.choose_voucher(nid(7)), None);
-
-    // Unpairing does the same through the fleet surface.
-    f.record_report(report_over(voucher, LinkClass::Roce));
-    f.record_vouches(voucher, vec![claim(nid(7), "seven")]);
-    assert!(row(&f, nid(7)).is_some());
+    // Withdrawing trust is not the same as losing contact. A peer that is no
+    // longer trusted is not trusted to have said anything, so its claims go
+    // with its pin rather than lingering as rows nobody vouches for.
     let _ = f.unpair(voucher);
     assert!(
         row(&f, nid(7)).is_none(),
         "trust withdrawn from a voucher withdraws every claim it made"
     );
+    assert_eq!(f.choose_voucher(nid(7)), None);
 }
 
 #[test]

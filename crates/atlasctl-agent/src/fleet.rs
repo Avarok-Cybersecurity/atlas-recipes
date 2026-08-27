@@ -296,15 +296,20 @@ impl LocalFleet {
 
     /// Forget what a peer said, because it stopped answering.
     ///
-    /// Its vouches go with it: a claim we can no longer re-confirm within one
-    /// poll must not keep steering routes or populating the listing. When the
-    /// peer answers again, the next digest restores them within
-    /// `PEER_POLL_INTERVAL`.
+    /// Its vouches deliberately stay. Routing is already safe without dropping
+    /// them — `choose_voucher` requires a live report from the voucher — so
+    /// dropping them buys nothing there, and costs the operator their fleet: a
+    /// machine reached through this peer would VANISH the moment it missed a
+    /// poll, which reads as "you never paired that". It stays, `Vouched` with
+    /// `reached_via: None`, so the page can say it is behind a machine that is
+    /// not answering. Second-hand vitals age out on their own stated age.
+    ///
+    /// `unpair` is the other case and does clear them: a peer no longer
+    /// trusted is not trusted to have said anything.
     pub fn clear_report(&self, node: NodeId) {
         if let Ok(mut r) = self.reports.lock() {
             r.remove(&node);
         }
-        self.clear_vouches(node);
     }
 
     /// Peers this agent should try to reach, with the address to use.
