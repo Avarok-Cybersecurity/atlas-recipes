@@ -115,7 +115,7 @@ fn join_fleet(join: &crate::joinarg::Join, grant_control: bool) -> Result<()> {
         ))
         .with_context(|| {
             format!(
-                "could not join {addr}. The code expires, and is good for one                  machine only — mint a fresh one if this is not the first try."
+                "could not join {addr}. The code expires, and is good for one machine only — mint a fresh one if this is not the first try."
             )
         })?;
 
