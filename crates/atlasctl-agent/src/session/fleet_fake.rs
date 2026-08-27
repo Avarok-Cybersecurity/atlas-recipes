@@ -10,6 +10,8 @@
 //! needs a second machine and a TLS handshake. It does not fake the logic under
 //! test; every decision exercised through it is the real `Session`.
 
+use anyhow::Context as _;
+
 use crate::fleet::{FleetView, PairOutcome};
 use atlasctl_protocol::fleet::{NodeDescriptor, NodeId};
 use std::sync::Mutex;
@@ -95,7 +97,12 @@ impl RecordingFleet {
 
     fn exchange(&self) -> anyhow::Result<PairOutcome> {
         if *self.fail_exchange.lock().expect("poisoned") {
-            anyhow::bail!("nothing answered at that address");
+            // A CHAINED failure, because that is the shape a real one has: a
+            // resolver or connect error wrapped in the context that says what
+            // was being attempted. A fake that returns a single flat string
+            // cannot catch a reply that drops the cause.
+            return Err(anyhow::anyhow!("Name or service not known"))
+                .context("resolving not-a-host");
         }
         Ok(self.outcome.clone())
     }

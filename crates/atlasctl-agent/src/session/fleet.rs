@@ -134,7 +134,7 @@ impl Session<'_> {
                     node,
                     exchanged: false,
                     verification: None,
-                    detail: e.to_string(),
+                    detail: format!("{e:#}"),
                 }]
             }
         }
@@ -176,7 +176,7 @@ impl Session<'_> {
                     address: String::new(),
                     exchanged: false,
                     verification: None,
-                    detail: e.to_string(),
+                    detail: format!("{e:#}"),
                 }]
             }
         }
@@ -280,7 +280,7 @@ impl Session<'_> {
             Err(e) => vec![err(
                 Some(id),
                 AgentError::InvalidMessage {
-                    detail: e.to_string(),
+                    detail: format!("{e:#}"),
                 },
             )],
         }
