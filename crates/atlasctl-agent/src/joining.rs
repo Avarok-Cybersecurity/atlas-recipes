@@ -133,8 +133,20 @@ impl JoinWindow {
     pub fn begin_attempt(&self) -> Option<String> {
         let mut slot = self.lock().ok()?;
         let p = slot.as_mut()?;
-        if p.opened.elapsed() >= JOIN_TTL || p.attempts >= MAX_ATTEMPTS {
+        // An expired invitation is dead and can be cleared here: nobody holds a
+        // reservation against it that is still worth anything.
+        if p.opened.elapsed() >= JOIN_TTL {
             *slot = None;
+            return None;
+        }
+        // An EXHAUSTED one is refused without clearing. A ceremony holding the
+        // final reservation may still be running and entitled to consume it,
+        // and emptying the slot underneath it made its `consume` report false —
+        // so `serve_join` refused a legitimate pairing with "already used by
+        // another machine" when no other machine was involved. Under handshake
+        // overlap, which is exactly what the reservation design is for, any
+        // late caller could evict the winner. Expiry still clears it.
+        if p.attempts >= MAX_ATTEMPTS {
             return None;
         }
         p.attempts = p.attempts.saturating_add(1);
@@ -321,6 +333,22 @@ mod tests {
             w.consume(),
             "and succeeding on it must count as spending the invitation, not as \
              losing a race to another machine"
+        );
+    }
+
+    /// A caller who arrives after the budget is spent must be refused without
+    /// evicting the ceremony that is still using the invitation.
+    #[test]
+    fn a_late_caller_cannot_evict_the_winner() {
+        let w = JoinWindow::default();
+        w.mint().expect("mints");
+        for _ in 0..MAX_ATTEMPTS {
+            assert!(w.begin_attempt().is_some());
+        }
+        assert!(w.begin_attempt().is_none(), "over budget is refused");
+        assert!(
+            w.consume(),
+            "the holder of the last reservation must still be able to spend it"
         );
     }
 }
