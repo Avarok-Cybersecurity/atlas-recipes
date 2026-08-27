@@ -68,24 +68,47 @@ pub fn spawn_all(
 ///
 /// Separate from [`spawn_all`] because it needs this agent's identity, which
 /// the fleet view owns privately.
-pub fn spawn_peer_work(
-    fleet: Arc<crate::fleet::LocalFleet>,
-    identity: Arc<crate::identity::Identity>,
-    pins: crate::identity::PinStore,
-    events: broadcast::Sender<ServerMsg>,
-    peer_port: u16,
-    rank: Arc<dyn RankService>,
-    joining: Arc<crate::joining::JoinWindow>,
-) {
+/// `accelerator` is threaded in rather than left blank: `fleet::listing` gives
+/// the authenticated peer report PRECEDENCE over the beacon, so an empty string
+/// here overwrites a good beacon value and every paired node in the fleet view
+/// reads blank. That is the exact symptom `agent run` documents as already
+/// fixed — the fix reached the beacon, and this path kept sending "".
+pub struct PeerWork {
+    /// This machine's view of the fleet.
+    pub fleet: Arc<crate::fleet::LocalFleet>,
+    /// This node's keypair.
+    pub identity: Arc<crate::identity::Identity>,
+    /// Who this node trusts.
+    pub pins: crate::identity::PinStore,
+    /// Where fleet changes are published.
+    pub events: broadcast::Sender<ServerMsg>,
+    /// The peer channel's port.
+    pub peer_port: u16,
+    /// What answers rank requests.
+    pub rank: Arc<dyn RankService>,
+    /// Whether this node is currently accepting a new member.
+    pub joining: Arc<crate::joining::JoinWindow>,
+    /// This machine's accelerator tag, probed once at startup.
+    pub accelerator: String,
+}
+
+pub fn spawn_peer_work(w: PeerWork) {
     spawn_peer_listener(
-        Arc::clone(&fleet),
-        Arc::clone(&identity),
-        pins.clone(),
-        peer_port,
-        rank,
-        joining,
+        Arc::clone(&w.fleet),
+        Arc::clone(&w.identity),
+        w.pins.clone(),
+        w.peer_port,
+        w.rank,
+        w.joining,
     );
-    spawn_peer_poll(fleet, identity, pins, events, peer_port);
+    spawn_peer_poll(
+        w.fleet,
+        w.identity,
+        w.pins,
+        w.events,
+        w.peer_port,
+        w.accelerator,
+    );
 }
 
 /// Accept connections from paired peers.
@@ -284,6 +307,7 @@ fn spawn_peer_poll(
     pins: crate::identity::PinStore,
     events: broadcast::Sender<ServerMsg>,
     port: u16,
+    accelerator: String,
 ) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(PEER_POLL_INTERVAL);
@@ -304,7 +328,7 @@ fn spawn_peer_poll(
                     sock,
                     id,
                     link,
-                    &crate::peer::link::SelfIntro::new(fleet.can_launch(), ""),
+                    &crate::peer::link::SelfIntro::new(fleet.can_launch(), &accelerator),
                     &fleet.local_addresses(),
                 )
                 .await

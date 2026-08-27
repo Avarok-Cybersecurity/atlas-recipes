@@ -323,15 +323,16 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         // Serving the peer channel is what turns a pairing into a working
         // link: it is how a peer's real vitals and verified link class arrive,
         // rather than a beacon's unauthenticated word for them.
-        atlasctl_agent::daemon::spawn_peer_work(
-            Arc::clone(&fleet),
-            Arc::clone(&identity),
+        atlasctl_agent::daemon::spawn_peer_work(atlasctl_agent::daemon::PeerWork {
+            fleet: Arc::clone(&fleet),
+            identity: Arc::clone(&identity),
             pins,
-            events.clone(),
-            atlasctl_agent::peer::DEFAULT_PEER_PORT,
-            Arc::clone(&renderer),
-            Arc::clone(&joining),
-        );
+            events: events.clone(),
+            peer_port: atlasctl_agent::peer::DEFAULT_PEER_PORT,
+            rank: Arc::clone(&renderer),
+            joining: Arc::clone(&joining),
+            accelerator: accelerator.clone(),
+        });
 
         atlasctl_agent::daemon::spawn_all(
             Arc::clone(&fleet),

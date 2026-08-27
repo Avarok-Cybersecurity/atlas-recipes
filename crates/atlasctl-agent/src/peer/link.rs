@@ -461,3 +461,26 @@ mod tests {
         assert!(!answered, "the loop must be bounded, not endless");
     }
 }
+
+#[cfg(test)]
+mod accelerator_tests {
+    use super::*;
+
+    /// The accelerator a node reports over the authenticated channel is the one
+    /// the fleet view shows, because `fleet::listing` prefers the peer report
+    /// to the beacon. An empty string is therefore not a harmless default — it
+    /// actively overwrites the good value the beacon already carried.
+    #[test]
+    fn an_intro_carries_the_accelerator_into_the_hello_it_becomes() {
+        let intro = SelfIntro::new(true, "NVIDIA GB10");
+        assert_eq!(
+            intro.accelerator, "NVIDIA GB10",
+            "the tag must survive into the frame the peer reads"
+        );
+        let blank = SelfIntro::new(true, "");
+        assert!(
+            blank.accelerator.is_empty(),
+            "an empty tag stays empty rather than becoming a guess"
+        );
+    }
+}
