@@ -6,7 +6,7 @@ use crate::cli::{AgentRunArgs, AgentTokenArgs};
 use crate::hostinfo;
 use anyhow::{Context, Result, bail};
 use atlasctl_agent::launcher::DockerLauncher;
-use atlasctl_agent::server::{AgentState, serve};
+use atlasctl_agent::server::AgentState;
 use atlasctl_agent::token;
 use atlasctl_core::docker::profile::{NvidiaDevices, ROOTLESS_V1};
 use atlasctl_core::io::{ProcessRunner, StdProcessRunner};
@@ -254,6 +254,16 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         });
     }
 
+    // Claim the port BEFORE announcing it. Everything below — the address, the
+    // docker status, the pairing token — is a promise about an agent that is
+    // about to exist, and on a port conflict it was all printed and then
+    // contradicted. The operator was handed a token for nothing.
+    let listener = if args.no_browser {
+        None
+    } else {
+        Some(rt.block_on(atlasctl_agent::server::bind(args.port))?)
+    };
+
     if args.no_browser {
         // Do not claim a port that was never bound. The whole point of this
         // mode is that there is no browser channel.
@@ -337,14 +347,14 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
             },
         );
 
-        if args.no_browser {
+        let Some(listener) = listener else {
             // Nothing to serve; the peer channel and discovery are the point.
             // Park until signalled rather than returning, which would tear the
             // runtime down and take those with it.
             std::future::pending::<()>().await;
             return Ok(());
-        }
-        serve(state, args.port).await
+        };
+        atlasctl_agent::server::serve_on(state, listener).await
     })
 }
 
