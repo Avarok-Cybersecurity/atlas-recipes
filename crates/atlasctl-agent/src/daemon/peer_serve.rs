@@ -260,22 +260,37 @@ async fn relay_control(
 /// The shared grant check behind R2 and T2: one meaning, both accept points.
 ///
 /// Returns the operator-facing refusal on failure, naming the exact command
-/// to run on THIS machine so the fix is copy-paste, not archaeology. An
+/// to run, and the machine to run it on, so the fix is copy-paste rather
+/// than archaeology. An
 /// unreadable pin store refuses (fail closed) — control must never be
 /// granted by a disk error.
+/// The refusal shown when a peer is pinned but not granted control.
+///
+/// Pure, so it can be asserted without a pin store — and so the wording is
+/// decided in one place rather than inline in a match arm nobody re-reads.
+///
+/// It names the machine to run the command ON. The refusal is carried back to a
+/// browser on someone else's laptop, where "this machine" reads as the laptop
+/// they are looking at: the operator runs it on the wrong box, sees it succeed,
+/// changes nothing relevant, and is refused again with no new information.
+/// Every hop of this design is a different machine, so a remedy that does not
+/// say which one is not a remedy.
+pub(super) fn grant_refusal(sender: NodeId, local: NodeId) -> String {
+    format!(
+        "{sender} is paired with {local} but not granted control of it. Run \
+         `atlasctl peer grant-control {sender}` ON {local} to allow it.",
+        sender = sender.short(),
+        local = local.short()
+    )
+}
+
 fn grant_of(pins: &PinStore, sender: NodeId, local: NodeId) -> Result<(), String> {
     let loaded = pins
         .load()
         .map_err(|_| "this agent's pin store could not be read; refusing control".to_owned())?;
     match loaded.get(&sender) {
         Some(pin) if pin.controller => Ok(()),
-        Some(_) => Err(format!(
-            "{} is paired but not granted control of {}; run \
-             `atlasctl peer grant-control {}` on this machine to allow it",
-            sender.short(),
-            local.short(),
-            sender.short()
-        )),
+        Some(_) => Err(grant_refusal(sender, local)),
         // Defense in depth: the TLS gate should make this unreachable, but a
         // pin removed between the handshake and this frame must refuse.
         None => Err(format!(

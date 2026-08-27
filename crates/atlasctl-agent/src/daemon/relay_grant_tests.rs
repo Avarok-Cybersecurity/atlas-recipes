@@ -360,3 +360,35 @@ fn fake_report_of(a: &TestAgent, ip: &str) -> crate::peer::link::PeerReport {
         peer_version_max: 2,
     }
 }
+
+/// A refusal is read on a laptop, about a machine that is not the laptop.
+///
+/// The grant has to be made on the machine that refused, and every hop of this
+/// design is a different box — so the remedy has to name which one. "Run it on
+/// this machine" sends the operator to whichever machine they are looking at,
+/// where the command succeeds, changes nothing relevant, and leaves them
+/// refused again with no new information.
+#[test]
+fn a_grant_refusal_names_the_machine_to_run_the_command_on() {
+    let sender = atlasctl_protocol::fleet::NodeId::from_bytes([3; 32]);
+    let local = atlasctl_protocol::fleet::NodeId::from_bytes([9; 32]);
+    let msg = crate::daemon::peer_serve::grant_refusal(sender, local);
+
+    assert!(
+        msg.contains("grant-control"),
+        "it must name the command: {msg}"
+    );
+    assert!(
+        msg.contains(&local.short()),
+        "it must name the machine to run it ON: {msg}"
+    );
+    assert!(
+        msg.contains(&sender.short()),
+        "it must name the machine being granted: {msg}"
+    );
+    assert!(
+        !msg.contains("this machine"),
+        "\"this machine\" is whichever box the operator is looking at, which is \
+         never the one that refused: {msg}"
+    );
+}
