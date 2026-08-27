@@ -199,6 +199,9 @@ fn only_links_reachable_from_another_machine_are_dialable() {
         assert!(c.usable_for_control(), "{c:?} should be dialable");
     }
     for c in [LinkClass::Loopback, LinkClass::Virtual] {
-        assert!(!c.usable_for_control(), "{c:?} is reachable from nowhere else");
+        assert!(
+            !c.usable_for_control(),
+            "{c:?} is reachable from nowhere else"
+        );
     }
 }

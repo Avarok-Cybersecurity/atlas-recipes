@@ -277,17 +277,17 @@ fn confirming_a_node_the_exchange_was_not_about_pins_nothing() {
     let mut s = ready_with_fleet(&f, &fleet);
     exchange(&mut s, paired);
 
-    let out = s.handle(ClientMsg::ConfirmPairing {
-        id: 2,
-        node: other,
-    });
+    let out = s.handle(ClientMsg::ConfirmPairing { id: 2, node: other });
     match &out[0] {
         ServerMsg::PairDecision { trusted, .. } => assert!(!trusted, "{out:?}"),
         other => panic!("expected a decision, got {other:?}"),
     }
 
     // Spent, not merely refused.
-    let retry = s.handle(ClientMsg::ConfirmPairing { id: 3, node: paired });
+    let retry = s.handle(ClientMsg::ConfirmPairing {
+        id: 3,
+        node: paired,
+    });
     match &retry[0] {
         ServerMsg::PairDecision { trusted, .. } => assert!(!trusted, "{retry:?}"),
         other => panic!("expected a decision, got {other:?}"),
@@ -390,7 +390,9 @@ struct WirelessFleet(NodeDescriptor);
 
 impl WirelessFleet {
     fn new() -> Self {
-        use atlasctl_protocol::fleet::{DisplayName, Launchability, LinkClass, NodeAddress, PairingState};
+        use atlasctl_protocol::fleet::{
+            DisplayName, Launchability, LinkClass, NodeAddress, PairingState,
+        };
         let addr = |iface: &str, a: &str, class| NodeAddress {
             iface: iface.to_owned(),
             addr: a.to_owned(),
