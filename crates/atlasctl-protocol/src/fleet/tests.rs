@@ -171,3 +171,34 @@ fn a_control_only_node_says_why_it_cannot_launch() {
         "a refusal without a reason is not actionable"
     );
 }
+
+/// A join invitation names an address the other machine will DIAL. The
+/// predicate for that is reachability, not whether the link could carry a
+/// collective — and those differ on exactly one class.
+#[test]
+fn wireless_can_be_dialed_even_though_it_cannot_carry_a_collective() {
+    assert!(
+        LinkClass::Wireless.usable_for_control(),
+        "a laptop on Wi-Fi is the canonical inviter; excluding it left the \
+         invitation with no address at all"
+    );
+    assert!(!LinkClass::Wireless.usable_for_cluster());
+}
+
+/// The two predicates must not drift into being the same thing, and must agree
+/// about what is unreachable.
+#[test]
+fn only_links_reachable_from_another_machine_are_dialable() {
+    for c in [
+        LinkClass::InfiniBand,
+        LinkClass::Roce,
+        LinkClass::Ethernet,
+        LinkClass::Wireless,
+        LinkClass::Unverified,
+    ] {
+        assert!(c.usable_for_control(), "{c:?} should be dialable");
+    }
+    for c in [LinkClass::Loopback, LinkClass::Virtual] {
+        assert!(!c.usable_for_control(), "{c:?} is reachable from nowhere else");
+    }
+}

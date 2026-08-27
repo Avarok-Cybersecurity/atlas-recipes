@@ -67,6 +67,13 @@ impl Session<'_> {
     /// Loopback and virtual links are excluded: they are reachable from here
     /// and from nowhere else, so putting one in an invitation produces a
     /// command that cannot work.
+    ///
+    /// Wireless is INCLUDED. This used to filter on `usable_for_cluster`, which
+    /// answers "can this link carry a collective?" — no, for Wi-Fi. But the
+    /// joining machine only has to reach this one to pair, and a laptop on
+    /// Wi-Fi is the canonical inviter: it cannot run models, so it invites a
+    /// machine that can. Filtering it out left the invitation with no address
+    /// and the page with an empty command to copy.
     fn dialable_addresses(&self) -> Vec<String> {
         let Some(fleet) = self.deps.fleet else {
             return Vec::new();
@@ -78,8 +85,11 @@ impl Session<'_> {
             .map(|n| n.addresses)
             .unwrap_or_default()
             .into_iter()
-            .filter(|a| a.class.usable_for_cluster())
+            .filter(|a| a.class.usable_for_control())
             .collect();
+        // Still ranked, so a wired link is offered ahead of Wi-Fi when a
+        // machine has both. Including wireless changes what is POSSIBLE, not
+        // what is preferred.
         addrs.sort_by_key(|a| std::cmp::Reverse(a.class.rank()));
         addrs.into_iter().map(|a| a.addr).collect()
     }

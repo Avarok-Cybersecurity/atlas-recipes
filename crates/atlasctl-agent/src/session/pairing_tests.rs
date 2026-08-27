@@ -382,3 +382,95 @@ fn an_exchange_older_than_the_ttl_cannot_be_confirmed() {
     }
     assert!(fleet.keys_pinned().is_empty());
 }
+
+// ---- what a join invitation offers to dial ---------------------------------
+
+/// A fleet whose only local node is on Wi-Fi, plus loopback.
+struct WirelessFleet(NodeDescriptor);
+
+impl WirelessFleet {
+    fn new() -> Self {
+        use atlasctl_protocol::fleet::{DisplayName, Launchability, LinkClass, NodeAddress, PairingState};
+        let addr = |iface: &str, a: &str, class| NodeAddress {
+            iface: iface.to_owned(),
+            addr: a.to_owned(),
+            prefix_len: 24,
+            class,
+            speed_mbps: None,
+            rdma: false,
+        };
+        Self(NodeDescriptor {
+            id: NodeId::from_bytes([1; 32]),
+            name: DisplayName::new("laptop"),
+            is_local: true,
+            pairing: PairingState::Paired,
+            addresses: vec![
+                addr("lo", "127.0.0.1", LinkClass::Loopback),
+                addr("wlp3s0", "192.168.1.24", LinkClass::Wireless),
+            ],
+            launchability: Launchability::yes(),
+            agent_version: "0.1.3".to_owned(),
+            accelerator: String::new(),
+            os: "Linux".to_owned(),
+            vitals: None,
+            alerts: Vec::new(),
+            running: None,
+        })
+    }
+}
+
+impl FleetView for WirelessFleet {
+    fn nodes(&self) -> Vec<NodeDescriptor> {
+        vec![self.0.clone()]
+    }
+    fn pair(&self, _node: NodeId, _code: &str) -> anyhow::Result<PairOutcome> {
+        anyhow::bail!("not used")
+    }
+    fn trust(&self, _outcome: &PairOutcome) -> anyhow::Result<()> {
+        Ok(())
+    }
+    fn unpair(&self, _node: NodeId) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+}
+
+/// The machine that mints an invitation is, by construction, one that cannot
+/// run models — usually a laptop, usually on Wi-Fi. Offering it no address left
+/// the page building an empty command and drawing an empty box with a Copy
+/// button beside it, which is what an operator reported.
+#[test]
+fn an_invitation_from_a_wireless_machine_still_carries_an_address() {
+    let f = Fixture::new();
+    let fleet = WirelessFleet::new();
+    let window = crate::joining::JoinWindow::default();
+    let (mut s, _) = super::Session::new(super::SessionDeps {
+        registry: &f.registry,
+        launcher: &f.launcher,
+        token: TOKEN,
+        can_launch: f.can_launch.clone(),
+        fleet: Some(&fleet),
+        cluster: None,
+        telemetry: None,
+        joining: Some(&window),
+    });
+    s.handle(ClientMsg::Hello {
+        protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
+        token: TOKEN.into(),
+    });
+
+    let out = s.handle(ClientMsg::MintJoinCode { id: 1 });
+
+    match &out[0] {
+        ServerMsg::JoinInvitation {
+            code, addresses, ..
+        } => {
+            assert!(code.is_some(), "a window should have opened: {out:?}");
+            assert_eq!(
+                addresses,
+                &vec!["192.168.1.24".to_owned()],
+                "the Wi-Fi address must be offered and loopback must not"
+            );
+        }
+        other => panic!("expected an invitation, got {other:?}"),
+    }
+}
