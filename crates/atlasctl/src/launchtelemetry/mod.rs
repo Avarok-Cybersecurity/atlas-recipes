@@ -138,6 +138,8 @@ impl LaunchTelemetry for LocalLaunchTelemetry {
             ttft_p90_s: s.ttft_p90_s,
             accept_rate: s.accept_rate,
             prefix_hit_rate: s.prefix_hit_rate,
+            isl_mean: s.isl_mean,
+            osl_mean: s.osl_mean,
             window_s: s.window_s,
         })
     }
