@@ -173,3 +173,23 @@ fn no_picker_offers_a_value_the_engine_would_reject() {
         }
     }
 }
+
+/// The endpoint URL `atlasctl run` prints is built on this when a recipe names
+/// no port. A stale copy sends the operator to a dead port immediately after a
+/// launch that worked, which is the worst moment to be wrong.
+#[test]
+fn the_default_port_matches_the_engine() {
+    let doc: Value = serde_json::from_str(SNAPSHOT).expect("snapshot parses");
+    let port = doc["flags"]
+        .as_array()
+        .expect("flags array")
+        .iter()
+        .find(|f| f["key"] == "port")
+        .expect("the engine exposes a `port` flag");
+    assert_eq!(
+        port["default"].as_str(),
+        Some(crate::flags::table::DEFAULT_SERVE_PORT),
+        "the engine's default port changed; atlasctl's copy must follow, or every \
+         `atlasctl run` that does not set a port prints a wrong endpoint"
+    );
+}

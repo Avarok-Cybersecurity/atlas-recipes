@@ -7,6 +7,7 @@ mod table;
 
 pub use coverage::{EXCLUDED, excluded_reason};
 pub use table::ATLAS_FLAGS;
+pub use table::DEFAULT_SERVE_PORT;
 
 use crate::scalar::ScalarValue;
 use std::collections::BTreeMap;

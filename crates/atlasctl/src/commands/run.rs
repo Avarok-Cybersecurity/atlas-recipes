@@ -116,7 +116,10 @@ pub fn run(args: &RunArgs) -> Result<()> {
         .windows(2)
         .find(|w| w[0] == "--port")
         .map(|w| w[1].clone())
-        .unwrap_or_else(|| "8888".into());
+        // The engine's own default, asserted against the vendored snapshot of its
+        // clap definition rather than copied on faith — this value is printed as
+        // a URL the operator is invited to open.
+        .unwrap_or_else(|| atlasctl_core::flags::DEFAULT_SERVE_PORT.to_string());
 
     println!("started {}", plan.docker.name);
     if port != "0" {
