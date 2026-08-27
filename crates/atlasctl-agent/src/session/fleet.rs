@@ -129,7 +129,7 @@ impl Session<'_> {
                 id,
                 node,
                 false,
-                "there is no exchange waiting on this connection. Pair again —                  the words are only meaningful for the exchange that produced them.",
+                "there is no exchange waiting on this connection. Pair again — the words are only meaningful for the exchange that produced them.",
             )];
         };
         if pending.outcome.node != node {
@@ -137,7 +137,7 @@ impl Session<'_> {
                 id,
                 node,
                 false,
-                "that is not the machine this connection just paired with.                  Nothing was trusted.",
+                "that is not the machine this connection just paired with. Nothing was trusted.",
             )];
         }
         if pending.at.elapsed() > super::PENDING_PAIRING_TTL {
@@ -161,7 +161,7 @@ impl Session<'_> {
                 node,
                 false,
                 &format!(
-                    "the exchange completed but the pin could not be written: {e}.                      This machine does not trust {} — pair again once that is fixed.",
+                    "the exchange completed but the pin could not be written: {e}. This machine does not trust {} — pair again once that is fixed.",
                     node.short()
                 ),
             )],

@@ -20,9 +20,12 @@ fn id(s: &str) -> RecipeId {
 }
 
 pub(super) struct Fixture {
-    registry: RegistrySet,
-    launcher: RecordingLauncher,
-    can_launch: Result<(), String>,
+    // `pub(super)` so the sibling test modules split off this file on the
+    // 500-line cap can build their own `SessionDeps`. The split was mechanical;
+    // the visibility should not have narrowed what the tests can reach.
+    pub(super) registry: RegistrySet,
+    pub(super) launcher: RecordingLauncher,
+    pub(super) can_launch: Result<(), String>,
 }
 
 impl Fixture {
