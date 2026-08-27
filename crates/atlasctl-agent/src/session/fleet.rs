@@ -85,28 +85,106 @@ impl Session<'_> {
     }
 
     pub(super) fn pair(&mut self, id: u32, node: NodeId, code: &str) -> Vec<ServerMsg> {
+        // (helper `decision` is defined at the bottom of this file)
         let Some(fleet) = self.deps.fleet else {
             return vec![err(Some(id), AgentError::NotReady)];
         };
         match fleet.pair(node, code) {
-            Ok(outcome) => vec![ServerMsg::PairResult {
-                id,
-                node,
-                paired: true,
-                verification: Some(outcome.verification),
-                detail: String::new(),
-            }],
+            Ok(outcome) => {
+                let verification = outcome.verification.clone();
+                // Held, not written. Replacing any previous one: the UI shows a
+                // single dialog, and a superseded exchange's words are stale.
+                self.pending_pairing = Some(super::PendingPairing {
+                    outcome,
+                    at: std::time::Instant::now(),
+                });
+                vec![ServerMsg::PairResult {
+                    id,
+                    node,
+                    exchanged: true,
+                    verification: Some(verification),
+                    detail: String::new(),
+                }]
+            }
             // A failed pairing is reported as a result rather than an error:
             // the page has a designed state for "that did not work", and the
             // reason is the useful part.
             Err(e) => vec![ServerMsg::PairResult {
                 id,
                 node,
-                paired: false,
+                exchanged: false,
                 verification: None,
                 detail: e.to_string(),
             }],
         }
+    }
+
+    /// Trust the exchange this session is holding.
+    pub(super) fn confirm_pairing(&mut self, id: u32, node: NodeId) -> Vec<ServerMsg> {
+        // `take` FIRST, before any other precondition. Whatever the answer,
+        // this exchange is spent: a decision that failed for an unrelated
+        // reason must not leave the words live for a later confirm to reuse.
+        let Some(pending) = self.pending_pairing.take() else {
+            return vec![decision(
+                id,
+                node,
+                false,
+                "there is no exchange waiting on this connection. Pair again —                  the words are only meaningful for the exchange that produced them.",
+            )];
+        };
+        if pending.outcome.node != node {
+            return vec![decision(
+                id,
+                node,
+                false,
+                "that is not the machine this connection just paired with.                  Nothing was trusted.",
+            )];
+        }
+        if pending.at.elapsed() > super::PENDING_PAIRING_TTL {
+            return vec![decision(
+                id,
+                node,
+                false,
+                "those words are too old to act on. Pair again.",
+            )];
+        }
+        let Some(fleet) = self.deps.fleet else {
+            return vec![err(Some(id), AgentError::NotReady)];
+        };
+        match fleet.trust(&pending.outcome) {
+            Ok(()) => vec![decision(id, node, true, "")],
+            // The pin did not reach disk, so this machine does NOT trust the
+            // peer — even though the peer may already trust it. Saying so is
+            // the only way the operator can tell that apart from success.
+            Err(e) => vec![decision(
+                id,
+                node,
+                false,
+                &format!(
+                    "the exchange completed but the pin could not be written: {e}.                      This machine does not trust {} — pair again once that is fixed.",
+                    node.short()
+                ),
+            )],
+        }
+    }
+
+    /// Discard the exchange this session is holding.
+    ///
+    /// What the operator is saying is "those words did not match", which is the
+    /// one thing the ceremony exists to detect. Nothing was written, so there is
+    /// nothing to undo — which is the whole point of the split.
+    pub(super) fn reject_pairing(&mut self, id: u32, node: NodeId) -> Vec<ServerMsg> {
+        let had = self.pending_pairing.take().is_some();
+        vec![decision(
+            id,
+            node,
+            false,
+            if had {
+                ""
+            } else {
+                "there was no exchange waiting; nothing was trusted."
+            },
+        )]
     }
 
     pub(super) fn unpair(&mut self, id: u32, node: NodeId) -> Vec<ServerMsg> {
@@ -114,17 +192,19 @@ impl Session<'_> {
             return vec![err(Some(id), AgentError::NotReady)];
         };
         match fleet.unpair(node) {
-            Ok(was_pinned) => vec![ServerMsg::PairResult {
+            // `PairDecision`, not `PairResult`: unpair runs no exchange, and a
+            // reply shaped like one would have to claim `exchanged: false`,
+            // which is true only in the sense that nothing happened.
+            Ok(was_pinned) => vec![decision(
                 id,
                 node,
-                paired: false,
-                verification: None,
-                detail: if was_pinned {
-                    String::new()
+                false,
+                if was_pinned {
+                    ""
                 } else {
-                    "that node was not paired".to_owned()
+                    "that node was not paired"
                 },
-            }],
+            )],
             Err(e) => vec![err(
                 Some(id),
                 AgentError::InvalidMessage {
@@ -238,5 +318,15 @@ impl Session<'_> {
             Ok(ranks) => vec![ServerMsg::ClusterStopped { id, ranks }],
             Err(detail) => vec![err(Some(id), AgentError::LaunchFailed { detail })],
         }
+    }
+}
+
+/// A trust decision, in the one shape all three verbs answer with.
+fn decision(id: u32, node: NodeId, trusted: bool, detail: &str) -> ServerMsg {
+    ServerMsg::PairDecision {
+        id,
+        node,
+        trusted,
+        detail: detail.to_owned(),
     }
 }

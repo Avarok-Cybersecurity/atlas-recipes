@@ -32,6 +32,10 @@ impl atlasctl_agent::fleet::FleetView for FleetHandle {
         self.0.pair(node, code)
     }
 
+    fn trust(&self, outcome: &atlasctl_agent::fleet::PairOutcome) -> anyhow::Result<()> {
+        self.0.trust(outcome)
+    }
+
     fn unpair(&self, node: atlasctl_protocol::fleet::NodeId) -> anyhow::Result<bool> {
         self.0.unpair(node)
     }

@@ -92,6 +92,16 @@ fn a_completed_ceremony_records_the_pin_and_returns_the_words() {
     let out = f.pair(node, "13572468").expect("pairs");
     assert_eq!(out.node, node);
     assert_eq!(out.verification, "abcd-ef01");
+    // The exchange completed and NOTHING is trusted yet. This is the whole
+    // point of two-phase pairing: the words exist to be compared, and a
+    // comparison that happens after the pin is written is a formality.
+    assert!(
+        !PinStore::new(&t.0).is_pinned(node).expect("reads"),
+        "pair() must not write a pin; trust() does"
+    );
+
+    // And accepting it writes one.
+    f.trust(&out).expect("trusts");
     assert!(PinStore::new(&t.0).is_pinned(node).expect("reads"));
 
     // Dialled the address the beacon advertised, on the peer port, with the
@@ -138,4 +148,26 @@ fn a_failed_ceremony_writes_no_pin() {
     let err = f.pair(node, "13572468").expect_err("must refuse");
     assert!(err.to_string().contains("key confirmation"), "{err}");
     assert!(!PinStore::new(&t.0).is_pinned(node).expect("reads"));
+}
+
+/// Refusing the words must leave nothing behind.
+///
+/// Before this was two-phase the pin already existed by now, so a refusal had
+/// to be a REMOVAL — and a removal that failed left a machine trusted that the
+/// operator had explicitly rejected. There is nothing to remove now.
+#[test]
+fn an_exchange_that_is_never_trusted_writes_nothing() {
+    let t = Tmp::new("never-trusted");
+    let node = NodeId::from_bytes([9u8; 32]);
+    let driver = Arc::new(FakePairing::returning(node, "spark-28c2"));
+    let f = fleet_at(&t.0).with_pairing(Box::new(Arc::clone(&driver)));
+    f.observe(beacon(node, "spark-28c2", true));
+
+    let out = f.pair(node, "13572468").expect("pairs");
+    drop(out); // the operator said the words did not match
+
+    assert!(
+        !PinStore::new(&t.0).is_pinned(node).expect("reads"),
+        "a refused exchange must never have touched the pin store"
+    );
 }

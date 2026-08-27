@@ -4,7 +4,7 @@ use super::*;
 use crate::launcher::{Call, RecordingLauncher};
 use atlasctl_protocol::settings::SettingError;
 
-const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+pub(super) const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 /// A recipe that really is in the compiled-in corpus.
 const REAL: &str = "qwen3.6-27b-fp8";
 
@@ -19,14 +19,14 @@ fn id(s: &str) -> RecipeId {
     RecipeId::parse(s).expect("valid id")
 }
 
-struct Fixture {
+pub(super) struct Fixture {
     registry: RegistrySet,
     launcher: RecordingLauncher,
     can_launch: Result<(), String>,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             registry: RegistrySet::builtin_only(),
             launcher: RecordingLauncher::new(),
@@ -41,7 +41,7 @@ impl Fixture {
         }
     }
 
-    fn session(&self) -> Session<'_> {
+    pub(super) fn session(&self) -> Session<'_> {
         let (s, _welcome) = Session::new(SessionDeps {
             registry: &self.registry,
             launcher: &self.launcher,
@@ -56,10 +56,10 @@ impl Fixture {
     }
 
     /// A session that has already completed the handshake.
-    fn ready(&self) -> Session<'_> {
+    pub(super) fn ready(&self) -> Session<'_> {
         let mut s = self.session();
         let out = s.handle(ClientMsg::Hello {
-            protocol_version: 1,
+            protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
             token: TOKEN.into(),
         });
         assert!(
@@ -83,7 +83,7 @@ fn ready_with_window<'a>(f: &'a Fixture, w: &'a crate::joining::JoinWindow) -> S
         joining: Some(w),
     });
     s.handle(ClientMsg::Hello {
-        protocol_version: 1,
+        protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
         token: TOKEN.into(),
     });
     s
@@ -218,7 +218,7 @@ fn a_wrong_token_is_refused_and_ends_the_session() {
     let f = Fixture::new();
     let mut s = f.session();
     let out = s.handle(ClientMsg::Hello {
-        protocol_version: 1,
+        protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
         token: "f".repeat(64),
     });
     assert!(matches!(
@@ -238,7 +238,7 @@ fn an_empty_token_does_not_pass() {
     let f = Fixture::new();
     let mut s = f.session();
     let out = s.handle(ClientMsg::Hello {
-        protocol_version: 1,
+        protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
         token: String::new(),
     });
     assert!(matches!(
@@ -272,7 +272,7 @@ fn a_successful_handshake_returns_the_schema_and_the_inventory() {
     let f = Fixture::new();
     let mut s = f.session();
     let out = s.handle(ClientMsg::Hello {
-        protocol_version: 1,
+        protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
         token: TOKEN.into(),
     });
     let ServerMsg::Ready {

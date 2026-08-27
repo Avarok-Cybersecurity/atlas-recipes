@@ -140,9 +140,34 @@ pub trait ClusterControl: Send + Sync {
 }
 
 /// A single client connection.
+/// How long a completed exchange waits for a human decision.
+///
+/// Not a security bound — nothing is trusted while it waits — but an idle tab
+/// should not be able to confirm words nobody is still looking at.
+const PENDING_PAIRING_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// An exchange that completed and is waiting to be accepted or refused.
+struct PendingPairing {
+    outcome: crate::fleet::PairOutcome,
+    at: std::time::Instant,
+}
+
 pub struct Session<'a> {
     deps: SessionDeps<'a>,
     phase: Phase,
+    /// The one exchange this session is holding, if any.
+    ///
+    /// Deliberately owned by the SESSION rather than by the fleet. A
+    /// fleet-global map would let one browser confirm a ceremony another
+    /// browser ran, and would need a race resolved between two tabs pairing the
+    /// same node. Here the slot dies with the socket, so a browser that walks
+    /// away mid-ceremony leaves nothing behind — and `Session::handle` is
+    /// synchronous, so `PairPeer` and its decision are strictly ordered within
+    /// a session and cannot race at all.
+    ///
+    /// One slot, replaced rather than accumulated: the UI shows one dialog, and
+    /// replacing invalidates stale words for free.
+    pending_pairing: Option<PendingPairing>,
     /// Denied-key attempts, which the caller logs. Nothing in a legitimate UI
     /// offers a denied key, so an attempt says something about the client.
     pub denied_attempts: Vec<String>,
@@ -160,6 +185,7 @@ impl<'a> Session<'a> {
             Self {
                 deps,
                 phase: Phase::AwaitingHello,
+                pending_pairing: None,
                 denied_attempts: Vec::new(),
             },
             welcome,
@@ -254,6 +280,10 @@ impl<'a> Session<'a> {
             // the socket layer keeps the authorization decision in one place.
             (Phase::Ready, ClientMsg::WatchFleet { id, vitals: _ }) => self.nodes(id),
             (Phase::Ready, ClientMsg::PairPeer { id, node, code }) => self.pair(id, node, &code),
+            (Phase::Ready, ClientMsg::ConfirmPairing { id, node }) => {
+                self.confirm_pairing(id, node)
+            }
+            (Phase::Ready, ClientMsg::RejectPairing { id, node }) => self.reject_pairing(id, node),
             (Phase::Ready, ClientMsg::UnpairPeer { id, node }) => self.unpair(id, node),
             (Phase::Ready, ClientMsg::MintJoinCode { id }) => self.mint_join(id),
             (Phase::Ready, ClientMsg::RevokeJoinCode { id }) => self.revoke_join(id),
@@ -418,3 +448,7 @@ pub use telemetry::LaunchTelemetry;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "session/pairing_tests.rs"]
+mod pairing_tests;

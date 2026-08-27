@@ -16,7 +16,7 @@ fn client_messages_are_tagged_on_type_for_the_browser_to_narrow_on() {
 fn every_client_message_round_trips() {
     let msgs = vec![
         ClientMsg::Hello {
-            protocol_version: 1,
+            protocol_version: crate::PROTOCOL_VERSION,
             token: "t".into(),
         },
         ClientMsg::ListRecipes { id: 1 },

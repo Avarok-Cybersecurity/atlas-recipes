@@ -214,21 +214,29 @@ impl FleetView for LocalFleet {
             node.short()
         );
 
+        // No pin is written here. The exchange proves both machines derived the
+        // same key; it does not prove the operator meant to trust this one, and
+        // that is what the words are for. `trust` writes it once they say so.
+        Ok(PairOutcome {
+            node: paired.node,
+            public_key: paired.public_key,
+            name: paired.name,
+            address: addr.ip().to_string(),
+            verification: paired.verification,
+        })
+    }
+
+    fn trust(&self, outcome: &PairOutcome) -> Result<()> {
         super::record_pairing(
             &self.pins,
-            paired.node,
-            &paired.public_key,
-            atlasctl_protocol::fleet::DisplayName::new(&paired.name),
+            outcome.node,
+            &outcome.public_key,
+            atlasctl_protocol::fleet::DisplayName::new(&outcome.name),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs()),
-            Some(addr.ip().to_string()),
-        )?;
-
-        Ok(PairOutcome {
-            node: paired.node,
-            verification: paired.verification,
-        })
+            Some(outcome.address.clone()),
+        )
     }
 
     fn unpair(&self, node: NodeId) -> Result<bool> {

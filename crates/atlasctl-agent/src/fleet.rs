@@ -51,6 +51,16 @@ pub trait FleetView: Send + Sync {
     /// If the peer is unknown, unreachable, or the ceremony fails.
     fn pair(&self, node: NodeId, code: &str) -> Result<PairOutcome>;
 
+    /// Write the pin for an exchange a human has accepted.
+    ///
+    /// Split from [`Self::pair`] so nothing is trusted until somebody says the
+    /// words matched. The caller holds the [`PairOutcome`] in the meantime; if
+    /// it never confirms, no pin is ever written and there is nothing to undo.
+    ///
+    /// # Errors
+    /// If the pin store cannot be written.
+    fn trust(&self, outcome: &PairOutcome) -> Result<()>;
+
     /// Drop trust in a peer. Returns whether it was trusted.
     ///
     /// # Errors
@@ -74,11 +84,25 @@ pub trait PeerPairing: Send + Sync {
     fn pair(&self, addr: std::net::SocketAddr, code: &str) -> Result<crate::peer::pair::Paired>;
 }
 
-/// The result of a successful pairing.
+/// A completed exchange, not yet trusted.
+///
+/// Everything [`FleetView::trust`] needs to write a pin, held so the write can
+/// wait for a human. Before two-phase pairing this was written the moment the
+/// ceremony returned and the words were shown afterwards, which made comparing
+/// them a formality — the machine an operator went on to reject had already
+/// been trusted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairOutcome {
-    /// Who was paired.
+    /// Who completed the exchange.
     pub node: NodeId,
+    /// The key that would be pinned, hex encoded, exactly as the ceremony
+    /// produced it.
+    pub public_key: String,
+    /// What that machine calls itself.
+    pub name: String,
+    /// Where it was reached, recorded with the pin so a later dial has a
+    /// starting point.
+    pub address: String,
     /// Short words both humans compare before trusting.
     pub verification: String,
 }

@@ -26,4 +26,14 @@ pub use telemetry::{DeviceStats, EngineStats, LaunchPhase, Stats, TelemetryCaps}
 ///
 /// A client and an agent that disagree must say so at the handshake rather than
 /// discovering it halfway through a launch.
-pub const PROTOCOL_VERSION: u32 = 1;
+///
+/// * 1 — initial.
+/// * 2 — pairing became two-phase. `PairPeer` runs the exchange and writes no
+///   pin; `ConfirmPairing` establishes trust and `RejectPairing` discards it.
+///   `PairResult.paired` became `PairResult.exchanged` because it no longer
+///   means trusted, and `UnpairPeer` answers `PairDecision` rather than a
+///   pairing-shaped reply. A version 1 page against a version 2 agent would
+///   read `exchanged` as "trusted" and show a machine as paired that this
+///   agent has not accepted, so the exact-match gate refusing it is the point
+///   rather than an inconvenience.
+pub const PROTOCOL_VERSION: u32 = 2;
