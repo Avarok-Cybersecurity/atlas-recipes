@@ -173,7 +173,14 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     )));
 
     let fleet = Arc::new(fleet);
-    let (events, _keep) = tokio::sync::broadcast::channel(256);
+    // The Receiver is dropped, deliberately. Holding it for the process
+    // lifetime made `events.receiver_count()` permanently non-zero, which
+    // killed the "nobody is watching, do not spawn a process to find out"
+    // guard in the vitals loop: the agent shelled out to `docker ps` and
+    // sampled the GPU every second forever, including under `--no-browser`
+    // where nothing can ever subscribe. Every `send` on this channel already
+    // ignores its error, so there is nothing to keep alive.
+    let (events, _) = tokio::sync::broadcast::channel(256);
 
     let renderer: Arc<dyn atlasctl_agent::rank::RankService> =
         Arc::new(crate::rankservice::LocalRankService::new(

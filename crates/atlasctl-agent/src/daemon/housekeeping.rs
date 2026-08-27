@@ -77,3 +77,37 @@ pub(super) fn spawn_prune(fleet: Arc<LocalFleet>, events: broadcast::Sender<Serv
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use tokio::sync::broadcast;
+
+    /// The vitals loop skips its work when nothing is subscribed. That guard is
+    /// only real if `receiver_count()` can actually reach zero.
+    ///
+    /// It could not: `agent run` bound the channel's Receiver to a variable
+    /// that lived for the whole process, so the count never dropped below one
+    /// and the agent shelled out to `docker ps` every second forever — most
+    /// visibly under `--no-browser`, where nothing can ever subscribe.
+    #[test]
+    fn a_channel_with_no_subscribers_reports_none() {
+        let (tx, rx) = broadcast::channel::<u8>(4);
+        assert_eq!(tx.receiver_count(), 1, "the pair starts with one");
+        drop(rx);
+        assert_eq!(
+            tx.receiver_count(),
+            0,
+            "dropping the receiver must let the guard see zero"
+        );
+    }
+
+    /// And sending with nobody listening must stay harmless, because that is
+    /// what makes dropping the receiver safe.
+    #[test]
+    fn sending_into_an_unwatched_channel_is_not_fatal() {
+        let (tx, rx) = broadcast::channel::<u8>(4);
+        drop(rx);
+        assert!(tx.send(1).is_err(), "send reports there was no listener");
+        // Every call site writes `let _ = ...` for exactly this reason.
+    }
+}
