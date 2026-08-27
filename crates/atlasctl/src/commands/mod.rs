@@ -6,6 +6,7 @@ pub mod agent;
 pub mod agentinfo;
 pub mod agentpair;
 pub mod doctor;
+pub mod doctor_checks;
 pub mod lifecycle;
 pub mod peer;
 pub mod recipe;
