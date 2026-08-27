@@ -9,8 +9,6 @@
 //! which verbs route, what gets executed locally, and that the page is told
 //! exactly what was done.
 
-use super::fleet_fake::RecordingFleet;
-use super::pairing_tests::{exchange, ready_with_fleet};
 use super::tests::{Fixture, TOKEN};
 use super::{ControlRelay, Session, SessionDeps};
 use atlasctl_protocol::fleet::{Launchability, NodeDescriptor, NodeId, PairingState};
@@ -20,7 +18,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 fn target() -> NodeId {
-    NodeId::from_bytes([0xd6; 32])
+    NodeId::from_bytes([7; 32])
 }
 
 fn local_id() -> NodeId {
@@ -448,98 +446,5 @@ fn a_mismatched_answer_shape_is_refused_not_rendered() {
         ),
         "got {:?}",
         out[0]
-    );
-}
-
-/// Confirming with `allow_control` writes the grant with the pin — one
-/// human decision, recorded atomically.
-#[test]
-fn confirming_with_allow_control_records_the_grant_with_the_trust() {
-    let f = Fixture::new();
-    let node = NodeId::from_bytes([6; 32]);
-    let fleet = RecordingFleet::new(node);
-    let mut s = ready_with_fleet(&f, &fleet);
-    exchange(&mut s, node);
-
-    let out = s.handle(ClientMsg::ConfirmPairing {
-        id: 2,
-        node,
-        allow_control: true,
-    });
-    assert!(
-        matches!(
-            &out[0],
-            ServerMsg::PairDecision {
-                id: 2,
-                trusted: true,
-                ..
-            }
-        ),
-        "got {out:?}"
-    );
-    assert_eq!(fleet.keys_pinned().len(), 1);
-    assert_eq!(fleet.grants(), vec![node], "the grant rode the confirm");
-}
-
-/// And without it, nothing is granted — consent must be said, not implied.
-#[test]
-fn confirming_without_allow_control_grants_nothing() {
-    let f = Fixture::new();
-    let node = NodeId::from_bytes([6; 32]);
-    let fleet = RecordingFleet::new(node);
-    let mut s = ready_with_fleet(&f, &fleet);
-    exchange(&mut s, node);
-
-    let out = s.handle(ClientMsg::ConfirmPairing {
-        id: 2,
-        node,
-        allow_control: false,
-    });
-    assert!(matches!(
-        &out[0],
-        ServerMsg::PairDecision { trusted: true, .. }
-    ));
-    assert_eq!(fleet.keys_pinned().len(), 1);
-    assert!(fleet.grants().is_empty());
-}
-
-/// Minting with `allow_control` stamps the window, so the machine that
-/// joins through it is pinned WITH the grant the human chose.
-#[test]
-fn minting_with_allow_control_stamps_the_join_window() {
-    let f = Fixture::new();
-    let fleet = SelfAwareFleet;
-    let joining = crate::joining::JoinWindow::default();
-    let (mut s, _) = Session::new(SessionDeps {
-        registry: &f.registry,
-        launcher: &f.launcher,
-        token: TOKEN,
-        can_launch: f.can_launch.clone(),
-        fleet: Some(&fleet),
-        cluster: None,
-        telemetry: None,
-        joining: Some(&joining),
-        relay: None,
-    });
-    let out = s.handle(ClientMsg::Hello {
-        protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
-        token: TOKEN.into(),
-    });
-    assert!(matches!(out[0], ServerMsg::Ready { .. }));
-
-    let out = s.handle(ClientMsg::MintJoinCode {
-        id: 9,
-        allow_control: true,
-    });
-    assert!(
-        matches!(&out[0], ServerMsg::JoinInvitation { code: Some(_), .. }),
-        "got {out:?}"
-    );
-    assert_eq!(
-        joining.consume(),
-        Some(crate::joining::Consumed {
-            allow_control: true
-        }),
-        "the window must carry the grant to the pin write"
     );
 }

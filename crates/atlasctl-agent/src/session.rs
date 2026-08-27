@@ -382,6 +382,9 @@ pub use telemetry::LaunchTelemetry;
 mod tests;
 
 #[cfg(test)]
+#[path = "session/consent_tests.rs"]
+mod consent_tests;
+#[cfg(test)]
 #[path = "session/fleet_fake.rs"]
 mod fleet_fake;
 #[cfg(test)]

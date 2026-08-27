@@ -16,6 +16,7 @@ use anyhow::{Result, bail};
 use atlasctl_protocol::fleet::NodeId;
 use atlasctl_protocol::msg::{ControlRep, ControlReq};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// How long a relay waits for the target to execute and answer. Covers a
@@ -138,6 +139,108 @@ where
         }
     }
     bail!("{addr} kept sending vitals instead of answering the control request")
+}
+
+/// Drives the session's [`ControlRelay`] over the agent's own runtime.
+///
+/// The `PeerTransport` shape: a sync trait implementation that owns a runtime
+/// handle and blocks per call, so the session stays synchronous and
+/// transport-free. Every decision about WHERE a request goes is
+/// [`LocalFleet::plan_control_route`] (rules O2–O5) — the same function the
+/// listing's `reached_via` reflects — and this type only executes the plan.
+///
+/// [`ControlRelay`]: crate::session::ControlRelay
+/// [`LocalFleet::plan_control_route`]: crate::fleet::LocalFleet::plan_control_route
+pub struct ControlDriver {
+    identity: Arc<Identity>,
+    pins: PinStore,
+    fleet: Arc<crate::fleet::LocalFleet>,
+    peer_port: u16,
+    runtime: tokio::runtime::Handle,
+}
+
+impl std::fmt::Debug for ControlDriver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ControlDriver").finish_non_exhaustive()
+    }
+}
+
+impl ControlDriver {
+    /// Build a driver.
+    #[must_use]
+    pub fn new(
+        identity: Arc<Identity>,
+        pins: PinStore,
+        fleet: Arc<crate::fleet::LocalFleet>,
+        peer_port: u16,
+        runtime: tokio::runtime::Handle,
+    ) -> Self {
+        Self {
+            identity,
+            pins,
+            fleet,
+            peer_port,
+            runtime,
+        }
+    }
+
+    /// Run one peer call to completion.
+    ///
+    /// `block_on` alone would deadlock: this runs inside a task on the very
+    /// runtime it would block. `block_in_place` moves this thread out of the
+    /// async pool first, which is only sound on a multi-threaded runtime —
+    /// and that is what the agent builds.
+    fn blocking<F: std::future::Future>(&self, fut: F) -> F::Output {
+        tokio::task::block_in_place(|| self.runtime.block_on(fut))
+    }
+}
+
+impl crate::session::ControlRelay for ControlDriver {
+    fn control(
+        &self,
+        target: NodeId,
+        req: ControlReq,
+    ) -> Result<(ControlRep, Option<NodeId>), atlasctl_protocol::msg::AgentError> {
+        use atlasctl_protocol::msg::AgentError;
+        let route = self.fleet.plan_control_route(target, self.peer_port)?;
+        let intro = SelfIntro::new(self.fleet.can_launch(), "");
+        match route {
+            crate::fleet::routing::ControlRoute::Direct { addr } => self
+                .blocking(send_control(
+                    &self.identity,
+                    self.pins.clone(),
+                    addr,
+                    target,
+                    &intro,
+                    &req,
+                    // The terminal answer budget is the same whichever leg
+                    // writes the frame: it bounds the TARGET's execution.
+                    RELAY_ANSWER_BUDGET,
+                ))
+                .map(|rep| (rep, None))
+                // A pinned target we could not reach directly: no relay was
+                // asked, so the operator's fix is waking the target.
+                .map_err(|e| AgentError::NotRoutable {
+                    node: target,
+                    reason: format!("could not reach it directly: {e:#}"),
+                }),
+            crate::fleet::routing::ControlRoute::Via { relay, addr } => self
+                .blocking(send_control_to(
+                    &self.identity,
+                    self.pins.clone(),
+                    addr,
+                    relay,
+                    target,
+                    &intro,
+                    &req,
+                ))
+                .map(|rep| (rep, Some(relay)))
+                .map_err(|e| AgentError::RelayRefused {
+                    node: target,
+                    detail: format!("could not ask {} to forward: {e:#}", relay.short()),
+                }),
+        }
+    }
 }
 
 #[cfg(test)]

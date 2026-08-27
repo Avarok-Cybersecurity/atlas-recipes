@@ -149,4 +149,36 @@ mod mock {
 }
 
 #[cfg(any(test, feature = "test-mocks"))]
+mod mock_arc {
+    use super::*;
+    use std::sync::Arc;
+
+    /// A shared handle is a launcher too, so a test can keep inspecting a
+    /// [`RecordingLauncher`] after handing ownership to a `ControlHost`.
+    /// Test-only: production owners hold exactly one launcher each.
+    impl<T: Launcher> Launcher for Arc<T> {
+        fn preview(
+            &self,
+            recipe: &Recipe,
+            o: &BTreeMap<String, ScalarValue>,
+        ) -> Result<Preview, AgentError> {
+            self.as_ref().preview(recipe, o)
+        }
+        fn launch(
+            &self,
+            recipe: &Recipe,
+            o: &BTreeMap<String, ScalarValue>,
+        ) -> Result<Started, AgentError> {
+            self.as_ref().launch(recipe, o)
+        }
+        fn stop(&self, recipe: &str) -> Result<(), AgentError> {
+            self.as_ref().stop(recipe)
+        }
+        fn running(&self) -> Result<Vec<RunningLaunch>, AgentError> {
+            self.as_ref().running()
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-mocks"))]
 pub use mock::{Call, RecordingLauncher};

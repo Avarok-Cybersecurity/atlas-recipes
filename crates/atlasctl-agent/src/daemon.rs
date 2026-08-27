@@ -52,6 +52,12 @@ mod peer_serve;
 mod peer_serve_tests;
 
 #[cfg(test)]
+#[path = "daemon/relay_grant_tests.rs"]
+mod relay_grant_tests;
+#[cfg(test)]
+#[path = "daemon/relay_harness.rs"]
+mod relay_harness;
+#[cfg(test)]
 #[path = "daemon/relay_tests.rs"]
 mod relay_tests;
 
