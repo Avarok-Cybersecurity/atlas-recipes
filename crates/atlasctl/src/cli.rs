@@ -414,3 +414,61 @@ pub struct RegistryUpdateArgs {
     /// Update only this registry.
     pub name: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// clap's own invariants — a malformed definition is a runtime panic on the
+    /// user's first `--help`, not a compile error, so it is asserted here.
+    #[test]
+    fn the_command_definition_is_well_formed() {
+        Cli::command().debug_assert();
+    }
+
+    /// Granting control to a fleet you are not joining is not a coherent
+    /// request. clap should say so rather than accepting it and silently doing
+    /// nothing, which is how an operator concludes the flag is broken.
+    #[test]
+    fn grant_control_without_join_is_refused() {
+        let e = Cli::try_parse_from(["atlasctl", "agent", "install", "--grant-control"])
+            .expect_err("--grant-control requires --join");
+        let msg = e.to_string();
+        assert!(
+            msg.contains("join"),
+            "the error must name what is missing: {msg}"
+        );
+    }
+
+    /// The pair the installer actually sends.
+    #[test]
+    fn grant_control_with_join_parses_and_is_off_by_default() {
+        let with = Cli::try_parse_from([
+            "atlasctl",
+            "agent",
+            "install",
+            "--join",
+            "12345678@10.10.10.1",
+            "--grant-control",
+        ])
+        .expect("valid");
+        let without = Cli::try_parse_from([
+            "atlasctl",
+            "agent",
+            "install",
+            "--join",
+            "12345678@10.10.10.1",
+        ])
+        .expect("valid");
+
+        let grant = |c: Cli| match c.command {
+            Command::Agent(AgentCmd::Install(a)) => (a.grant_control, a.join),
+            other => panic!("expected agent install, got {other:?}"),
+        };
+        assert!(grant(with).0);
+        // Off unless asked: a privilege must never arrive by upgrading, and the
+        // joiner's pin is written from this value.
+        assert!(!grant(without).0);
+    }
+}
