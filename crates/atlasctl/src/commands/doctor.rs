@@ -142,13 +142,20 @@ fn check_reachable() -> Finding {
     #[cfg(not(target_os = "macos"))]
     let fabric = atlasctl_agent::fabric::linux::LinuxFabric::new();
 
-    let addrs = fabric
-        .addresses()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|a| (a.iface, a.addr))
-        .collect::<Vec<_>>();
-    doctor_checks::reachable(&addrs)
+    // NOT `unwrap_or_default()`. An enumeration that failed is not a machine
+    // with no addresses, and the advice for the two is unrelated — telling
+    // someone to plug in a network cable because `/sys/class/net` could not be
+    // listed sends them to fix the wrong thing.
+    match fabric.addresses() {
+        Ok(list) => {
+            let addrs = list
+                .into_iter()
+                .map(|a| (a.iface, a.addr))
+                .collect::<Vec<_>>();
+            doctor_checks::reachable(&addrs)
+        }
+        Err(e) => doctor_checks::unreadable_interfaces(&format!("{e:#}")),
+    }
 }
 
 #[cfg(test)]

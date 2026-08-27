@@ -121,6 +121,22 @@ pub fn reachable(addresses: &[(String, String)]) -> Finding {
     }
 }
 
+/// The interfaces could not be READ, which is not the same as there being none.
+///
+/// The distinction matters because the remedies are unrelated: "connect this
+/// machine to a network" is useless advice to someone whose `/sys/class/net`
+/// could not be listed. Collapsing an error into an empty list is the same
+/// mistake as rendering an absent metric as zero — it turns "we do not know"
+/// into a confident claim.
+#[must_use]
+pub fn unreadable_interfaces(why: &str) -> Finding {
+    Finding::bad(
+        "network",
+        &format!("this machine's network interfaces could not be read: {why}"),
+        &["Whether another machine could reach this one is unknown, not no."],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,6 +187,28 @@ mod tests {
             "the operator needs to know what it breaks, not just that it is: {}",
             f.line
         );
+    }
+
+    /// "Could not look" and "looked and found none" are different facts with
+    /// unrelated remedies. Reporting the first as the second is the same
+    /// mistake as rendering an absent metric as zero.
+    #[test]
+    fn an_unreadable_interface_list_is_not_reported_as_having_no_addresses() {
+        let f = unreadable_interfaces("permission denied reading /sys/class/net");
+        assert!(f.problem);
+        assert!(f.line.contains("could not be read"), "{}", f.line);
+        assert!(
+            f.line.contains("permission denied"),
+            "the cause is the useful part: {}",
+            f.line
+        );
+        // The remedy for an empty list must not appear here.
+        assert!(
+            !f.line.contains("Connect this machine"),
+            "plugging in a cable does not fix an unreadable /sys: {}",
+            f.line
+        );
+        assert!(f.line.contains("unknown, not no"), "{}", f.line);
     }
 
     #[test]
