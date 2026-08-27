@@ -14,7 +14,7 @@
 //! a node out of that state, and only the pin store records it.
 
 use crate::discovery::Beacon;
-use crate::identity::{Identity, Pin, PinStore};
+use crate::identity::{Identity, PinStore};
 use anyhow::Result;
 use atlasctl_protocol::fleet::{
     DisplayName, Launchability, NodeAddress, NodeAlert, NodeDescriptor, NodeId, NodeVitals,
@@ -51,6 +51,34 @@ pub trait FleetView: Send + Sync {
     /// If the peer is unknown, unreachable, or the ceremony fails.
     fn pair(&self, node: NodeId, code: &str) -> Result<PairOutcome>;
 
+    /// Run the ceremony against an address the operator typed.
+    ///
+    /// Distinct from [`Self::pair`] because there is no expected identity to
+    /// verify against — nothing was discovered, so the caller learns who
+    /// answered from the returned outcome. That is not weaker: `pair`'s
+    /// identity check exists to stop a machine at a beacon's address being
+    /// pinned under the identity of the one the operator *selected*, and here
+    /// the operator selected an address, not an identity.
+    ///
+    /// # Errors
+    /// If the target does not resolve, is unreachable, or the ceremony fails.
+    fn pair_at(&self, target: &str, code: &str) -> Result<PairOutcome>;
+
+    /// Write the pin for an exchange a human has accepted.
+    ///
+    /// Split from [`Self::pair`] so nothing is trusted until somebody says the
+    /// words matched. The caller holds the [`PairOutcome`] in the meantime; if
+    /// it never confirms, no pin is ever written and there is nothing to undo.
+    ///
+    /// `allow_control` writes the `controller` grant with the pin — one
+    /// atomic decision, taken at the moment a human is already deciding to
+    /// trust the machine. It defaults to nothing: pairing authenticates, and
+    /// only this explicit flag (or `atlasctl peer grant-control`) authorizes.
+    ///
+    /// # Errors
+    /// If the pin store cannot be written.
+    fn trust(&self, outcome: &PairOutcome, allow_control: bool) -> Result<()>;
+
     /// Drop trust in a peer. Returns whether it was trusted.
     ///
     /// # Errors
@@ -74,11 +102,25 @@ pub trait PeerPairing: Send + Sync {
     fn pair(&self, addr: std::net::SocketAddr, code: &str) -> Result<crate::peer::pair::Paired>;
 }
 
-/// The result of a successful pairing.
+/// A completed exchange, not yet trusted.
+///
+/// Everything [`FleetView::trust`] needs to write a pin, held so the write can
+/// wait for a human. Before two-phase pairing this was written the moment the
+/// ceremony returned and the words were shown afterwards, which made comparing
+/// them a formality — the machine an operator went on to reject had already
+/// been trusted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairOutcome {
-    /// Who was paired.
+    /// Who completed the exchange.
     pub node: NodeId,
+    /// The key that would be pinned, hex encoded, exactly as the ceremony
+    /// produced it.
+    pub public_key: String,
+    /// What that machine calls itself.
+    pub name: String,
+    /// Where it was reached, recorded with the pin so a later dial has a
+    /// starting point.
+    pub address: String,
     /// Short words both humans compare before trusting.
     pub verification: String,
 }
@@ -116,7 +158,14 @@ pub struct LocalFleet {
     /// Separate from `seen`, and it must stay separate: a beacon says where a
     /// machine claims to be, while this is what a machine holding the key we
     /// pinned actually said. Only the second is evidence.
-    reports: Mutex<BTreeMap<NodeId, crate::peer::link::PeerReport>>,
+    ///
+    /// The instant is when the report was recorded, so a vouch built from it
+    /// can state how old its vitals are instead of presenting them as fresh.
+    reports: Mutex<BTreeMap<NodeId, (crate::peer::link::PeerReport, Instant)>>,
+    /// Second-hand knowledge: what pinned peers say about THEIR pins.
+    /// Everything about it lives in [`vouched`], including the rule that it
+    /// never feeds this agent's own digest.
+    vouches: vouched::VouchTable,
     /// How to run the ceremony, when this agent can.
     pairing: Option<Box<dyn PeerPairing>>,
 }
@@ -153,6 +202,7 @@ impl LocalFleet {
             alerts: Mutex::new(BTreeMap::new()),
             running: Mutex::new(None),
             reports: Mutex::new(BTreeMap::new()),
+            vouches: vouched::VouchTable::default(),
             pairing: None,
         }
     }
@@ -245,11 +295,22 @@ impl LocalFleet {
     /// Record what a peer said over the authenticated channel.
     pub fn record_report(&self, report: crate::peer::link::PeerReport) {
         if let Ok(mut r) = self.reports.lock() {
-            r.insert(report.node, report);
+            r.insert(report.node, (report, Instant::now()));
         }
     }
 
     /// Forget what a peer said, because it stopped answering.
+    ///
+    /// Its vouches deliberately stay. Routing is already safe without dropping
+    /// them — `choose_voucher` requires a live report from the voucher — so
+    /// dropping them buys nothing there, and costs the operator their fleet: a
+    /// machine reached through this peer would VANISH the moment it missed a
+    /// poll, which reads as "you never paired that". It stays, `Vouched` with
+    /// `reached_via: None`, so the page can say it is behind a machine that is
+    /// not answering. Second-hand vitals age out on their own stated age.
+    ///
+    /// `unpair` is the other case and does clear them: a peer no longer
+    /// trusted is not trusted to have said anything.
     pub fn clear_report(&self, node: NodeId) {
         if let Ok(mut r) = self.reports.lock() {
             r.remove(&node);
@@ -320,6 +381,7 @@ impl LocalFleet {
         if let Ok(mut seen) = self.seen.lock() {
             seen.retain(|id, s| pinned.contains_key(id) || s.at.elapsed() < UNREACHABLE_AFTER);
         }
+        self.prune_vouches();
     }
 
     pub(crate) fn lock_seen(&self) -> Option<MutexGuard<'_, BTreeMap<NodeId, Seen>>> {
@@ -362,63 +424,32 @@ impl LocalFleet {
                 .and_then(|a| a.get(&self.identity.id()).cloned())
                 .unwrap_or_default(),
             running: self.running.lock().ok().and_then(|r| r.clone()),
+            // This machine: identity is first-hand by definition, and a verb
+            // aimed at it never rides a relay.
+            vouched_by: None,
+            reached_via: None,
         }
     }
 }
 
-/// Record a completed pairing.
-///
-/// Separate from [`FleetView::pair`] so the ceremony's transport and its
-/// bookkeeping are not tangled: whatever drives the exchange calls this once,
-/// and only once key confirmation has passed.
-///
-/// # Errors
-/// If the pin store cannot be written.
-pub fn record_pairing(
-    pins: &PinStore,
-    node: NodeId,
-    public_key_hex: &str,
-    name: DisplayName,
-    now_unix: u64,
-    last_address: Option<String>,
-) -> Result<()> {
-    pins.add(Pin {
-        id: node,
-        public_key: public_key_hex.to_owned(),
-        name,
-        paired_at: now_unix,
-        last_address,
-    })
-}
-
-/// Remember where a paired peer was last seen.
-///
-/// Called when a beacon refreshes, so the address survives an agent restart.
-///
-/// # Errors
-/// If the pin store cannot be read or written.
-pub fn remember_address(pins: &PinStore, node: NodeId, addr: &str) -> Result<()> {
-    let mut all = pins.load()?;
-    if let Some(pin) = all.get_mut(&node)
-        && pin.last_address.as_deref() != Some(addr)
-    {
-        pin.last_address = Some(addr.to_owned());
-        let updated = pin.clone();
-        pins.add(updated)?;
-    }
-    Ok(())
-}
-
-/// Vitals a provider could not supply at all.
-#[must_use]
-pub fn no_vitals() -> NodeVitals {
-    NodeVitals::default()
-}
-
 mod listing;
+#[path = "fleet/pinning.rs"]
+mod pinning;
+pub mod routing;
 pub mod vitals;
+pub mod vouched;
+
+#[cfg(test)]
+#[path = "fleet/routing_tests.rs"]
+mod routing_tests;
+
+#[cfg(test)]
+#[path = "fleet/vouched_tests.rs"]
+mod vouched_tests;
 
 pub use vitals::{
     DockerRunning, RunningSource, SystemVitals, VitalsSource, docker_probe_argv,
     running_probe_argv, vitals_from_device,
 };
+
+pub use pinning::{no_vitals, record_pairing, remember_address};

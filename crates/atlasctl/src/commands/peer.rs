@@ -7,7 +7,7 @@
 //! single command that takes effect on the very next connection, because a
 //! revocation that needs a restart is not a revocation.
 
-use crate::cli::{PeerAddArgs, PeerRemoveArgs};
+use crate::cli::{PeerAddArgs, PeerNodeArgs};
 use anyhow::{Context, Result, bail};
 use atlasctl_agent::discovery::resolve_manual;
 use atlasctl_agent::identity::{Identity, PinStore};
@@ -24,20 +24,58 @@ pub fn list() -> Result<()> {
     if pins.is_empty() {
         println!("No paired machines.");
         println!();
-        println!("Run `atlasctl agent pair` on the machine you want to add, then");
-        println!("`atlasctl peer add <host> --code <digits>` here.");
+        // NOT "run `atlasctl agent pair` there". That command binds the peer
+        // port, which a running agent already holds — and a machine you would
+        // add to a fleet is usually one whose agent is already running, because
+        // installing it starts it. Both directions are named, with the
+        // condition that picks between them.
+        println!("To add one, either:");
+        println!("  · open this machine's control page and use \"Show me how\" —");
+        println!("    it hands you one line to run on the machine you are adding; or");
+        println!("  · if that machine's agent is NOT running, run `atlasctl agent pair`");
+        println!("    there and type its code into `atlasctl peer add <host> --code <digits>`.");
         return Ok(());
     }
-    println!("{:<20}  {:<20}  PAIRED", "NAME", "FINGERPRINT");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    println!(
+        "{:<20}  {:<20}  {:<12}  CONTROL",
+        "NAME", "FINGERPRINT", "PAIRED"
+    );
     for pin in pins.values() {
         println!(
-            "{:<20}  {:<20}  {}",
+            "{:<20}  {:<20}  {:<12}  {}",
             pin.name.as_str(),
             pin.id.short(),
-            pin.paired_at
+            age_text(pin.paired_at, now),
+            // The grant that lets that machine drive this one. Invisible until
+            // now, which made it impossible to audit: an operator could not
+            // answer "who can run commands on my box?" from anywhere.
+            if pin.controller { "yes" } else { "—" }
         );
     }
     Ok(())
+}
+
+/// How long ago something happened, for a column a human reads.
+///
+/// `paired_at` is a unix timestamp, and printing it raw put a ten-digit number
+/// in front of the operator — technically the answer and useless as one.
+///
+/// Pure, with `now` passed in, so it is testable without waiting for time to
+/// pass. A clock that runs backwards (NTP correction, a pin written on another
+/// machine) yields "just now" rather than a negative age.
+#[must_use]
+pub fn age_text(then: u64, now: u64) -> String {
+    let secs = now.saturating_sub(then);
+    match secs {
+        0..=59 => "just now".to_owned(),
+        60..=3599 => format!("{} min ago", secs / 60),
+        3600..=86_399 => format!("{} h ago", secs / 3600),
+        86_400..=2_591_999 => format!("{} d ago", secs / 86_400),
+        _ => format!("{} mo ago", secs / 2_592_000),
+    }
 }
 
 /// Pair with a machine by address.
@@ -100,6 +138,9 @@ pub fn add(args: &PeerAddArgs) -> Result<()> {
         DisplayName::new(&paired.name),
         now_unix(),
         Some(addr.ip().to_string()),
+        // Pairing authenticates only: the controller grant stays a
+        // separate, explicit act (`atlasctl peer grant-control`).
+        false,
     )?;
     println!("Paired with {} ({}).", paired.name, paired.node.short());
     Ok(())
@@ -109,36 +150,75 @@ pub fn add(args: &PeerAddArgs) -> Result<()> {
 ///
 /// # Errors
 /// If the prefix matches no peer, or more than one.
-pub fn remove(args: &PeerRemoveArgs) -> Result<()> {
-    let dir = crate::hostinfo::usable_config_dir()?;
-    let pins = PinStore::new(&dir);
-    let all = pins.load()?;
+pub fn remove(args: &PeerNodeArgs) -> Result<()> {
+    let pins = PinStore::new(&crate::hostinfo::usable_config_dir()?);
+    let (node, name) = resolve_prefix(&pins, &args.node)?;
+    pins.remove(node)?;
+    println!("Unpaired {name} ({}).", node.short());
+    println!("It will be refused on its next connection.");
+    Ok(())
+}
 
-    // A prefix is what people actually have to hand — the short form printed by
-    // `peer list`. Requiring uniqueness rather than taking the first match is
-    // what stops an ambiguous prefix from unpairing the wrong machine.
+/// Let a paired machine drive this one's launch surface.
+///
+/// # Errors
+/// If the prefix matches no peer, or more than one.
+pub fn grant_control(args: &PeerNodeArgs) -> Result<()> {
+    let pins = PinStore::new(&crate::hostinfo::usable_config_dir()?);
+    let (node, name) = resolve_prefix(&pins, &args.node)?;
+    // resolve_prefix just proved the pin exists; a false here means it
+    // vanished between the read and the write, which must not pass silently.
+    anyhow::ensure!(
+        pins.set_controller(node, true)?,
+        "{name} disappeared from the pin store before the grant was written"
+    );
+    println!("Granted control to {name} ({}).", node.short());
+    println!("It may now start, stop, and inspect launches on this machine,");
+    println!("and ask this machine to forward those verbs to its own peers.");
+    println!(
+        "Withdraw with `atlasctl peer revoke-control {}`.",
+        node.short()
+    );
+    Ok(())
+}
+
+/// Withdraw the control grant.
+///
+/// # Errors
+/// If the prefix matches no peer, or more than one.
+pub fn revoke_control(args: &PeerNodeArgs) -> Result<()> {
+    let pins = PinStore::new(&crate::hostinfo::usable_config_dir()?);
+    let (node, name) = resolve_prefix(&pins, &args.node)?;
+    anyhow::ensure!(
+        pins.set_controller(node, false)?,
+        "{name} disappeared from the pin store before the revocation was written"
+    );
+    println!("Revoked control from {name} ({}).", node.short());
+    println!("The machine stays paired; control is refused on its next request.");
+    Ok(())
+}
+
+/// Resolve a fingerprint prefix to exactly one pinned peer.
+///
+/// A prefix is what people actually have to hand — the short form printed by
+/// `peer list`. Requiring uniqueness rather than taking the first match is
+/// what stops an ambiguous prefix from unpairing — or granting control to —
+/// the wrong machine.
+fn resolve_prefix(pins: &PinStore, prefix: &str) -> Result<(NodeId, String)> {
+    let all = pins.load()?;
     let matches: Vec<NodeId> = all
         .keys()
-        .filter(|id| id.to_string().starts_with(&args.node.to_lowercase()))
+        .filter(|id| id.to_string().starts_with(&prefix.to_lowercase()))
         .copied()
         .collect();
 
     match matches.as_slice() {
-        [] => bail!("no paired machine matches {}", args.node),
-        [one] => {
-            let name = all[one].name.as_str().to_owned();
-            pins.remove(*one)?;
-            println!("Unpaired {name} ({}).", one.short());
-            println!("It will be refused on its next connection.");
-            Ok(())
-        }
-        many => {
-            bail!(
-                "{} matches {} machines; use more characters",
-                args.node,
-                many.len()
-            )
-        }
+        [] => bail!("no paired machine matches {prefix}"),
+        [one] => Ok((*one, all[one].name.as_str().to_owned())),
+        many => bail!(
+            "{prefix} matches {} machines; use more characters",
+            many.len()
+        ),
     }
 }
 
@@ -147,4 +227,33 @@ fn now_unix() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
+}
+
+#[cfg(test)]
+mod list_tests {
+    use super::age_text;
+
+    #[test]
+    fn an_age_reads_as_a_human_would_say_it() {
+        const H: u64 = 3600;
+        const D: u64 = 86_400;
+        assert_eq!(age_text(1000, 1000), "just now");
+        assert_eq!(age_text(1000, 1059), "just now");
+        assert_eq!(age_text(0, 60), "1 min ago");
+        assert_eq!(age_text(0, 59 * 60), "59 min ago");
+        assert_eq!(age_text(0, H), "1 h ago");
+        assert_eq!(age_text(0, 23 * H), "23 h ago");
+        assert_eq!(age_text(0, D), "1 d ago");
+        assert_eq!(age_text(0, 29 * D), "29 d ago");
+        assert_eq!(age_text(0, 40 * D), "1 mo ago");
+    }
+
+    /// A pin written on another machine, or an NTP correction, can put
+    /// `paired_at` in the future. A negative age would print as a wrapped
+    /// number the size of the universe; "just now" is wrong by seconds instead.
+    #[test]
+    fn a_clock_that_ran_backwards_does_not_wrap() {
+        assert_eq!(age_text(9_999, 1_000), "just now");
+        assert_eq!(age_text(u64::MAX, 0), "just now");
+    }
 }

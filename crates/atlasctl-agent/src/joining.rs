@@ -41,6 +41,11 @@ struct Pending {
     code: PairingCode,
     opened: Instant,
     attempts: u8,
+    /// Whether the machine that joins through this window is granted the
+    /// `controller` right when its pin is written. Recorded at mint time —
+    /// the moment the human decided — and read back exactly once, when the
+    /// invitation is consumed.
+    allow_control: bool,
 }
 
 /// This machine's join window. Closed unless a human has just opened it.
@@ -63,7 +68,9 @@ impl JoinWindow {
     /// Replacing rather than refusing: an operator who asks again has decided
     /// the previous code is not going to be used, and leaving both alive would
     /// widen the window for no reason.
-    pub fn mint(&self) -> Result<String> {
+    /// `allow_control` grants the joining machine the `controller` right at
+    /// the moment its pin is written; false is the ordinary invitation.
+    pub fn mint(&self, allow_control: bool) -> Result<String> {
         let code = PairingCode::generate();
         let digits = code.as_str().to_owned();
         let mut slot = self.lock()?;
@@ -71,6 +78,7 @@ impl JoinWindow {
             code,
             opened: Instant::now(),
             attempts: 0,
+            allow_control,
         });
         Ok(digits)
     }
@@ -164,16 +172,23 @@ impl JoinWindow {
         Some(p.code.as_str().to_owned())
     }
 
-    /// Close the window because it was used, reporting whether *this* caller
-    /// closed it.
+    /// Close the window because it was used, reporting what the spent
+    /// invitation granted.
     ///
-    /// `false` means someone else already spent the invitation. A caller that
+    /// `None` means someone else already spent the invitation. A caller that
     /// has just completed a ceremony must then refuse the pairing: two peers
     /// racing the same code would otherwise both be admitted, and single use
-    /// is the property the whole window exists to provide.
+    /// is the property the whole window exists to provide. `Some` carries the
+    /// grant the human chose at mint time, so the pin write cannot read it
+    /// from a slot another mint may since have replaced.
     #[must_use]
-    pub fn consume(&self) -> bool {
-        self.lock().map(|mut s| s.take().is_some()).unwrap_or(false)
+    pub fn consume(&self) -> Option<Consumed> {
+        self.lock()
+            .ok()
+            .and_then(|mut s| s.take())
+            .map(|p| Consumed {
+                allow_control: p.allow_control,
+            })
     }
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, Option<Pending>>> {
@@ -181,6 +196,13 @@ impl JoinWindow {
             .lock()
             .map_err(|_| anyhow::anyhow!("the join window lock is poisoned"))
     }
+}
+
+/// What a spent invitation granted, read exactly once at consumption.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Consumed {
+    /// Whether the joining machine's pin carries the `controller` right.
+    pub allow_control: bool,
 }
 
 /// Whether a string could be a join code at all.
@@ -204,7 +226,7 @@ mod tests {
     #[test]
     fn a_minted_code_is_eight_digits_and_opens_the_window() {
         let w = JoinWindow::default();
-        let code = w.mint().expect("mints");
+        let code = w.mint(false).expect("mints");
         assert!(looks_like_code(&code), "{code}");
         assert!(w.is_open());
         assert_eq!(w.begin_attempt().as_deref(), Some(code.as_str()));
@@ -215,10 +237,35 @@ mod tests {
     #[test]
     fn using_the_window_closes_it() {
         let w = JoinWindow::default();
-        w.mint().expect("mints");
-        assert!(w.consume(), "the first caller spends the invitation");
+        w.mint(false).expect("mints");
+        assert!(
+            w.consume().is_some(),
+            "the first caller spends the invitation"
+        );
         assert!(!w.is_open());
         assert!(w.begin_attempt().is_none());
+    }
+
+    /// The grant chosen at mint time is what consumption reports — the pin
+    /// write must not read it from a slot a later mint may have replaced.
+    #[test]
+    fn the_consumed_invitation_carries_the_grant_the_human_chose() {
+        let w = JoinWindow::default();
+        w.mint(true).expect("mints");
+        assert_eq!(
+            w.consume(),
+            Some(Consumed {
+                allow_control: true
+            })
+        );
+
+        w.mint(false).expect("mints");
+        assert_eq!(
+            w.consume(),
+            Some(Consumed {
+                allow_control: false
+            })
+        );
     }
 
     /// Two ceremonies can complete against one code if they overlap. Only one
@@ -226,10 +273,10 @@ mod tests {
     #[test]
     fn only_the_first_consumer_may_admit_a_machine() {
         let w = JoinWindow::default();
-        w.mint().expect("mints");
-        assert!(w.consume(), "first ceremony wins the invitation");
+        w.mint(false).expect("mints");
+        assert!(w.consume().is_some(), "first ceremony wins the invitation");
         assert!(
-            !w.consume(),
+            w.consume().is_none(),
             "the second must be told the invitation was already spent, or one \
              code admits two machines"
         );
@@ -239,7 +286,7 @@ mod tests {
     #[test]
     fn the_window_closes_after_the_attempt_limit() {
         let w = JoinWindow::default();
-        w.mint().expect("mints");
+        w.mint(false).expect("mints");
         for _ in 0..MAX_ATTEMPTS {
             let _ = w.begin_attempt();
         }
@@ -251,7 +298,7 @@ mod tests {
     #[test]
     fn a_single_failure_leaves_the_window_open() {
         let w = JoinWindow::default();
-        w.mint().expect("mints");
+        w.mint(false).expect("mints");
         let _ = w.begin_attempt();
         assert!(w.is_open());
     }
@@ -264,7 +311,7 @@ mod tests {
     fn concurrent_attempts_cannot_exceed_the_budget() {
         use std::sync::Arc;
         let w = Arc::new(JoinWindow::default());
-        w.mint().expect("mints");
+        w.mint(false).expect("mints");
         let handles: Vec<_> = (0..32)
             .map(|_| {
                 let w = Arc::clone(&w);
@@ -285,8 +332,8 @@ mod tests {
     #[test]
     fn minting_again_replaces_rather_than_adds() {
         let w = JoinWindow::default();
-        let first = w.mint().expect("mints");
-        let second = w.mint().expect("mints");
+        let first = w.mint(false).expect("mints");
+        let second = w.mint(false).expect("mints");
         assert_ne!(first, second);
         assert_eq!(w.begin_attempt().as_deref(), Some(second.as_str()));
     }
@@ -294,7 +341,7 @@ mod tests {
     #[test]
     fn revoking_closes_it() {
         let w = JoinWindow::default();
-        w.mint().expect("mints");
+        w.mint(false).expect("mints");
         w.revoke();
         assert!(!w.is_open());
     }
@@ -304,10 +351,10 @@ mod tests {
     #[test]
     fn a_new_code_gets_a_fresh_attempt_budget() {
         let w = JoinWindow::default();
-        w.mint().expect("mints");
+        w.mint(false).expect("mints");
         let _ = w.begin_attempt();
         let _ = w.begin_attempt();
-        w.mint().expect("mints again");
+        w.mint(false).expect("mints again");
         let _ = w.begin_attempt();
         let _ = w.begin_attempt();
         assert!(w.is_open(), "the earlier failures must not carry over");
@@ -318,7 +365,7 @@ mod tests {
     #[test]
     fn the_final_permitted_attempt_can_still_pair() {
         let w = JoinWindow::default();
-        w.mint().expect("mints");
+        w.mint(false).expect("mints");
         for _ in 0..(MAX_ATTEMPTS - 1) {
             assert!(
                 w.begin_attempt().is_some(),
@@ -330,7 +377,7 @@ mod tests {
             "the last permitted attempt must still get the code"
         );
         assert!(
-            w.consume(),
+            w.consume().is_some(),
             "and succeeding on it must count as spending the invitation, not as \
              losing a race to another machine"
         );
@@ -341,13 +388,13 @@ mod tests {
     #[test]
     fn a_late_caller_cannot_evict_the_winner() {
         let w = JoinWindow::default();
-        w.mint().expect("mints");
+        w.mint(false).expect("mints");
         for _ in 0..MAX_ATTEMPTS {
             assert!(w.begin_attempt().is_some());
         }
         assert!(w.begin_attempt().is_none(), "over budget is refused");
         assert!(
-            w.consume(),
+            w.consume().is_some(),
             "the holder of the last reservation must still be able to spend it"
         );
     }

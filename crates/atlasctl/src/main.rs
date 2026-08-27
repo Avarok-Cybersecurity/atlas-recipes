@@ -58,14 +58,16 @@ fn run() -> Result<()> {
         Command::Registry(RegistryCmd::Remove(a)) => commands::registry::remove(&a),
         Command::Registry(RegistryCmd::Update(a)) => commands::registry::update(&a),
         Command::Agent(AgentCmd::Run(a)) => commands::agent::run(&a),
-        Command::Agent(AgentCmd::Token(a)) => commands::agent::token(&a),
-        Command::Agent(AgentCmd::Status(a)) => commands::agent::status(&a),
+        Command::Agent(AgentCmd::Token(a)) => commands::agentinfo::token(&a),
+        Command::Agent(AgentCmd::Status(a)) => commands::agentinfo::status(&a),
         Command::Agent(AgentCmd::Pair(a)) => commands::agentpair::pair(&a),
         Command::Agent(AgentCmd::Install(a)) => commands::service::install(&a),
         Command::Agent(AgentCmd::Uninstall) => commands::service::uninstall(),
         Command::Peer(PeerCmd::List) => commands::peer::list(),
         Command::Peer(PeerCmd::Add(a)) => commands::peer::add(&a),
         Command::Peer(PeerCmd::Remove(a)) => commands::peer::remove(&a),
+        Command::Peer(PeerCmd::GrantControl(a)) => commands::peer::grant_control(&a),
+        Command::Peer(PeerCmd::RevokeControl(a)) => commands::peer::revoke_control(&a),
         Command::Doctor => commands::doctor::run(),
     }
 }

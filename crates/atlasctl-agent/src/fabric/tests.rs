@@ -45,29 +45,52 @@ fn real_dgx_spark() -> Vec<RawIface> {
 }
 
 #[test]
-fn the_real_spark_table_selects_roce_and_nothing_else() {
-    let addrs = usable_addresses(&real_dgx_spark());
+fn the_real_spark_table_offers_roce_first_and_wifi_last() {
+    let addrs = reachable_addresses(&real_dgx_spark());
 
-    // Both RoCE ports survive, best-first, and nothing else does.
+    // Both RoCE ports lead, best-first. Wi-Fi is REACHABLE — another machine
+    // can dial it — so it is reported, ranked below the fabric. It used to be
+    // dropped here, which made a Wi-Fi-only machine advertise no address at all.
     let names: Vec<&str> = addrs.iter().map(|a| a.iface.as_str()).collect();
-    assert_eq!(names, ["enp1s0f0np0", "enp1s0f1np1"]);
-    assert!(addrs.iter().all(|a| a.class == LinkClass::Roce));
-    assert!(addrs.iter().all(|a| a.rdma));
+    assert_eq!(names, ["enp1s0f0np0", "enp1s0f1np1", "wlP9s9"]);
+    assert!(addrs[0].rdma && addrs[1].rdma);
 
-    // The specific traps, stated so a regression names itself.
+    // The traps, stated so a regression names itself. These are the links that
+    // are reachable from HERE and from nowhere else, and they must never be
+    // offered however routable they look.
     assert!(
         !names.contains(&"docker_gwbridge"),
-        "an UP docker bridge must never be offered as a cluster address"
+        "an UP docker bridge must never be offered: every machine has one on the \
+         same private range, so it 'shares a subnet' with everything"
     );
     assert!(
         !names.contains(&"dummy0"),
         "10.10.10.1 lives on a dummy interface: it looks authoritative and routes nowhere"
     );
+    assert!(!names.contains(&"lo"), "loopback reaches no other machine");
+}
+
+/// Widening the source list must not widen what a COLLECTIVE will use. The two
+/// questions are asked in different places on purpose, and this pins that the
+/// cluster answer is unchanged on the box the numbers were measured on.
+#[test]
+fn wifi_is_reported_but_a_collective_still_picks_roce() {
+    let addrs = reachable_addresses(&real_dgx_spark());
     assert!(
-        !names.contains(&"wlP9s9"),
-        "wifi is the only routable link on this box, and is still not a fabric"
+        addrs.iter().any(|a| a.class == LinkClass::Wireless),
+        "wifi must be reported, or the machine cannot say where to dial it"
     );
-    assert!(!names.contains(&"lo"), "loopback is not a cluster address");
+
+    let for_cluster: Vec<&str> = addrs
+        .iter()
+        .filter(|a| a.class.usable_for_cluster())
+        .map(|a| a.iface.as_str())
+        .collect();
+    assert_eq!(
+        for_cluster,
+        ["enp1s0f0np0", "enp1s0f1np1"],
+        "wifi is still not a fabric"
+    );
 }
 
 #[test]
@@ -88,7 +111,7 @@ fn classification_is_by_what_the_link_is_not_what_it_is_called() {
 #[test]
 fn an_interface_with_no_carrier_is_not_offered() {
     // enP7s7 and docker0 are both DOWN on the real box.
-    let addrs = usable_addresses(&[
+    let addrs = reachable_addresses(&[
         iface("eth0", &["10.0.0.1"], false, Some(1000)),
         iface("eth1", &["10.0.0.2"], true, Some(1000)),
     ]);
@@ -98,7 +121,7 @@ fn an_interface_with_no_carrier_is_not_offered() {
 
 #[test]
 fn an_interface_with_a_carrier_but_no_address_is_not_offered() {
-    let addrs = usable_addresses(&[iface("veth0", &[], true, Some(10_000))]);
+    let addrs = reachable_addresses(&[iface("veth0", &[], true, Some(10_000))]);
     assert!(addrs.is_empty());
 }
 
@@ -106,7 +129,7 @@ fn an_interface_with_a_carrier_but_no_address_is_not_offered() {
 fn an_amd_style_ethernet_only_box_still_forms_a_cluster_but_warns() {
     // Strix Halo has no RoCE. The state machine must still produce a usable
     // address rather than refusing, and the class must be one that warns.
-    let addrs = usable_addresses(&[
+    let addrs = reachable_addresses(&[
         iface("enp4s0", &["192.168.1.40"], true, Some(2500)),
         iface("docker0", &["172.17.0.1"], true, None),
     ]);
@@ -132,15 +155,15 @@ fn ordering_is_stable_when_links_are_identical() {
             ..iface("enp1s0f0np0", &["10.10.10.9"], true, Some(200_000))
         },
     ];
-    let a = usable_addresses(&table);
-    let b = usable_addresses(&table);
+    let a = reachable_addresses(&table);
+    let b = reachable_addresses(&table);
     assert_eq!(a, b);
     assert_eq!(a[0].iface, "enp1s0f0np0", "ties break by name, ascending");
 }
 
 #[test]
 fn a_faster_link_of_the_same_class_wins() {
-    let addrs = usable_addresses(&[
+    let addrs = reachable_addresses(&[
         iface("eth0", &["10.0.0.1"], true, Some(1000)),
         iface("eth1", &["10.0.1.1"], true, Some(25_000)),
     ]);

@@ -56,6 +56,11 @@ pub enum PairingState {
     Paired,
     /// Was paired, and is not answering.
     Unreachable,
+    /// Known only because a machine this agent has pinned vouches for it.
+    /// Carries NO cryptographic trust from this agent: pairing with it still
+    /// requires the full ceremony against it directly. A UI that renders this
+    /// as `Paired` is lying to the operator about who verified what.
+    Vouched,
 }
 
 /// A reading, or an explicit statement that this hardware cannot answer.
@@ -238,6 +243,24 @@ pub struct NodeDescriptor {
     pub alerts: Vec<NodeAlert>,
     /// Recipe currently running on this node, if any.
     pub running: Option<String>,
+    /// Which pinned peer vouches for this node, when any does.
+    ///
+    /// Orthogonal to `pairing`: a node can be Paired AND vouched (the vouch is
+    /// retained as labeled corroboration), or Vouched only. Split from
+    /// `reached_via` because HOW IDENTITY IS KNOWN and HOW CONTROL IS ROUTED
+    /// are different facts and neither may be inferred from the other.
+    ///
+    /// Defaulted so a descriptor written before this field decodes as "no
+    /// voucher" rather than being refused.
+    #[serde(default)]
+    pub vouched_by: Option<NodeId>,
+    /// Which relay a control verb aimed at this node would flow through.
+    /// `None` = direct or local. Computed by the routing rule, never guessed
+    /// from `pairing`.
+    ///
+    /// Defaulted for the same reason as `vouched_by`.
+    #[serde(default)]
+    pub reached_via: Option<NodeId>,
 }
 
 impl NodeDescriptor {

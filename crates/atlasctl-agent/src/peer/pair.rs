@@ -89,6 +89,10 @@ where
         // Pairing is about identity, not topology; addresses are exchanged on
         // the authenticated channel once there is a pin to believe them under.
         addresses: Vec::new(),
+        version_max: Some(super::wire::PEER_PROTOCOL_MAX),
+        // Same reason as addresses: a fleet digest is a claim, and claims
+        // wait for the authenticated channel a completed pairing creates.
+        vouched: None,
     };
     let peer_hello = match role {
         Role::Initiator => {

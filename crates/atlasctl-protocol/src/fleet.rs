@@ -231,6 +231,28 @@ impl LinkClass {
         )
     }
 
+    /// Whether another machine could dial this one over this link.
+    ///
+    /// Deliberately NOT [`Self::usable_for_cluster`]. That question is "can
+    /// this link carry a collective?", and it answers no for wireless — which
+    /// is right for collectives and wrong for reaching a machine at all. A
+    /// pairing dial-back is control traffic, and this enum's own documentation
+    /// says wireless is "usable for control, never for a collective".
+    ///
+    /// Using the collective predicate here meant a laptop on Wi-Fi advertised
+    /// NO address in a join invitation, so the page built an empty command and
+    /// rendered an empty box with a Copy button beside it. That laptop is the
+    /// exact machine the invitation exists for: it cannot run models, so it
+    /// invites one that can.
+    ///
+    /// Loopback and virtual links stay excluded — they are reachable from here
+    /// and from nowhere else, so naming one produces a command that installs
+    /// cleanly on the far machine and then cannot dial back.
+    #[must_use]
+    pub const fn usable_for_control(self) -> bool {
+        !matches!(self, Self::Loopback | Self::Virtual)
+    }
+
     /// Whether using this link should raise a visible warning.
     #[must_use]
     pub const fn warns(self) -> bool {
@@ -284,10 +306,12 @@ pub struct NodeAddress {
 }
 
 pub mod node;
+pub mod vouch;
 
 pub use node::{
     AlertKind, Launchability, Metric, NodeAlert, NodeDescriptor, NodeVitals, PairingState, Severity,
 };
+pub use vouch::{MAX_VOUCHED, VouchedPeer};
 
 #[cfg(test)]
 mod tests;

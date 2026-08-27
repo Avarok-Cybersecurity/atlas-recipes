@@ -4,7 +4,7 @@
 
 use super::{Session, err};
 use atlasctl_protocol::RecipeId;
-use atlasctl_protocol::msg::{AgentError, ServerMsg};
+use atlasctl_protocol::msg::ServerMsg;
 
 /// Sampling a running launch.
 ///
@@ -32,48 +32,36 @@ pub trait LaunchTelemetry: Send + Sync {
 impl Session<'_> {
     /// How a running launch is doing.
     pub(super) fn launch_stats(&self, id: u32, recipe_id: &RecipeId) -> Vec<ServerMsg> {
-        let Some(telemetry) = self.deps.telemetry else {
-            return vec![err(Some(id), AgentError::NotReady)];
-        };
-        match telemetry.sample(recipe_id) {
+        match self.control().stats(recipe_id) {
             Ok(stats) => vec![ServerMsg::Stats {
                 id,
                 recipe: recipe_id.clone(),
                 stats,
+                // This machine answering its own browser directly; see the
+                // note in `session/launch.rs`.
+                on: None,
+                via: None,
             }],
-            // NotLaunchable rather than LaunchFailed: a model that has not
-            // finished loading is not answering yet, and calling that a launch
-            // failure would send an operator looking for a crash.
-            Err(reason) => vec![err(
-                Some(id),
-                AgentError::NotLaunchable {
-                    recipe: recipe_id.clone(),
-                    reason,
-                },
-            )],
+            // The core already maps "not answering yet" to NotLaunchable
+            // rather than LaunchFailed, so a model still loading its weights
+            // reads as "loading" and not as a crash to hunt for.
+            Err(e) => vec![err(Some(id), e)],
         }
     }
 
     /// The tail of a launch's log.
     pub(super) fn launch_logs(&self, id: u32, recipe_id: &RecipeId, lines: u32) -> Vec<ServerMsg> {
-        let Some(telemetry) = self.deps.telemetry else {
-            return vec![err(Some(id), AgentError::NotReady)];
-        };
-        match telemetry.logs(recipe_id, crate::logs::clamp_lines(lines)) {
+        match self.control().logs(recipe_id, lines) {
             Ok(tail) => vec![ServerMsg::Logs {
                 id,
                 recipe: recipe_id.clone(),
                 container: tail.container,
                 lines: tail.lines,
                 running: tail.running,
+                on: None,
+                via: None,
             }],
-            Err(reason) => vec![err(
-                Some(id),
-                AgentError::NotLaunchable {
-                    recipe: recipe_id.clone(),
-                    reason,
-                },
-            )],
+            Err(e) => vec![err(Some(id), e)],
         }
     }
 }

@@ -2,7 +2,7 @@
 
 //! What links this machine has, and which of them a collective may use.
 //!
-//! Split deliberately into two halves. [`classify`] and [`usable_addresses`]
+//! Split deliberately into two halves. [`classify`] and [`reachable_addresses`]
 //! are pure functions over [`RawIface`] values, so the whole selection policy
 //! is unit-testable against a recorded interface table with no hardware, no
 //! root, and no network. Reading the system to produce those values is the
@@ -20,6 +20,12 @@ use anyhow::Result;
 use atlasctl_protocol::fleet::{LinkClass, NodeAddress};
 
 pub mod linux;
+// Compiled for every test build, not only on macOS, because no Mac exists in
+// CI or on the dev boxes: the recorded-output parsers are the only part of the
+// backend a test can ever exercise, and gating them on `target_os` would leave
+// them tested nowhere. A Linux release build still never contains this module.
+#[cfg(any(test, target_os = "macos"))]
+pub mod macos;
 
 #[cfg(test)]
 mod tests;
@@ -60,6 +66,23 @@ const ARPHRD_LOOPBACK: u32 = 772;
 /// precisely nowhere.
 const VIRTUAL_PREFIXES: [&str; 7] = ["docker", "br-", "veth", "virbr", "dummy", "tun", "tap"];
 
+/// Interface name prefixes that are software constructs on macOS.
+///
+/// A separate list so the Linux one above stays exactly what it was, but
+/// checked unconditionally: [`classify`] must stay pure so a Linux CI box can
+/// assert the macOS verdicts, and none of these prefixes names physical
+/// hardware on Linux either — an interface called `bridge0` or `utun2` is a
+/// software construct wherever it appears. The stakes are the same as for
+/// `dummy`: `awdl`/`llw` (AWDL) and `utun` (VPNs) carry only link-local
+/// addresses, and `bridge0` is the Thunderbolt Bridge — every one of them
+/// looks like a link and is dialable from nowhere, so offering one mints a
+/// join invitation that cannot connect back. `ap1` is the Wi-Fi card's
+/// access-point personality, `anpi`/`gif`/`stf` are Apple debug and tunnel
+/// devices.
+const MACOS_VIRTUAL_PREFIXES: [&str; 9] = [
+    "bridge", "utun", "awdl", "llw", "ap1", "vmenet", "anpi", "gif", "stf",
+];
+
 /// Decide what kind of link an interface is.
 ///
 /// Pure. Order matters: loopback first because it is unambiguous, then the
@@ -69,7 +92,11 @@ pub fn classify(raw: &RawIface) -> LinkClass {
     if raw.arp_type == ARPHRD_LOOPBACK || raw.name == "lo" {
         return LinkClass::Loopback;
     }
-    if VIRTUAL_PREFIXES.iter().any(|p| raw.name.starts_with(p)) {
+    if VIRTUAL_PREFIXES
+        .iter()
+        .chain(&MACOS_VIRTUAL_PREFIXES)
+        .any(|p| raw.name.starts_with(p))
+    {
         return LinkClass::Virtual;
     }
     if raw.rdma {
@@ -99,11 +126,33 @@ fn split_prefix(raw: &str) -> (String, u8) {
 
 /// Turn a raw interface table into the addresses a peer may be reached on.
 ///
-/// Drops anything with no address, no carrier, or a class that cannot carry a
-/// cluster, then sorts best-link-first so the head of the list is the address a
-/// collective should use.
+/// Drops anything with no address, no carrier, or a link that is reachable only
+/// from this machine (loopback, and virtual interfaces like a docker bridge),
+/// then sorts best-link-first.
+///
+/// # Why this is not filtered for cluster use
+///
+/// It used to be, through `usable_for_cluster()` — the question "can this link
+/// carry a collective?", which answers NO for wireless. That is the right
+/// answer to that question and the wrong filter to apply HERE, because this
+/// list is the single source for four different consumers: the mDNS beacon, the
+/// node descriptor the browser renders, the addresses offered in a join
+/// invitation, and the cluster planner.
+///
+/// Only the last one wants the collective question. Applying it to all four
+/// meant a laptop on Wi-Fi enumerated its interfaces, dropped every one of
+/// them here, and went on to advertise no address at all — so it was
+/// undiscoverable, showed the operator no addresses, and minted join
+/// invitations with nowhere to dial. That laptop is exactly the machine the
+/// invitation exists for: it cannot run models, so it invites one that can.
+///
+/// The collective question is asked where it belongs, at each cluster use site
+/// — `NodeDescriptor::preferred_address`, `rendezvous::best_reachable`, and the
+/// shared-subnet search in `cluster.rs` all re-filter on `usable_for_cluster`.
+/// Reporting the truth once and narrowing per question is the only arrangement
+/// where a new consumer cannot silently inherit the wrong filter.
 #[must_use]
-pub fn usable_addresses(raws: &[RawIface]) -> Vec<NodeAddress> {
+pub fn reachable_addresses(raws: &[RawIface]) -> Vec<NodeAddress> {
     let mut out: Vec<NodeAddress> = raws
         .iter()
         .filter(|r| r.carrier)
@@ -121,7 +170,7 @@ pub fn usable_addresses(raws: &[RawIface]) -> Vec<NodeAddress> {
                 }
             })
         })
-        .filter(|a| a.class.usable_for_cluster())
+        .filter(|a| a.class.usable_for_control())
         .collect();
 
     // Best link first, then fastest, then by name so the order is stable across
@@ -153,7 +202,7 @@ pub trait FabricProvider: Send + Sync {
     /// # Errors
     /// If the system cannot be read at all.
     fn addresses(&self) -> Result<Vec<NodeAddress>> {
-        Ok(usable_addresses(&self.raw_interfaces()?))
+        Ok(reachable_addresses(&self.raw_interfaces()?))
     }
 }
 

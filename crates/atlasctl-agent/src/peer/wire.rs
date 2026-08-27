@@ -10,10 +10,14 @@
 //!
 //! Nothing here carries a command. The launch frame names a recipe and a rank;
 //! the receiving agent renders its own docker command from its own vendored
-//! copy. That is what bounds the damage a compromised head can do.
+//! copy. That is what bounds the damage a compromised head can do. The control
+//! frames keep the same bound: `ControlReq` names recipes, never commands,
+//! never containers it was not told about, and never another machine.
 
 use crate::cluster::{PrepareReply, RankAssignment};
 use anyhow::{Context, Result, bail};
+use atlasctl_protocol::fleet::{NodeId, VouchedPeer};
+use atlasctl_protocol::msg::{ControlRep, ControlReq};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -52,6 +56,28 @@ pub enum PeerFrame {
         /// "did not say" rather than refused.
         #[serde(default)]
         addresses: Vec<atlasctl_protocol::fleet::NodeAddress>,
+        /// Highest peer-protocol version this build can speak. Absent means a
+        /// build that predates the field, i.e. exactly `version`. This is the
+        /// browser channel's `protocol_min`/`protocol_max` idea applied here:
+        /// `version` stays 1 so the strict-equality check in every deployed
+        /// binary still passes, and new frames are gated on BOTH sides having
+        /// said `version_max >= 2`. A hard bump would have partitioned the
+        /// whole fleet — vitals, cluster, everything — during any rolling
+        /// upgrade, to protect a path most peers never exercise.
+        #[serde(default)]
+        version_max: Option<u32>,
+        /// Fleet digest: the peers this node has ITSELF pinned, and what each
+        /// said over this node's authenticated channel. `None` = did not say
+        /// (old build, or a per-verb cluster dial that passes `None` the way
+        /// it already passes empty `addresses`); `Some(vec![])` =
+        /// affirmatively no pins. At most [`MAX_VOUCHED`] entries. Built ONLY
+        /// from the pin store and the live report cache, never from received
+        /// digests — that structural rule, not a TTL, is what stops gossip
+        /// flooding.
+        ///
+        /// [`MAX_VOUCHED`]: atlasctl_protocol::fleet::MAX_VOUCHED
+        #[serde(default)]
+        vouched: Option<Vec<VouchedPeer>>,
     },
 
     /// Begin a pairing exchange. Carries the initiator's SPAKE2 message.
@@ -189,10 +215,55 @@ pub enum PeerFrame {
         /// The sample.
         vitals: Box<atlasctl_protocol::fleet::NodeVitals>,
     },
+
+    /// Forward one control request to a node the RECEIVER has itself pinned.
+    ///
+    /// Honored only from a sender whose pin carries `controller: true`, and
+    /// only for a `node` in the receiver's OWN pin store — never a vouched
+    /// entry, which is the one-hop rule enforced where it can be enforced.
+    /// Carries a `NodeId` and never an address, so the relay cannot be used
+    /// as an arbitrary-address proxy: it resolves the target from its own
+    /// state and dials over its own best link.
+    ControlTo {
+        /// The target, resolved from the receiver's own pin store.
+        node: NodeId,
+        /// What to ask of it.
+        req: ControlReq,
+    },
+
+    /// TERMINAL control frame: execute `req` HERE.
+    ///
+    /// No target field, on purpose. A relay handler only ever EMITS this
+    /// frame, and this frame cannot name anywhere else to go, so a chain
+    /// longer than origin -> relay -> target is unrepresentable — no TTL or
+    /// hop counter an intermediary could rewrite. Honored only from a sender
+    /// whose pin carries `controller: true`: without that check the terminal
+    /// frame would silently widen what every existing pin means, which is
+    /// the exact failure the grant exists to prevent.
+    Control {
+        /// What to execute, here.
+        req: ControlReq,
+    },
+
+    /// The answer to `Control` or `ControlTo`. A relay copies the target's
+    /// reply back verbatim, re-wrapped only in this frame.
+    ControlReply {
+        /// The answer.
+        rep: ControlRep,
+    },
 }
 
 /// Version of the peer protocol this build speaks.
 pub const PEER_PROTOCOL_VERSION: u32 = 1;
+
+/// Highest peer-protocol version this build can speak.
+///
+/// Version 2 = vouched fleet digests on `Hello`, plus the three control
+/// frames (`ControlTo` / `Control` / `ControlReply`). Advertised in
+/// `Hello.version_max` while `version` stays 1, so a v1 peer's strict
+/// equality check keeps passing and a rolling upgrade degrades instead of
+/// partitioning.
+pub const PEER_PROTOCOL_MAX: u32 = 2;
 
 /// Write one frame, length-prefixed.
 ///

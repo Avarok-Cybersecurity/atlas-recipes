@@ -12,6 +12,13 @@
 //!    `Unverified`, never a guess, and it carries no vitals at all.
 //! 3. A **pin with a remembered address** keeps a paired machine listed while it
 //!    is switched off, because it is still part of your fleet when it is off.
+//! 4. A **vouch** — a pinned peer's claim about a peer of ITS own — contributes
+//!    a descriptor only when none of the first-hand tiers above know the node
+//!    at all. It lists as [`PairingState::Vouched`] with `vouched_by` naming
+//!    the claimant, because rendering a claim with the same face as evidence
+//!    would lie to the operator about who verified what. When first-hand
+//!    evidence exists, the vouch contributes exactly one thing: `vouched_by`
+//!    as labeled corroboration. Fields are never blended across tiers.
 //!
 //! Anything seen but not pinned is listed, trusted by nobody, and shows no
 //! vitals: telemetry from a machine you have not paired is not evidence about
@@ -39,6 +46,10 @@ impl FleetView for LocalFleet {
     fn nodes(&self) -> Vec<NodeDescriptor> {
         let mut out = vec![self.local_node()];
         let pinned = self.pins.load().unwrap_or_default();
+        // Snapshotted before any guard below is taken: building it re-locks
+        // the report cache, and a std mutex re-acquired on this same thread
+        // would deadlock, not error.
+        let vouches = self.vouch_view();
         let seen = self.lock_seen();
         let alerts = self.alerts.lock().ok();
 
@@ -48,7 +59,7 @@ impl FleetView for LocalFleet {
         let reports = self.reports.lock().ok();
         for (id, pin) in &pinned {
             let sighting = seen.as_ref().and_then(|s| s.get(id));
-            let report = reports.as_ref().and_then(|r| r.get(id));
+            let report = reports.as_ref().and_then(|r| r.get(id)).map(|(r, _)| r);
             // A completed handshake is better evidence of liveness than a
             // beacon in either direction: a wedged agent can still broadcast,
             // and a healthy one goes quiet the moment a switch filters
@@ -144,6 +155,13 @@ impl FleetView for LocalFleet {
                     .and_then(|a| a.get(id).cloned())
                     .unwrap_or_default(),
                 running: None,
+                // First-hand knowledge wins every attribute above, but a
+                // vouch for a node we ALSO pinned is still worth labeling:
+                // corroboration, and the operator's map of who claims what.
+                vouched_by: vouches.get(id).map(|(voucher, _, _)| *voucher),
+                // A pinned target is dialled directly (the router's rule O2);
+                // claiming a relay here would show a route never taken.
+                reached_via: None,
             });
         }
 
@@ -168,8 +186,53 @@ impl FleetView for LocalFleet {
                     vitals: None,
                     alerts: Vec::new(),
                     running: None,
+                    // A sighting is first-hand placement; a vouch for the
+                    // same node is corroboration worth labeling, nothing
+                    // more — no field above came from it.
+                    vouched_by: vouches.get(id).map(|(voucher, _, _)| *voucher),
+                    // Seen on the wire ourselves: nothing routes through
+                    // anyone.
+                    reached_via: None,
                 });
             }
+        }
+
+        // Rung 4: nodes known ONLY through a voucher's claim. Everything on
+        // this descriptor is that claim, labeled as such — `Vouched`, never a
+        // treatment shared with `Paired`, because the one thing this tier
+        // must not do is make second-hand knowledge look verified.
+        for (target, (voucher, claim, route)) in &vouches {
+            if pinned.contains_key(target)
+                || seen.as_ref().is_some_and(|s| s.contains_key(target))
+                || *target == self.id()
+            {
+                continue;
+            }
+            out.push(NodeDescriptor {
+                id: *target,
+                name: claim.name.clone(),
+                is_local: false,
+                pairing: PairingState::Vouched,
+                // Display data only: control toward a vouched node rides its
+                // voucher, never a dial to an address someone else relayed.
+                addresses: claim.addresses.clone(),
+                launchability: as_launchability(claim.can_launch),
+                agent_version: String::new(),
+                accelerator: claim.accelerator.clone(),
+                os: claim.os.clone(),
+                // Second-hand vitals are shown only with a stated age inside
+                // the same staleness bound everything else uses. Vitals whose
+                // age is missing are dropped outright — an unknown age is not
+                // zero, and rendering them would present old data as fresh.
+                vitals: match claim.vitals_age_s {
+                    Some(age) if age <= UNREACHABLE_AFTER.as_secs() => claim.vitals.clone(),
+                    _ => None,
+                },
+                alerts: Vec::new(),
+                running: None,
+                vouched_by: Some(*voucher),
+                reached_via: *route,
+            });
         }
         out
     }
@@ -195,14 +258,28 @@ impl FleetView for LocalFleet {
         // The beacon says where it is; the ceremony decides whether it is who
         // it claims. An address from an unauthenticated beacon is safe to dial
         // precisely because dialling it proves nothing on its own.
-        let addr = seen
+        //
+        // EVERY address, in the order advertised, not just the first. The
+        // advertiser ranks its own links best-first, so the head of that list
+        // is its fabric — and its fabric is frequently the one link the dialler
+        // cannot reach. A laptop pairing with a DGX is handed 10.10.10.1 (RoCE,
+        // rank 4) ahead of the LAN address it actually shares, so dialling only
+        // the first timed out against a machine sitting on the same switch.
+        // Preference is still honoured; it is now a preference rather than the
+        // only attempt.
+        let addrs: Vec<std::net::SocketAddr> = seen
             .beacon
             .addresses
-            .first()
+            .iter()
             .map(|ip| std::net::SocketAddr::new(*ip, seen.beacon.peer_port))
-            .ok_or_else(|| anyhow::anyhow!("{} advertised no address to dial", seen.beacon.name))?;
+            .collect();
+        anyhow::ensure!(
+            !addrs.is_empty(),
+            "{} advertised no address to dial",
+            seen.beacon.name
+        );
 
-        let paired = driver.pair(addr, code)?;
+        let (addr, paired) = dial_first_reachable(driver.as_ref(), &addrs, code)?;
 
         // The ceremony authenticates the peer; this checks it is the peer the
         // operator asked for. Without it, a machine answering on that address
@@ -214,24 +291,73 @@ impl FleetView for LocalFleet {
             node.short()
         );
 
-        super::record_pairing(
-            &self.pins,
-            paired.node,
-            &paired.public_key,
-            atlasctl_protocol::fleet::DisplayName::new(&paired.name),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs()),
-            Some(addr.ip().to_string()),
-        )?;
-
+        // No pin is written here. The exchange proves both machines derived the
+        // same key; it does not prove the operator meant to trust this one, and
+        // that is what the words are for. `trust` writes it once they say so.
         Ok(PairOutcome {
             node: paired.node,
+            public_key: paired.public_key,
+            name: paired.name,
+            address: addr.ip().to_string(),
             verification: paired.verification,
         })
     }
 
+    fn pair_at(&self, target: &str, code: &str) -> Result<PairOutcome> {
+        anyhow::ensure!(
+            crate::pairing::looks_like_code(code),
+            "a pairing code is {} digits",
+            crate::pairing::CODE_DIGITS
+        );
+
+        let Some(driver) = self.pairing.as_ref() else {
+            anyhow::bail!("this agent has no peer transport, so it cannot run a pairing ceremony");
+        };
+
+        // A name can resolve to several addresses, and a machine on two subnets
+        // usually does. Try them all rather than whichever the resolver put
+        // first.
+        let addrs = crate::discovery::resolve_manual(target, crate::peer::DEFAULT_PEER_PORT)?;
+        anyhow::ensure!(!addrs.is_empty(), "{target} resolved to no address");
+
+        let (addr, paired) = dial_first_reachable(driver.as_ref(), &addrs, code)?;
+
+        // No identity assertion here, deliberately. `pair` checks that the
+        // machine which answered is the one the operator SELECTED from a list;
+        // here they selected an address, and there is no prior claim about who
+        // lives at it to check against. The identity that answered goes back in
+        // the outcome, and the operator judges it at the word comparison — the
+        // one step where a human is already deciding whether to trust this
+        // machine. Inventing an expectation to assert would only assert itself.
+        Ok(PairOutcome {
+            node: paired.node,
+            public_key: paired.public_key,
+            name: paired.name,
+            address: addr.ip().to_string(),
+            verification: paired.verification,
+        })
+    }
+
+    fn trust(&self, outcome: &PairOutcome, allow_control: bool) -> Result<()> {
+        super::record_pairing(
+            &self.pins,
+            outcome.node,
+            &outcome.public_key,
+            atlasctl_protocol::fleet::DisplayName::new(&outcome.name),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
+            Some(outcome.address.clone()),
+            allow_control,
+        )
+    }
+
     fn unpair(&self, node: NodeId) -> Result<bool> {
+        // Its vouches go with the pin, atomically from the caller's view:
+        // trust withdrawn from a machine withdraws every claim it made, so no
+        // route or listing row survives on the word of a peer no longer
+        // trusted to say anything.
+        self.clear_vouches(node);
         self.pins.remove(node)
     }
 }
@@ -260,4 +386,31 @@ fn addresses_of(beacon: &Beacon) -> Vec<NodeAddress> {
             rdma: false,
         })
         .collect()
+}
+
+/// Dial each candidate in order until one completes the ceremony.
+///
+/// Returns the address that answered together with its outcome, so the pin
+/// records where the machine actually was rather than where it was first
+/// guessed to be.
+///
+/// The errors are accumulated and reported together. Reporting only the last
+/// one would name whichever address happened to sort last — usually the least
+/// interesting failure — and hide the fact that several links were tried.
+fn dial_first_reachable(
+    driver: &dyn super::PeerPairing,
+    addrs: &[std::net::SocketAddr],
+    code: &str,
+) -> Result<(std::net::SocketAddr, crate::peer::pair::Paired)> {
+    let mut why: Vec<String> = Vec::new();
+    for addr in addrs {
+        match driver.pair(*addr, code) {
+            Ok(paired) => return Ok((*addr, paired)),
+            Err(e) => why.push(format!("{addr}: {e:#}")),
+        }
+    }
+    anyhow::bail!(
+        "could not pair over any advertised address — {}",
+        why.join("; ")
+    )
 }

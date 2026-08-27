@@ -72,7 +72,7 @@ pub fn install(args: &crate::cli::AgentInstallArgs) -> Result<()> {
         );
     }
     if let Some(join) = join {
-        join_fleet(&join)?;
+        join_fleet(&join, args.grant_control)?;
     } else {
         println!("\nPair your browser with: atlasctl agent token");
     }
@@ -85,7 +85,7 @@ pub fn install(args: &crate::cli::AgentInstallArgs) -> Result<()> {
 /// inverse of `atlasctl peer add`. Everything about what a pairing means is
 /// still [`atlasctl_agent::peer::join::dial_and_pair`]; only the direction
 /// differs.
-fn join_fleet(join: &crate::joinarg::Join) -> Result<()> {
+fn join_fleet(join: &crate::joinarg::Join, grant_control: bool) -> Result<()> {
     use atlasctl_agent::identity::{Identity, PinStore};
 
     let dir = crate::hostinfo::config_dir()?;
@@ -128,6 +128,12 @@ fn join_fleet(join: &crate::joinarg::Join) -> Result<()> {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs()),
         Some(addr.ip().to_string()),
+        // Pairing authenticates; the grant is a separate decision, made HERE
+        // because it is this machine's authority being given away. It arrives
+        // as `--grant-control` on the line the operator is pasting at this
+        // keyboard, so it is explicit and readable before it runs — never
+        // implied by joining, and never decided by the machine that invited us.
+        grant_control,
     )?;
 
     println!("joined {} ({})", paired.name, paired.node.short());

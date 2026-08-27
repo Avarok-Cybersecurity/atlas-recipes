@@ -179,6 +179,19 @@ pub struct Pin {
     /// load.
     #[serde(default)]
     pub last_address: Option<String>,
+    /// Whether this peer may CONTROL this machine: execute the closed
+    /// `ControlReq` vocabulary here (terminal `Control` frame), and ask this
+    /// machine to forward that vocabulary one hop to its own pins
+    /// (`ControlTo` frame). One bit checked at both accept points, so the
+    /// grant means the same thing wherever it is consulted.
+    ///
+    /// Defaults to false so every pin written before this field — and every
+    /// pairing ceremony ever performed — keeps exactly the authority it had:
+    /// the six container-scoped rank verbs and `serve_query`. Without this
+    /// default, upgrading the fleet would retroactively turn every existing
+    /// pin into a license to stop the operator's local workloads.
+    #[serde(default)]
+    pub controller: bool,
 }
 
 /// The set of peers this machine trusts.
@@ -247,6 +260,25 @@ impl PinStore {
             self.save(&pins)?;
         }
         Ok(had)
+    }
+
+    /// Grant or revoke the `controller` right on an existing pin. Returns
+    /// whether the pin existed.
+    ///
+    /// Re-reads the file and writes it back whole, like [`Self::add`] and
+    /// [`Self::remove`], so a revocation takes effect on the very next
+    /// connection — the same property the pin store itself exists for.
+    ///
+    /// # Errors
+    /// If the store cannot be read or written.
+    pub fn set_controller(&self, id: NodeId, granted: bool) -> Result<bool> {
+        let mut pins = self.load()?;
+        let Some(pin) = pins.get_mut(&id) else {
+            return Ok(false);
+        };
+        pin.controller = granted;
+        self.save(&pins)?;
+        Ok(true)
     }
 
     fn save(&self, pins: &BTreeMap<NodeId, Pin>) -> Result<()> {

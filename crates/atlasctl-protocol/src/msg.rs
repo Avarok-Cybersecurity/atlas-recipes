@@ -6,15 +6,23 @@
 //! discriminated union so the browser narrows on `msg.type` without unwrapping
 //! a nesting level.
 //!
-//! The set of client messages *is* the capability surface. There is no relay,
-//! no forward, and no raw-command verb, and the enum is closed — an unknown
-//! `type` fails deserialization rather than reaching a handler. That is what
-//! keeps the agent from becoming an open proxy for whatever page is talking
-//! to it.
+//! The set of client messages *is* the capability surface. There is no
+//! raw-command verb, no nested-message verb, and no relay of opaque bytes,
+//! and the enum is closed — an unknown `type` fails deserialization rather
+//! than reaching a handler. One scoped exception exists and is stated here
+//! so the code cannot outgrow its own doctrine: the seven single-node
+//! control verbs carry an optional `on` target, which an agent honors by
+//! re-issuing the request AS ITSELF over its authenticated peer channel —
+//! one hop, only toward a machine the forwarding agent has itself pinned
+//! AND whose pin of the requester carries the explicit `controller` grant,
+//! and only within the closed [`ControlReq`] vocabulary, which cannot express
+//! pairing, joining, cluster reservation, or a further hop. Forwarding is an
+//! annotation on closed verbs, never a wrapper around arbitrary messages:
+//! that is what still keeps the agent from becoming an open proxy for
+//! whatever page is talking to it.
 
 use crate::id::RecipeId;
-use crate::msg::fleet::{FleetEvent, RankPrepare, RankPreview, RankStarted};
-use crate::settings::{SettingError, SettingSpec, SettingValue};
+use crate::settings::{SettingError, SettingValue};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -34,6 +42,15 @@ pub enum ClientMsg {
     ListRecipes {
         /// Correlates the reply.
         id: u32,
+        /// Which node this is for. `None` (and `Some(local id)`) means this
+        /// machine, unchanged. Deliberately an annotation on a closed verb and
+        /// NOT a `Forward { inner }` wrapper: a nesting slot is an open proxy
+        /// waiting for one missed match arm, and an annotated verb keeps every
+        /// forwardable operation individually visible in this enum, which is
+        /// the capability surface. The six other single-node control verbs
+        /// carry the same field with the same meaning.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
     },
 
     /// Render the command a launch would run, without running it.
@@ -45,6 +62,11 @@ pub enum ClientMsg {
         /// Requested settings.
         #[serde(default)]
         settings: BTreeMap<String, SettingValue>,
+        /// Which node this is for. `None` (and `Some(local id)`) means this
+        /// machine, unchanged. See [`Self::ListRecipes`] for why this is an
+        /// annotation rather than a wrapper.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
     },
 
     /// Start a recipe.
@@ -56,6 +78,11 @@ pub enum ClientMsg {
         /// Requested settings, validated against the schema before use.
         #[serde(default)]
         settings: BTreeMap<String, SettingValue>,
+        /// Which node this is for. `None` (and `Some(local id)`) means this
+        /// machine, unchanged. See [`Self::ListRecipes`] for why this is an
+        /// annotation rather than a wrapper.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
     },
 
     /// Stop a running launch.
@@ -64,6 +91,11 @@ pub enum ClientMsg {
         id: u32,
         /// Which recipe to stop.
         recipe: RecipeId,
+        /// Which node this is for. `None` (and `Some(local id)`) means this
+        /// machine, unchanged. See [`Self::ListRecipes`] for why this is an
+        /// annotation rather than a wrapper.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
     },
 
     /// Ask for the current fleet: this node and every peer it knows about.
@@ -88,11 +120,42 @@ pub enum ClientMsg {
     ///
     /// The code is never generated here. It originates on the target, which is
     /// what stops a web page from pairing anything on its own.
+    ///
+    /// This runs the exchange and stops. **No pin is written**: the reply
+    /// carries words for a human to compare, and trust is established only by
+    /// [`Self::ConfirmPairing`]. Before protocol 2 the pin was written here and
+    /// the words shown afterwards, which made comparing them a formality — a
+    /// machine the operator went on to reject had already been trusted.
     PairPeer {
         /// Correlates the reply.
         id: u32,
         /// Which discovered peer.
         node: crate::fleet::NodeId,
+        /// The digits the user read off the other machine.
+        code: String,
+    },
+
+    /// Pair with a machine at an address the operator typed, rather than one
+    /// that was discovered.
+    ///
+    /// Discovery is mDNS, which is link-local: it cannot cross a router, and it
+    /// is switched off on plenty of managed networks. Without this the browser
+    /// could only ever pair with machines on the same broadcast domain, and an
+    /// operator who knows exactly where their machine is had no way to say so.
+    /// The CLI has had `atlasctl peer add <host[:port]>` for this all along.
+    ///
+    /// Unlike [`Self::PairPeer`] there is no expected identity to check
+    /// against: nothing has been discovered, so whoever answers that address is
+    /// whoever answers. The reply therefore carries the identity that WAS
+    /// reached, and the operator judges it at the same word-comparison step —
+    /// which is the one place a human is already looking at who they are about
+    /// to trust.
+    PairPeerAt {
+        /// Correlates the reply.
+        id: u32,
+        /// `host`, `host:port`, or `[v6]:port`. The peer port is assumed when
+        /// none is given.
+        target: String,
         /// The digits the user read off the other machine.
         code: String,
     },
@@ -111,6 +174,43 @@ pub enum ClientMsg {
     MintJoinCode {
         /// Correlates the reply.
         id: u32,
+        /// Grant the peer being pinned the `controller` right (see
+        /// `Pin::controller`) at the moment a human is already deciding to
+        /// trust it. Defaults to false: consent to remote stop must be said,
+        /// not implied by upgrading.
+        #[serde(default)]
+        allow_control: bool,
+    },
+
+    /// Trust a peer whose exchange has completed.
+    ///
+    /// Second half of [`Self::PairPeer`]. The exchange proves both machines
+    /// derived the same key; this says a human compared the words and accepted
+    /// them. Only now is a pin written, so a pairing the operator refuses never
+    /// reaches disk rather than being written and then removed.
+    ConfirmPairing {
+        /// Correlates the reply.
+        id: u32,
+        /// The peer awaiting a decision.
+        node: crate::fleet::NodeId,
+        /// Grant the peer being pinned the `controller` right (see
+        /// `Pin::controller`) at the moment a human is already deciding to
+        /// trust it. Defaults to false: consent to remote stop must be said,
+        /// not implied by upgrading.
+        #[serde(default)]
+        allow_control: bool,
+    },
+
+    /// Discard a completed exchange without trusting it.
+    ///
+    /// What the operator is saying is "those words did not match", which is the
+    /// one thing the ceremony exists to detect. Nothing was written, so there is
+    /// nothing to undo.
+    RejectPairing {
+        /// Correlates the reply.
+        id: u32,
+        /// The peer being refused.
+        node: crate::fleet::NodeId,
     },
 
     /// Close an outstanding join window without using it.
@@ -197,6 +297,11 @@ pub enum ClientMsg {
         id: u32,
         /// Which launch.
         recipe: RecipeId,
+        /// Which node this is for. `None` (and `Some(local id)`) means this
+        /// machine, unchanged. See [`Self::ListRecipes`] for why this is an
+        /// annotation rather than a wrapper.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
     },
 
     /// Read the tail of a launch's log.
@@ -212,217 +317,22 @@ pub enum ClientMsg {
         recipe: RecipeId,
         /// How many lines to return, capped by the agent.
         lines: u32,
+        /// Which node this is for. `None` (and `Some(local id)`) means this
+        /// machine, unchanged. See [`Self::ListRecipes`] for why this is an
+        /// annotation rather than a wrapper.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
     },
 
     /// Ask what is running.
     Status {
         /// Correlates the reply.
         id: u32,
-    },
-}
-
-/// What the agent says.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ServerMsg {
-    /// Sent unsolicited as soon as the connection opens, before authentication,
-    /// so a client can report a version mismatch rather than timing out.
-    Welcome {
-        /// Lowest protocol version this agent speaks.
-        protocol_min: u32,
-        /// Highest protocol version this agent speaks.
-        protocol_max: u32,
-        /// Agent version, for display.
-        agent_version: String,
-    },
-
-    /// Authentication succeeded; here is everything the client needs.
-    Ready {
-        /// Negotiated protocol version.
-        protocol_version: u32,
-        /// The full settings schema, so the client renders what we validate.
-        schema: Vec<SettingSpec>,
-        /// Every recipe this agent can launch.
-        recipes: Vec<RecipeInfo>,
-        /// Whether this machine can actually run a recipe.
-        can_launch: bool,
-        /// Why not, when it cannot.
-        can_launch_reason: Option<String>,
-    },
-
-    /// Reply to `ListRecipes`.
-    Recipes {
-        /// Correlation id.
-        id: u32,
-        /// The inventory.
-        recipes: Vec<RecipeInfo>,
-    },
-
-    /// Reply to `Preview`.
-    Preview {
-        /// Correlation id.
-        id: u32,
-        /// The exact command, shell-quoted for display.
-        command: String,
-        /// Settings the recipe carries that this agent does not understand.
-        ///
-        /// Surfaced rather than dropped: the tool this replaces discarded these
-        /// silently, which is how a stated correctness pin went unapplied for
-        /// months without anyone noticing.
-        unapplied: Vec<String>,
-    },
-
-    /// A launch was accepted and started.
-    Started {
-        /// Correlation id.
-        id: u32,
-        /// Which recipe.
-        recipe: RecipeId,
-        /// The container name, for logs and stop.
-        container: String,
-        /// Where the model is served, when it serves.
-        endpoint: Option<String>,
-    },
-
-    /// Reply to `Status`.
-    Status {
-        /// Correlation id.
-        id: u32,
-        /// What is running.
-        running: Vec<RunningLaunch>,
-    },
-
-    /// A launch was stopped.
-    Stopped {
-        /// Correlation id.
-        id: u32,
-        /// Which recipe.
-        recipe: RecipeId,
-    },
-
-    /// The fleet, in full. Sent in reply to `ListNodes` and once on `WatchFleet`.
-    Nodes {
-        /// Correlates the request.
-        id: u32,
-        /// This node first, then peers.
-        nodes: Vec<crate::fleet::NodeDescriptor>,
-    },
-
-    /// One thing changed about the fleet.
-    ///
-    /// Sent unsolicited to a watcher. Vitals are coalesced newest-wins by the
-    /// agent — losing a 1 Hz sample costs nothing — while structural changes
-    /// and alerts are never dropped.
-    FleetEvent {
-        /// What happened.
-        event: FleetEvent,
-    },
-
-    /// A pairing finished, one way or the other.
-    PairResult {
-        /// Correlates the request.
-        id: u32,
-        /// The peer.
-        node: crate::fleet::NodeId,
-        /// Whether trust was established.
-        paired: bool,
-        /// Short words both humans can compare, when it succeeded.
-        verification: Option<String>,
-        /// Why not, when it failed.
-        detail: String,
-    },
-
-    /// An invitation for one machine to join this fleet.
-    ///
-    /// Carries what the operator needs to build a command on the other
-    /// machine, and nothing else. The addresses are this node's own, so the
-    /// joining machine knows where to dial back.
-    JoinInvitation {
-        /// Correlates the request.
-        id: u32,
-        /// The digits, or absent when the window was closed rather than opened.
-        code: Option<String>,
-        /// Where this node can be reached, best link first.
-        addresses: Vec<String>,
-        /// Seconds the invitation remains valid.
-        expires_in_s: u64,
-    },
-
-    /// A cluster preview: the exact command each rank would run.
-    ClusterPreview {
-        /// Correlates the request.
-        id: u32,
-        /// One entry per rank, rank 0 first.
-        ranks: Vec<RankPreview>,
-        /// Warning about the fabric, when the plan would not run on RDMA.
-        link_warning: Option<String>,
-    },
-
-    /// The outcome of a prepare across every rank.
-    ClusterPrepared {
-        /// Correlates the request.
-        id: u32,
-        /// Pins a later commit to this prepare.
-        epoch: String,
-        /// Per-rank outcome, rank 0 first.
-        ranks: Vec<RankPrepare>,
-        /// Whether every rank accepted, and a commit may therefore proceed.
-        may_commit: bool,
-    },
-
-    /// Every rank of a cluster started.
-    ClusterStarted {
-        /// Correlates the request.
-        id: u32,
-        /// Which prepare this commit consumed.
-        epoch: String,
-        /// Per-rank outcome, rank 0 first.
-        ranks: Vec<RankStarted>,
-    },
-
-    /// Every rank of a cluster was stopped.
-    ClusterStopped {
-        /// Correlates the request.
-        id: u32,
-        /// Ranks that were stopped, rank 0 first.
-        ranks: Vec<RankStarted>,
-    },
-
-    /// How a running launch is doing.
-    Stats {
-        /// Correlates the request.
-        id: u32,
-        /// Which launch.
-        recipe: RecipeId,
-        /// The reading. Every field is optional: absent means the engine does
-        /// not report it, or that there is not yet a second sample to
-        /// difference against — never zero.
-        stats: crate::msg::LaunchReading,
-    },
-
-    /// The tail of a launch's log.
-    Logs {
-        /// Correlates the request.
-        id: u32,
-        /// Which launch.
-        recipe: RecipeId,
-        /// The container the lines came from, so an operator can go read more.
-        container: String,
-        /// Lines, oldest first. Sanitised of control characters by the agent,
-        /// because a log line is attacker-influenced text that a browser is
-        /// about to render.
-        lines: Vec<String>,
-        /// Whether the container is still running. A tail from a container that
-        /// has exited is the last thing it said, not the latest news.
-        running: bool,
-    },
-
-    /// Something failed.
-    Error {
-        /// Correlation id, when the failure answers a request.
-        id: Option<u32>,
-        /// What went wrong.
-        error: AgentError,
+        /// Which node this is for. `None` (and `Some(local id)`) means this
+        /// machine, unchanged. See [`Self::ListRecipes`] for why this is an
+        /// annotation rather than a wrapper.
+        #[serde(default)]
+        on: Option<crate::fleet::NodeId>,
     },
 }
 
@@ -484,8 +394,19 @@ pub struct RunningLaunch {
 
 pub mod fleet;
 
+// The agent's half. Split on the file-size cap, along the direction of travel
+// rather than an arbitrary line.
+mod server;
+pub use server::ServerMsg;
+
 mod error;
 pub use error::AgentError;
+
+// The forwardable control vocabulary: what one agent may relay to another.
+// Its own file so the closed pair can be read — and reviewed — in isolation
+// from the browser surface it mirrors.
+mod control;
+pub use control::{ControlRep, ControlReq};
 
 #[cfg(test)]
 mod tests;

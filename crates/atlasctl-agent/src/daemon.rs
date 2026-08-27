@@ -45,6 +45,21 @@ pub const PEER_POLL_INTERVAL: Duration = Duration::from_secs(5);
 // The vitals and prune timers live in `daemon/housekeeping.rs`. They are
 // timers over local state; this file is the machine-to-machine half.
 mod housekeeping;
+mod peer_serve;
+
+#[cfg(test)]
+#[path = "daemon/peer_serve_tests.rs"]
+mod peer_serve_tests;
+
+#[cfg(test)]
+#[path = "daemon/relay_grant_tests.rs"]
+mod relay_grant_tests;
+#[cfg(test)]
+#[path = "daemon/relay_harness.rs"]
+mod relay_harness;
+#[cfg(test)]
+#[path = "daemon/relay_tests.rs"]
+mod relay_tests;
 
 use housekeeping::{spawn_prune, spawn_vitals};
 
@@ -90,6 +105,9 @@ pub struct PeerWork {
     pub joining: Arc<crate::joining::JoinWindow>,
     /// This machine's accelerator tag, probed once at startup.
     pub accelerator: String,
+    /// The control core a peer's terminal `Control` executes through — the
+    /// same seven verbs, the same validation, as this machine's own browser.
+    pub control: Arc<crate::control::ControlHost>,
 }
 
 pub fn spawn_peer_work(w: PeerWork) {
@@ -100,6 +118,7 @@ pub fn spawn_peer_work(w: PeerWork) {
         w.peer_port,
         w.rank,
         w.joining,
+        w.control,
     );
     spawn_peer_poll(
         w.fleet,
@@ -119,7 +138,19 @@ fn spawn_peer_listener(
     port: u16,
     rank: Arc<dyn RankService>,
     joining: Arc<crate::joining::JoinWindow>,
+    control: Arc<crate::control::ControlHost>,
 ) {
+    // One serving context for every connection, so the answer budget and the
+    // control core cannot differ between two peers of the same agent.
+    let serve = Arc::new(peer_serve::PeerServe {
+        identity: Arc::clone(&identity),
+        pins: pins.clone(),
+        fleet: Arc::clone(&fleet),
+        rank,
+        control,
+        peer_port: port,
+        answer_budget: crate::peer::control::RELAY_ANSWER_BUDGET,
+    });
     tokio::spawn(async move {
         // Pinned peers always; a stranger only while a human has a join code
         // outstanding. Decided during the handshake, so for all the time nobody
@@ -158,10 +189,10 @@ fn spawn_peer_listener(
             };
             let acceptor = acceptor.clone();
             let fleet = Arc::clone(&fleet);
-            let rank = Arc::clone(&rank);
             let joining = Arc::clone(&joining);
             let pins = pins.clone();
             let identity = Arc::clone(&identity);
+            let serve = Arc::clone(&serve);
             tokio::spawn(async move {
                 let Ok(mut tls) = acceptor.accept(tcp).await else {
                     // An unpaired caller failing the handshake is the system
@@ -179,26 +210,13 @@ fn spawn_peer_listener(
                     serve_join(&mut tls, &identity, &pins, &joining, &fleet).await;
                     return;
                 }
-
-                let vitals = fleet.local_vitals_and_id().map(|(_, v)| v);
-                if crate::peer::link::serve_query(
-                    &mut tls,
-                    crate::discovery::local_display_name().as_str(),
-                    fleet.can_launch(),
-                    "",
-                    &crate::discovery::local_os(),
-                    vitals,
-                    &fleet.local_addresses(),
-                )
-                .await
-                .is_err()
-                {
+                let Some(sender) = peer else {
                     return;
-                }
-                // The peer may go on to ask this rank to describe what it would
-                // run. Rendering happens here, on the machine that would
-                // execute it, from this machine's own vendored recipe.
-                serve_rank_requests(&mut tls, &rank).await;
+                };
+                // Introduce ourselves, then answer rank and control frames.
+                // Rendering — and any relayed control verb — happens here, on
+                // the machine that executes it, from its own vendored recipe.
+                peer_serve::serve_peer_connection(&mut tls, &serve, sender).await;
             });
         }
     });
@@ -266,14 +284,14 @@ async fn serve_join<S>(
         // invitation. Both peers hold a valid code, so neither is
         // necessarily hostile — but "one invitation, one machine" is the
         // property, and admitting the loser would quietly break it.
-        if !joining.consume() {
+        let Some(consumed) = joining.consume() else {
             eprintln!(
                 "refusing {}: that invitation was already used by another machine. \
                      Mint a fresh one to add this node.",
                 paired.node.short()
             );
             return;
-        }
+        };
         if let Err(e) = crate::fleet::record_pairing(
             pins,
             paired.node,
@@ -283,6 +301,9 @@ async fn serve_join<S>(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs()),
             None,
+            // The grant the human chose when they minted this invitation,
+            // written with the pin so consent and trust land atomically.
+            consumed.allow_control,
         ) {
             // Announcing a pairing whose pin never reached disk is how a
             // fleet ends up with one side believing it is paired and the
@@ -296,7 +317,21 @@ async fn serve_join<S>(
             return;
         }
         let _ = fleet;
-        eprintln!("paired with {} ({})", paired.name, paired.node.short());
+        // The words, not just the name. The machine that DIALLED shows these to
+        // its operator and asks them to compare — and until now this side
+        // printed nothing to compare against, so the comparison was one-sided
+        // and the question the other dialog asked could not be answered.
+        //
+        // This is a log line rather than a prompt because this side is
+        // typically headless and unattended: the ceremony is authorised by the
+        // invitation, which a human minted here minutes ago. The words let
+        // someone who wants to check, check.
+        eprintln!(
+            "paired with {} ({}) — verification words: {}",
+            paired.name,
+            paired.node.short(),
+            paired.verification
+        );
     }
 }
 
@@ -345,6 +380,17 @@ fn spawn_peer_poll(
                 .await
                 {
                     Ok(report) => {
+                        // The digest is recorded beside the report, from the
+                        // same authenticated exchange. `None` = the peer did
+                        // not say (old build) and its previous claims stand;
+                        // `Some` = its complete current statement, replacing
+                        // them wholesale. Vouches deliberately survive the
+                        // error arm below: `clear_report` keeps them, and
+                        // routing stays safe because choose_voucher requires
+                        // a live report.
+                        if let Some(digest) = report.vouched.clone() {
+                            fleet.record_vouches(id, digest);
+                        }
                         fleet.record_report(report);
                         if let Some(node) = fleet.nodes().into_iter().find(|n| n.id == id) {
                             let _ = events.send(ServerMsg::FleetEvent {
@@ -424,66 +470,4 @@ fn spawn_discovery(
             }
         }
     });
-}
-
-/// Answer a paired peer's questions about what this rank would run.
-///
-/// Only reached after the TLS verifier confirmed the caller is pinned, so there
-/// is no authorization decision here — only rendering, from this machine's own
-/// copy of the recipe.
-async fn serve_rank_requests<S>(stream: &mut S, rank: &Arc<dyn RankService>)
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
-    use crate::peer::wire::{PeerFrame, read_frame, write_frame};
-    loop {
-        let Ok(frame) = read_frame(stream).await else {
-            return;
-        };
-        let reply = match frame {
-            PeerFrame::PreviewRank { assignment } => match rank.render(&assignment) {
-                Ok((command, unmapped)) => PeerFrame::RankPreviewed { command, unmapped },
-                Err(e) => PeerFrame::RankRefused {
-                    reason: e.to_string(),
-                },
-            },
-            PeerFrame::Prepare { assignment, epoch } => PeerFrame::Prepared {
-                reply: rank.prepare(&epoch, &assignment),
-                epoch,
-            },
-            // Commit deliberately carries no assignment: what starts is what
-            // this machine rendered and stored at prepare time, so a head
-            // compromised between the phases cannot substitute anything.
-            PeerFrame::Commit { epoch } => match rank.commit(&epoch) {
-                Ok(container) => PeerFrame::Committed { epoch, container },
-                Err(e) => PeerFrame::RankRefused {
-                    reason: e.to_string(),
-                },
-            },
-            // Abort is acknowledged rather than answered with a result: the
-            // head is already rolling back, and a failure to release must not
-            // mask whatever caused the rollback.
-            // Acknowledged whether or not the container was there: a rollback
-            // asking twice, or asking about a rank that never started, is an
-            // ordinary race and not something the head can act on.
-            PeerFrame::IsRankAlive { container } => PeerFrame::RankLiveness {
-                // Unaskable is not alive: a rank whose state we cannot read
-                // must not be counted as part of a whole cluster.
-                running: rank.alive(&container).unwrap_or(false),
-                container,
-            },
-            PeerFrame::StopRank { container } => {
-                let _ = rank.stop(&container);
-                PeerFrame::RankStopped { container }
-            }
-            PeerFrame::Abort { epoch } => {
-                rank.abort(&epoch);
-                PeerFrame::Aborted { epoch }
-            }
-            _ => return,
-        };
-        if write_frame(stream, &reply).await.is_err() {
-            return;
-        }
-    }
 }

@@ -119,6 +119,8 @@ fn node(addresses: Vec<NodeAddress>) -> NodeDescriptor {
         vitals: None,
         alerts: Vec::new(),
         running: None,
+        vouched_by: None,
+        reached_via: None,
     }
 }
 
@@ -170,4 +172,102 @@ fn a_control_only_node_says_why_it_cannot_launch() {
         !l.reason.is_empty(),
         "a refusal without a reason is not actionable"
     );
+}
+
+/// A join invitation names an address the other machine will DIAL. The
+/// predicate for that is reachability, not whether the link could carry a
+/// collective — and those differ on exactly one class.
+#[test]
+fn wireless_can_be_dialed_even_though_it_cannot_carry_a_collective() {
+    assert!(
+        LinkClass::Wireless.usable_for_control(),
+        "a laptop on Wi-Fi is the canonical inviter; excluding it left the \
+         invitation with no address at all"
+    );
+    assert!(!LinkClass::Wireless.usable_for_cluster());
+}
+
+/// The two predicates must not drift into being the same thing, and must agree
+/// about what is unreachable.
+#[test]
+fn only_links_reachable_from_another_machine_are_dialable() {
+    for c in [
+        LinkClass::InfiniBand,
+        LinkClass::Roce,
+        LinkClass::Ethernet,
+        LinkClass::Wireless,
+        LinkClass::Unverified,
+    ] {
+        assert!(c.usable_for_control(), "{c:?} should be dialable");
+    }
+    for c in [LinkClass::Loopback, LinkClass::Virtual] {
+        assert!(
+            !c.usable_for_control(),
+            "{c:?} is reachable from nowhere else"
+        );
+    }
+}
+
+// ---- protocol 4: vouched provenance --------------------------------------
+
+#[test]
+fn a_protocol_3_descriptor_decodes_with_no_provenance_rather_than_refusing() {
+    // The wire a protocol-3 agent produced, simulated by stripping the two
+    // fields it never knew. Refusing it would make a fleet upgrade partition
+    // on the first `ListNodes`.
+    let mut v = serde_json::to_value(node(Vec::new())).expect("serialises");
+    let obj = v.as_object_mut().expect("a descriptor is an object");
+    obj.remove("vouched_by");
+    obj.remove("reached_via");
+    let d: NodeDescriptor = serde_json::from_value(v).expect("v3 descriptor decodes");
+    assert_eq!(
+        d.vouched_by, None,
+        "an absent voucher is None, never guessed"
+    );
+    assert_eq!(
+        d.reached_via, None,
+        "an absent route is None, never guessed"
+    );
+}
+
+#[test]
+fn vouched_provenance_survives_the_wire() {
+    let voucher = NodeId::from_bytes([7; 32]);
+    let mut n = node(Vec::new());
+    n.pairing = PairingState::Vouched;
+    n.vouched_by = Some(voucher);
+    n.reached_via = Some(voucher);
+    let json = serde_json::to_string(&n).expect("serialises");
+    // The state a UI must render as second-hand has to be distinguishable on
+    // the wire, or the page cannot obey the rule.
+    assert!(json.contains(r#""pairing":"vouched""#), "{json}");
+    let back: NodeDescriptor = serde_json::from_str(&json).expect("round trips");
+    assert_eq!(back, n);
+}
+
+#[test]
+fn a_vouch_entry_round_trips_and_absent_vitals_carry_no_age() {
+    use super::vouch::VouchedPeer;
+    let v = VouchedPeer {
+        node: NodeId::from_bytes([9; 32]),
+        name: DisplayName::new("spark-43fa"),
+        can_launch: true,
+        accelerator: "GB10".to_owned(),
+        os: "Linux".to_owned(),
+        addresses: vec![addr(
+            "enp1s0f0np0",
+            "10.10.10.10",
+            LinkClass::Roce,
+            Some(200_000),
+        )],
+        link: LinkClass::Roce,
+        reachable: true,
+        // Both or neither: vitals without an age would render second-hand
+        // data as fresh. The absent-absent half of that invariant.
+        vitals: None,
+        vitals_age_s: None,
+    };
+    let json = serde_json::to_string(&v).expect("serialises");
+    let back: VouchedPeer = serde_json::from_str(&json).expect("round trips");
+    assert_eq!(back, v);
 }

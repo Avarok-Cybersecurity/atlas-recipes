@@ -5,6 +5,8 @@
 use anyhow::Result;
 use atlasctl_core::io::{ProcessRunner, StdProcessRunner};
 
+use super::doctor_checks::{self, ConfigDirState, Finding};
+
 /// The compromised registry that sparkrun redirects to.
 const COMPROMISED_HOST: &str = "Atlas-Inf/sparkrun-recipes";
 
@@ -13,6 +15,12 @@ pub fn run() -> Result<()> {
     let mut problems = 0;
 
     problems += check_docker();
+    // The three that were added after the fact, each one a failure somebody hit
+    // during onboarding and diagnosed from an error naming the wrong thing.
+    for f in [check_config_dir(), check_agent(), check_reachable()] {
+        println!("{}", f.line);
+        problems += usize::from(f.problem);
+    }
     problems += check_sparkrun();
 
     println!();
@@ -101,6 +109,46 @@ fn which(name: &str) -> Option<std::path::PathBuf> {
     std::env::split_paths(&path)
         .map(|d| d.join(name))
         .find(|p| p.is_file())
+}
+
+/// Where the agent keeps its identity, its pins and its browser token.
+fn check_config_dir() -> Finding {
+    match crate::hostinfo::usable_config_dir() {
+        Ok(dir) => doctor_checks::config_dir(ConfigDirState::Writable(dir.display().to_string())),
+        // `usable_config_dir` already distinguishes "cannot create" from "not
+        // writable" and says so; doctor reuses that judgement rather than
+        // re-deriving it and risking a second, disagreeing opinion.
+        Err(e) => doctor_checks::config_dir(ConfigDirState::Unusable(format!("{e:#}"))),
+    }
+}
+
+/// Whether this machine's own agent is answering.
+fn check_agent() -> Finding {
+    let port = atlasctl_agent::DEFAULT_PORT;
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let up =
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok();
+    doctor_checks::agent(up, port)
+}
+
+/// Whether another machine could reach this one.
+fn check_reachable() -> Finding {
+    use atlasctl_agent::fabric::FabricProvider as _;
+    // Same provider selection as `agent run`, so doctor answers about the
+    // interfaces the agent would actually enumerate rather than a second
+    // opinion that could disagree with it.
+    #[cfg(target_os = "macos")]
+    let fabric = atlasctl_agent::fabric::macos::MacFabric::new();
+    #[cfg(not(target_os = "macos"))]
+    let fabric = atlasctl_agent::fabric::linux::LinuxFabric::new();
+
+    let addrs = fabric
+        .addresses()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|a| (a.iface, a.addr))
+        .collect::<Vec<_>>();
+    doctor_checks::reachable(&addrs)
 }
 
 #[cfg(test)]

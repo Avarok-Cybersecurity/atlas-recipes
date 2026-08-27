@@ -15,6 +15,7 @@ fn state(port: u16) -> Arc<AgentState> {
         token: TOKEN.to_string(),
         can_launch: Ok(()),
         joining: None,
+        relay: None,
         fleet: None,
         cluster: None,
         telemetry: None,

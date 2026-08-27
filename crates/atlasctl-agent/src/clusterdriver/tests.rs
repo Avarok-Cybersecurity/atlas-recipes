@@ -45,6 +45,8 @@ fn descriptor(seed: u8, local: bool) -> NodeDescriptor {
         vitals: None,
         alerts: Vec::new(),
         running: None,
+        vouched_by: None,
+        reached_via: None,
     }
 }
 
@@ -55,6 +57,12 @@ impl FleetView for FixtureFleet {
         self.0.clone()
     }
     fn pair(&self, _: NodeId, _: &str) -> anyhow::Result<PairOutcome> {
+        unreachable!("the driver never pairs")
+    }
+    fn pair_at(&self, _: &str, _: &str) -> anyhow::Result<PairOutcome> {
+        unreachable!("the driver never pairs")
+    }
+    fn trust(&self, _: &PairOutcome, _: bool) -> anyhow::Result<()> {
         unreachable!("the driver never pairs")
     }
     fn unpair(&self, _: NodeId) -> anyhow::Result<bool> {

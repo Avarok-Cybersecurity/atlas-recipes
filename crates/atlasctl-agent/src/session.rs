@@ -10,12 +10,10 @@
 
 use crate::launcher::Launcher;
 use crate::token;
-use atlasctl_core::registry::{RecipeRef, RegistrySet};
+use atlasctl_core::registry::RegistrySet;
 use atlasctl_core::settings;
+use atlasctl_protocol::PROTOCOL_VERSION;
 use atlasctl_protocol::msg::{AgentError, ClientMsg, RecipeInfo, ServerMsg};
-use atlasctl_protocol::settings::SettingValue;
-use atlasctl_protocol::{PROTOCOL_VERSION, RecipeId};
-use std::collections::BTreeMap;
 
 /// Where a connection has got to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,93 +54,42 @@ pub struct SessionDeps<'a> {
     /// `None` on an agent that cannot take members — there is nothing to open,
     /// and saying so is better than minting a code nothing will honour.
     pub joining: Option<&'a crate::joining::JoinWindow>,
-}
-
-/// Asks every rank of a planned cluster what it would run.
-///
-/// A trait so the session stays transport-free: the preview needs to reach
-/// other machines, and a session that opened sockets itself could not be tested
-/// without them.
-pub trait ClusterControl: Send + Sync {
-    /// Plan the launch and collect each rank's own rendering. Reserves nothing.
+    /// Routes a control verb toward another machine.
     ///
-    /// # Errors
-    /// If the plan is impossible, or a rank refuses or cannot be reached.
-    fn preview(
-        &self,
-        recipe: &RecipeId,
-        nodes: &[atlasctl_protocol::fleet::NodeId],
-        head: atlasctl_protocol::fleet::NodeId,
-        settings: &BTreeMap<String, SettingValue>,
-    ) -> Result<
-        (
-            Vec<atlasctl_protocol::msg::fleet::RankPreview>,
-            Option<String>,
-        ),
-        String,
-    >;
-
-    /// Ask every rank to validate and reserve. Nothing starts.
-    ///
-    /// Returns the epoch a later commit must quote, each rank's answer, and
-    /// whether a commit may proceed. A rank refusing is a normal outcome
-    /// reported in the answers, not an error.
-    ///
-    /// # Errors
-    /// If the plan itself is impossible, which is before any rank was asked.
-    fn prepare(
-        &self,
-        recipe: &RecipeId,
-        nodes: &[atlasctl_protocol::fleet::NodeId],
-        head: atlasctl_protocol::fleet::NodeId,
-        settings: &BTreeMap<String, SettingValue>,
-    ) -> Result<
-        (
-            String,
-            Vec<atlasctl_protocol::msg::fleet::RankPrepare>,
-            bool,
-        ),
-        String,
-    >;
-
-    /// Start what every rank prepared under this epoch.
-    ///
-    /// # Errors
-    /// If no such prepare is outstanding, or a rank fails to start — in which
-    /// case every rank that did start has already been stopped.
-    fn commit(
-        &self,
-        epoch: &str,
-    ) -> Result<Vec<atlasctl_protocol::msg::fleet::RankStarted>, String>;
-
-    /// Abandon a prepare, releasing every reservation.
-    fn abort(&self, epoch: &str);
-
-    /// Stop every rank of the cluster this agent started.
-    ///
-    /// # Errors
-    /// If no cluster is running, or a rank could not be stopped — and the
-    /// error names which, because a rank left running holds a whole GPU.
-    fn stop_cluster(&self) -> Result<Vec<atlasctl_protocol::msg::fleet::RankStarted>, String>;
-
-    /// Check a running cluster is still whole, and tear it down if it is not.
-    ///
-    /// The settle gate at commit is a liveness check by construction: weights
-    /// take minutes to load, so it cannot wait for readiness and only catches
-    /// a rank that dies immediately. A rank that dies four minutes in — during
-    /// model build, say — passed that gate, and the survivors then hold their
-    /// GPUs indefinitely serving nothing, because a half cluster waits at a
-    /// rendezvous that will never complete.
-    ///
-    /// Returns a description of what it tore down, or `None` when the cluster
-    /// is whole or absent.
-    fn supervise(&self) -> Option<String>;
+    /// `None` means this agent cannot reach other machines: a verb aimed at
+    /// one is answered with a typed `NotRoutable` rather than pretended.
+    pub relay: Option<&'a dyn ControlRelay>,
 }
 
 /// A single client connection.
+/// How long a completed exchange waits for a human decision.
+///
+/// Not a security bound — nothing is trusted while it waits — but an idle tab
+/// should not be able to confirm words nobody is still looking at.
+const PENDING_PAIRING_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// An exchange that completed and is waiting to be accepted or refused.
+struct PendingPairing {
+    outcome: crate::fleet::PairOutcome,
+    at: std::time::Instant,
+}
+
 pub struct Session<'a> {
     deps: SessionDeps<'a>,
     phase: Phase,
+    /// The one exchange this session is holding, if any.
+    ///
+    /// Deliberately owned by the SESSION rather than by the fleet. A
+    /// fleet-global map would let one browser confirm a ceremony another
+    /// browser ran, and would need a race resolved between two tabs pairing the
+    /// same node. Here the slot dies with the socket, so a browser that walks
+    /// away mid-ceremony leaves nothing behind — and `Session::handle` is
+    /// synchronous, so `PairPeer` and its decision are strictly ordered within
+    /// a session and cannot race at all.
+    ///
+    /// One slot, replaced rather than accumulated: the UI shows one dialog, and
+    /// replacing invalidates stale words for free.
+    pending_pairing: Option<PendingPairing>,
     /// Denied-key attempts, which the caller logs. Nothing in a legitimate UI
     /// offers a denied key, so an attempt says something about the client.
     pub denied_attempts: Vec<String>,
@@ -160,6 +107,7 @@ impl<'a> Session<'a> {
             Self {
                 deps,
                 phase: Phase::AwaitingHello,
+                pending_pairing: None,
                 denied_attempts: Vec::new(),
             },
             welcome,
@@ -198,6 +146,16 @@ impl<'a> Session<'a> {
         if self.phase == Phase::Closed {
             return Vec::new();
         }
+        // A verb aimed at another machine is routed here, before dispatch —
+        // executing it on THIS machine instead would be the silent
+        // misattribution the provenance fields exist to prevent. Only once
+        // authenticated, so an unauthenticated socket still learns nothing.
+        // Every arm below therefore handles only this machine's own verbs.
+        if self.phase == Phase::Ready
+            && let Some(replies) = self.route_remote(&msg)
+        {
+            return replies;
+        }
         match (&self.phase, msg) {
             (
                 Phase::AwaitingHello,
@@ -223,10 +181,14 @@ impl<'a> Session<'a> {
                     },
                 )]
             }
-            (Phase::Ready, ClientMsg::ListRecipes { id }) => {
+            (Phase::Ready, ClientMsg::ListRecipes { id, on: _ }) => {
                 vec![ServerMsg::Recipes {
                     id,
                     recipes: self.inventory(),
+                    // Answered locally over the browser socket: this
+                    // machine's own answer, carried by no relay.
+                    on: None,
+                    via: None,
                 }]
             }
             (
@@ -235,6 +197,7 @@ impl<'a> Session<'a> {
                     id,
                     recipe,
                     settings,
+                    on: _,
                 },
             ) => self.preview(id, &recipe, &settings),
             (
@@ -243,10 +206,11 @@ impl<'a> Session<'a> {
                     id,
                     recipe,
                     settings,
+                    on: _,
                 },
             ) => self.launch(id, &recipe, &settings),
-            (Phase::Ready, ClientMsg::Stop { id, recipe }) => self.stop(id, &recipe),
-            (Phase::Ready, ClientMsg::Status { id }) => self.status(id),
+            (Phase::Ready, ClientMsg::Stop { id, recipe, on: _ }) => self.stop(id, &recipe),
+            (Phase::Ready, ClientMsg::Status { id, on: _ }) => self.status(id),
 
             (Phase::Ready, ClientMsg::ListNodes { id }) => self.nodes(id),
             // A watch is answered with the current fleet; the transport pushes
@@ -254,8 +218,22 @@ impl<'a> Session<'a> {
             // the socket layer keeps the authorization decision in one place.
             (Phase::Ready, ClientMsg::WatchFleet { id, vitals: _ }) => self.nodes(id),
             (Phase::Ready, ClientMsg::PairPeer { id, node, code }) => self.pair(id, node, &code),
+            (Phase::Ready, ClientMsg::PairPeerAt { id, target, code }) => {
+                self.pair_at(id, &target, &code)
+            }
+            (
+                Phase::Ready,
+                ClientMsg::ConfirmPairing {
+                    id,
+                    node,
+                    allow_control,
+                },
+            ) => self.confirm_pairing(id, node, allow_control),
+            (Phase::Ready, ClientMsg::RejectPairing { id, node }) => self.reject_pairing(id, node),
             (Phase::Ready, ClientMsg::UnpairPeer { id, node }) => self.unpair(id, node),
-            (Phase::Ready, ClientMsg::MintJoinCode { id }) => self.mint_join(id),
+            (Phase::Ready, ClientMsg::MintJoinCode { id, allow_control }) => {
+                self.mint_join(id, allow_control)
+            }
             (Phase::Ready, ClientMsg::RevokeJoinCode { id }) => self.revoke_join(id),
 
             // A preview is rendered by each rank in turn, on the machine that
@@ -294,11 +272,19 @@ impl<'a> Session<'a> {
 
             (Phase::Ready, ClientMsg::StopCluster { id }) => self.stop_cluster(id),
 
-            (Phase::Ready, ClientMsg::LaunchStats { id, recipe }) => self.launch_stats(id, &recipe),
-
-            (Phase::Ready, ClientMsg::LaunchLogs { id, recipe, lines }) => {
-                self.launch_logs(id, &recipe, lines)
+            (Phase::Ready, ClientMsg::LaunchStats { id, recipe, on: _ }) => {
+                self.launch_stats(id, &recipe)
             }
+
+            (
+                Phase::Ready,
+                ClientMsg::LaunchLogs {
+                    id,
+                    recipe,
+                    lines,
+                    on: _,
+                },
+            ) => self.launch_logs(id, &recipe, lines),
 
             (Phase::Closed, _) => Vec::new(),
         }
@@ -334,74 +320,37 @@ impl<'a> Session<'a> {
         }]
     }
 
-    /// Resolve a recipe id against the compiled-in set.
+    /// The shared control core over this session's dependencies.
     ///
-    /// The id is already syntactically valid — it could not have been
-    /// deserialized otherwise — so this only answers "does it exist here".
-    fn resolve(&self, id: &RecipeId) -> Result<atlasctl_core::Recipe, AgentError> {
-        self.deps
-            .registry
-            .resolve(&RecipeRef::Bare(id.as_str().to_string()))
-            .map_err(|_| AgentError::UnknownRecipe {
-                recipe: id.to_string(),
-            })
+    /// Built per call, from borrows: the same [`crate::control::LocalControl`]
+    /// the peer channel's terminal `Control` handler executes through, so a
+    /// relayed verb cannot reach a check the local one skips or vice versa.
+    fn control(&self) -> crate::control::LocalControl<'_> {
+        crate::control::LocalControl {
+            registry: self.deps.registry,
+            launcher: self.deps.launcher,
+            telemetry: self.deps.telemetry,
+            can_launch: &self.deps.can_launch,
+        }
     }
 
-    /// Check requested settings, recording any denied-key attempts.
-    fn check_settings(
-        &mut self,
-        requested: &BTreeMap<String, SettingValue>,
-    ) -> Result<BTreeMap<String, atlasctl_core::ScalarValue>, AgentError> {
-        settings::validate(requested).map_err(|errors| {
-            for e in &errors {
+    /// Record denied-key attempts carried inside a settings refusal.
+    ///
+    /// The control core returns them typed in `BadSettings` rather than
+    /// logging them itself, because only this session knows they came from
+    /// the local browser — the caller the log exists to say something about.
+    fn note_denied(&mut self, error: &AgentError) {
+        if let AgentError::BadSettings { errors } = error {
+            for e in errors {
                 if let atlasctl_protocol::settings::SettingError::Denied { key, .. } = e {
                     self.denied_attempts.push(key.clone());
                 }
             }
-            AgentError::BadSettings { errors }
-        })
+        }
     }
 
     fn inventory(&self) -> Vec<RecipeInfo> {
-        self.deps
-            .registry
-            .list()
-            .into_iter()
-            .filter_map(|entry| {
-                let id = RecipeId::parse(&entry.name).ok()?;
-                let r = self
-                    .deps
-                    .registry
-                    .resolve(&RecipeRef::Bare(entry.name))
-                    .ok()?;
-                let (runnable, reason) = match r.launchable() {
-                    Ok(()) => (true, None),
-                    Err(why) => (false, Some(why.to_string())),
-                };
-                Some(RecipeInfo {
-                    id,
-                    model: r.model.clone(),
-                    nodes: r.topology.min_nodes,
-                    runnable,
-                    reason,
-                    defaults: r
-                        .defaults
-                        .iter()
-                        .map(|(k, v)| (k.clone(), to_wire(v)))
-                        .collect(),
-                })
-            })
-            .collect()
-    }
-}
-
-fn to_wire(v: &atlasctl_core::ScalarValue) -> SettingValue {
-    use atlasctl_core::ScalarValue as S;
-    match v {
-        S::Bool(b) => SettingValue::Bool(*b),
-        S::Int(i) => SettingValue::Int(*i),
-        S::Float(f) => SettingValue::Float(*f),
-        S::Str(s) => SettingValue::Str(s.clone()),
+        self.control().recipes()
     }
 }
 
@@ -411,10 +360,42 @@ fn err(id: Option<u32>, error: AgentError) -> ServerMsg {
 
 mod fleet;
 
+// The cluster-control trait the session drives. Split from this file on the
+// 500-line cap, along the trait boundary: the seam is "what the session asks
+// of a cluster", and nothing else moved.
+#[path = "session/cluster_control.rs"]
+mod cluster_control;
+pub use cluster_control::ClusterControl;
+
 #[path = "session/launch.rs"]
 mod launch;
+
+// The remote router and its relay trait. Split on the 500-line cap along the
+// trust seam: where a verb GOES, versus what this machine does.
+#[path = "session/remote.rs"]
+mod remote;
+pub use remote::ControlRelay;
 pub mod telemetry;
 pub use telemetry::LaunchTelemetry;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "session/consent_tests.rs"]
+mod consent_tests;
+#[cfg(test)]
+#[path = "session/fleet_fake.rs"]
+mod fleet_fake;
+#[cfg(test)]
+#[path = "session/forward_tests.rs"]
+mod forward_tests;
+#[cfg(test)]
+#[path = "session/join_tests.rs"]
+mod join_tests;
+#[cfg(test)]
+#[path = "session/pair_at_tests.rs"]
+mod pair_at_tests;
+#[cfg(test)]
+#[path = "session/pairing_tests.rs"]
+mod pairing_tests;

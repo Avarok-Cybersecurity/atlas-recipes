@@ -15,6 +15,7 @@
 //! parameters", not remote code execution.
 
 pub mod cluster;
+pub mod control;
 pub mod join;
 pub mod link;
 pub mod pair;
@@ -28,6 +29,10 @@ mod tls_tests;
 #[cfg(test)]
 #[path = "peer/link_tests.rs"]
 mod link_tests;
+
+#[cfg(test)]
+#[path = "peer/wire_tests.rs"]
+mod wire_tests;
 
 #[cfg(test)]
 #[path = "peer/pair_tests.rs"]

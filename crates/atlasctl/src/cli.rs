@@ -142,6 +142,21 @@ pub struct AgentInstallArgs {
     /// this.
     #[arg(long, value_name = "CODE@HOST")]
     pub join: Option<String>,
+
+    /// Let the fleet you are joining run models on THIS machine.
+    ///
+    /// Only meaningful with `--join`. The grant is written into this machine's
+    /// pin of the inviter, because this machine's authority is what is being
+    /// spent — and it is made here, by whoever is standing at this keyboard
+    /// pasting the line, rather than decided remotely by the machine asking.
+    ///
+    /// A flag rather than a default, and one that appears verbatim in the line
+    /// the operator pastes: "consent to remote stop must be said, not implied".
+    /// Adding a GPU box in order to drive it is the ordinary reason to be here,
+    /// so the invitation offers it — but it says so on the command line, where
+    /// it can be read before it is run.
+    #[arg(long, requires = "join")]
+    pub grant_control: bool,
 }
 
 /// `agent pair` arguments.
@@ -165,7 +180,13 @@ pub enum PeerCmd {
     /// Pair with a machine by address, using a code read off that machine.
     Add(PeerAddArgs),
     /// Drop trust in a machine. Takes effect on its next connection.
-    Remove(PeerRemoveArgs),
+    Remove(PeerNodeArgs),
+    /// Let a paired machine drive this one's launch surface, as its own
+    /// browser would. Consent to remote stop must be said, not implied by
+    /// pairing.
+    GrantControl(PeerNodeArgs),
+    /// Withdraw that grant. Takes effect on the machine's next connection.
+    RevokeControl(PeerNodeArgs),
 }
 
 /// `peer add` arguments.
@@ -179,9 +200,10 @@ pub struct PeerAddArgs {
     pub code: String,
 }
 
-/// `peer remove` arguments.
+/// Arguments naming one paired machine: `peer remove`, `peer grant-control`,
+/// `peer revoke-control`.
 #[derive(Args, Debug)]
-pub struct PeerRemoveArgs {
+pub struct PeerNodeArgs {
     /// Fingerprint, or a unique prefix of one.
     pub node: String,
 }
@@ -391,4 +413,62 @@ pub struct RegistryRemoveArgs {
 pub struct RegistryUpdateArgs {
     /// Update only this registry.
     pub name: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// clap's own invariants — a malformed definition is a runtime panic on the
+    /// user's first `--help`, not a compile error, so it is asserted here.
+    #[test]
+    fn the_command_definition_is_well_formed() {
+        Cli::command().debug_assert();
+    }
+
+    /// Granting control to a fleet you are not joining is not a coherent
+    /// request. clap should say so rather than accepting it and silently doing
+    /// nothing, which is how an operator concludes the flag is broken.
+    #[test]
+    fn grant_control_without_join_is_refused() {
+        let e = Cli::try_parse_from(["atlasctl", "agent", "install", "--grant-control"])
+            .expect_err("--grant-control requires --join");
+        let msg = e.to_string();
+        assert!(
+            msg.contains("join"),
+            "the error must name what is missing: {msg}"
+        );
+    }
+
+    /// The pair the installer actually sends.
+    #[test]
+    fn grant_control_with_join_parses_and_is_off_by_default() {
+        let with = Cli::try_parse_from([
+            "atlasctl",
+            "agent",
+            "install",
+            "--join",
+            "12345678@10.10.10.1",
+            "--grant-control",
+        ])
+        .expect("valid");
+        let without = Cli::try_parse_from([
+            "atlasctl",
+            "agent",
+            "install",
+            "--join",
+            "12345678@10.10.10.1",
+        ])
+        .expect("valid");
+
+        let grant = |c: Cli| match c.command {
+            Command::Agent(AgentCmd::Install(a)) => (a.grant_control, a.join),
+            other => panic!("expected agent install, got {other:?}"),
+        };
+        assert!(grant(with).0);
+        // Off unless asked: a privilege must never arrive by upgrading, and the
+        // joiner's pin is written from this value.
+        assert!(!grant(without).0);
+    }
 }
