@@ -318,7 +318,18 @@ fn spawn_peer_poll(
                 continue;
             };
             for (id, addr) in peers {
-                let Ok(sock) = format!("{addr}:{port}").parse() else {
+                // Parse the IP and attach the port, rather than formatting
+                // "{addr}:{port}" and parsing that. A SocketAddr string needs
+                // an IPv6 literal in brackets — `[fe80::1]:34334` — so the
+                // formatted form failed to parse for EVERY IPv6 peer, and the
+                // `continue` below turned that into silence: the node stayed in
+                // the fleet, was never polled, and simply aged into "stale"
+                // forever with no error anywhere.
+                let Some(sock) = addr
+                    .parse::<std::net::IpAddr>()
+                    .ok()
+                    .map(|ip| std::net::SocketAddr::new(ip, port))
+                else {
                     continue;
                 };
                 let link = fleet.classify_peer_address(&addr);
