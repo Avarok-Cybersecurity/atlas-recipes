@@ -142,6 +142,21 @@ pub struct AgentInstallArgs {
     /// this.
     #[arg(long, value_name = "CODE@HOST")]
     pub join: Option<String>,
+
+    /// Let the fleet you are joining run models on THIS machine.
+    ///
+    /// Only meaningful with `--join`. The grant is written into this machine's
+    /// pin of the inviter, because this machine's authority is what is being
+    /// spent — and it is made here, by whoever is standing at this keyboard
+    /// pasting the line, rather than decided remotely by the machine asking.
+    ///
+    /// A flag rather than a default, and one that appears verbatim in the line
+    /// the operator pastes: "consent to remote stop must be said, not implied".
+    /// Adding a GPU box in order to drive it is the ordinary reason to be here,
+    /// so the invitation offers it — but it says so on the command line, where
+    /// it can be read before it is run.
+    #[arg(long, requires = "join")]
+    pub grant_control: bool,
 }
 
 /// `agent pair` arguments.

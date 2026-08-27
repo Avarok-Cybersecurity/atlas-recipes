@@ -106,7 +106,7 @@ install_agent() {
     # The join is NOT silenced: it is the step the operator is watching, and
     # its output carries the verification words they are meant to compare.
     if [ -n "${2:-}" ]; then
-        if "$exe" agent install --join "$2"; then
+        if "$exe" agent install --join "$2" ${3:+"$3"}; then
             return
         fi
         # One exit code covers two steps. Saying which failed would need the
@@ -215,6 +215,7 @@ main() {
     # it was given without a value, because the alternative is installing and
     # then failing on the step the operator actually came for.
     join=""
+    grant_control=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --join)
@@ -223,11 +224,17 @@ main() {
                 join="$1"
                 ;;
             --join=*) join="${1#--join=}" ;;
+            # Forwarded, not interpreted: it means "let the fleet I am joining
+            # run models on this machine", and only `agent install` can act on
+            # it. Noticed here so the operator is told what they just consented
+            # to, on the machine they consented on.
+            --grant-control) grant_control="--grant-control" ;;
             *) ;;
         esac
         shift
     done
     [ -z "$join" ] || info "will join the fleet at ${join#*@} once installed"
+    [ -z "$grant_control" ] || info "and will let that fleet run models on this machine"
 
     need uname
     need tar
@@ -282,7 +289,7 @@ main() {
 
     check_docker
     check_sparkrun
-    install_agent "$dir/$BIN_NAME" "$join"
+    install_agent "$dir/$BIN_NAME" "$join" "$grant_control"
 
     info "done. Try:"
     info "    $BIN_NAME list"
