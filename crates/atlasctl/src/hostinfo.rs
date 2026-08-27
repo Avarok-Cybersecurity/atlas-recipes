@@ -42,6 +42,28 @@ pub fn config_dir() -> Result<std::path::PathBuf> {
     crate::configdir::resolve()
 }
 
+/// The config directory, checked to be usable before anyone writes to it.
+///
+/// Every command that mints or reads this node's identity goes through here.
+/// `config_dir` alone only says where state *should* live; on a box where
+/// `$HOME` belongs to another user it happily returns a path nothing can be
+/// written to, and the first `load_or_create` then fails with a bare
+/// `Permission denied (os error 13)` naming a file the operator never chose.
+///
+/// `configdir::ensure_usable` turns that into an owner/mode diagnosis and two
+/// remedies. It was already wired into `agent run` and `agent install`, and
+/// missing from `agent token`, `agent pair` and every `peer` verb — which is
+/// most of what a new operator types, and `install.sh` tells them to run
+/// `agent token` first.
+///
+/// # Errors
+/// If the directory cannot be resolved, created, or written.
+pub fn usable_config_dir() -> Result<std::path::PathBuf> {
+    let dir = config_dir()?;
+    crate::configdir::ensure_usable(&dir)?;
+    Ok(dir)
+}
+
 /// This user's home directory.
 ///
 /// Required, not defaulted: every path the service installer writes hangs off

@@ -350,7 +350,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
 
 /// Print, or rotate, the pairing token.
 pub fn token(args: &AgentTokenArgs) -> Result<()> {
-    let dir = hostinfo::config_dir()?;
+    let dir = hostinfo::usable_config_dir()?;
     let tok = if args.rotate {
         let t = token::rotate(&dir)?;
         eprintln!("token rotated — any browser already paired must be given the new one");

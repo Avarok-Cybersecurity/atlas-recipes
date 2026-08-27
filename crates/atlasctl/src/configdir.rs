@@ -60,6 +60,30 @@ pub struct DirFacts {
     pub current_uid: u32,
 }
 
+/// Why the directory could not be created, with the same two remedies
+/// [`advice`] offers for one that exists.
+///
+/// This is the likelier of the two failures, not the rarer one: a box where
+/// `$HOME` belongs to someone other than the process user cannot create
+/// `~/.config/atlasctl` at all, so the diagnosis that reads ownership and mode
+/// never gets to run. It used to end at "the parent directory is probably not
+/// writable by this user", which names the symptom the operator already has
+/// and no way out of it.
+#[must_use]
+pub fn cannot_create(dir: &Path) -> String {
+    let shown = dir.display();
+    let parent = dir
+        .parent()
+        .map_or_else(|| shown.to_string(), |p| p.display().to_string());
+    format!(
+        "creating {shown}. Its parent {parent} is not writable by this user.\n\
+         Either make it writable, or keep this node's state somewhere else:\n    \
+         atlasctl agent run --config-dir ~/.atlasctl\n\
+         Do not use XDG_CONFIG_HOME for this: it moves agent.key too, so the \
+         node gets a new identity and loses every peer it had paired."
+    )
+}
+
 /// Why a directory cannot be written, in words an operator can act on.
 ///
 /// `None` when nothing is wrong with it.
@@ -101,12 +125,7 @@ pub fn advice(dir: &Path, f: DirFacts) -> Option<String> {
 /// If the directory cannot be created, or exists but is not writable.
 pub fn ensure_usable(dir: &Path) -> Result<()> {
     if !dir.exists() {
-        std::fs::create_dir_all(dir).with_context(|| {
-            format!(
-                "creating {}. The parent directory is probably not writable by this user.",
-                dir.display()
-            )
-        })?;
+        std::fs::create_dir_all(dir).with_context(|| cannot_create(dir))?;
         return Ok(());
     }
     if !dir.is_dir() {
@@ -223,5 +242,55 @@ mod tests {
             )
             .is_none()
         );
+    }
+}
+
+#[cfg(test)]
+mod create_tests {
+    use super::*;
+
+    /// The likelier permission failure must name a way out.
+    ///
+    /// A box whose `$HOME` belongs to another user cannot create
+    /// `~/.config/atlasctl` at all, so `advice()` — which reads the owner and
+    /// mode of a directory that exists — never runs. That path used to end at
+    /// "the parent directory is probably not writable by this user", which
+    /// restates what the operator already knows.
+    #[test]
+    fn a_directory_that_cannot_be_created_still_names_the_remedy() {
+        let msg = cannot_create(Path::new("/nonexistent-root/.config/atlasctl"));
+        assert!(
+            msg.contains("--config-dir"),
+            "must offer the relocation: {msg}"
+        );
+        assert!(
+            msg.contains("/nonexistent-root"),
+            "must name the parent: {msg}"
+        );
+        assert!(
+            msg.contains("XDG_CONFIG_HOME"),
+            "must warn off the footgun that silently reissues identity: {msg}"
+        );
+    }
+
+    /// The two failure paths must not disagree about what to do.
+    #[test]
+    fn both_permission_messages_offer_the_same_escape_hatch() {
+        let created = cannot_create(Path::new("/x/atlasctl"));
+        let existing = advice(
+            Path::new("/x/atlasctl"),
+            DirFacts {
+                owner_uid: 0,
+                current_uid: 1000,
+                mode: 0o755,
+            },
+        )
+        .expect("a root-owned dir is a problem");
+        for m in [&created, &existing] {
+            assert!(
+                m.contains("--config-dir ~/.atlasctl"),
+                "same remedy, same spelling: {m}"
+            );
+        }
     }
 }
