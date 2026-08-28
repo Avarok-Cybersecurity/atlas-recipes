@@ -98,9 +98,20 @@ pub async fn serve(state: Arc<AgentState>, port: u16) -> Result<()> {
 /// If the port is taken.
 pub async fn bind(port: u16) -> Result<tokio::net::TcpListener> {
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("could not bind {addr} — is another agent already running?"))?;
+    let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| {
+        // Naming the remedy, not just the symptom. This is what an
+        // operator sees after `curl … | sh` on a machine that already had
+        // an agent: the installer could not bootstrap the service (the
+        // label was loaded), suggested `agent install` to find out why,
+        // and that reproduced the same line — so `agent run` by hand was
+        // the third dead end in a row.
+        format!(
+            "could not bind {addr} — an agent is already listening there.\n\
+                 \x20 If you meant to upgrade it, `atlasctl agent install` now replaces\n\
+                 \x20 a running service in place. If you started one by hand, stop that\n\
+                 \x20 process first, or pass `--port` to run a second one alongside it."
+        )
+    })?;
 
     let bound = listener.local_addr()?;
     debug_assert!(

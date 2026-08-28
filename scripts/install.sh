@@ -102,7 +102,21 @@ install_agent() {
         info "start it yourself later with: $BIN_NAME agent install"
         return
     fi
-    info "installing the background agent"
+    # Re-running the installer on a machine that already has this exact version
+    # is the commonest reason to run it at all: the binary is there, the service
+    # is not up, and the website says "no agent". Nothing needs installing --
+    # the machine needs STARTING. A join is the exception: it is the step the
+    # operator came for, so it runs regardless.
+    if [ -n "${4:-}" ] && [ -z "${2:-}" ]; then
+        if "$exe" agent status >/dev/null 2>&1; then
+            info "the agent is already running — this machine is ready."
+            info "if a browser does not see it, pair it: $BIN_NAME agent token"
+            return
+        fi
+        info "starting the agent that is already installed here"
+    else
+        info "installing the background agent"
+    fi
     # The join is NOT silenced: it is the step the operator is watching, and
     # its output carries the verification words they are meant to compare.
     if [ -n "${2:-}" ]; then
@@ -129,10 +143,26 @@ install_agent() {
         return
     fi
     warn "could not install the agent as a service on this machine."
-    warn "atlasctl itself is installed and works. To run the agent by hand:"
+    warn "atlasctl itself is installed and works."
+    # "Run agent install to see why" was the old advice, and it reproduced the
+    # SAME line the operator had just read — a third dead end after the failed
+    # bootstrap. Check the likeliest cause here instead: an agent already
+    # holding the port is what makes a re-install look like a broken install.
+    if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:34333 -sTCP:LISTEN >/dev/null 2>&1; then
+        warn "an agent is ALREADY listening on 127.0.0.1:34333, so this machine"
+        warn "is usable right now — the website will find it. Nothing else to do."
+        warn "To point that agent at this newly installed binary, stop it and run:"
+        warn "    $BIN_NAME agent install"
+        return
+    fi
+    warn "To run the agent by hand:"
     warn "    $BIN_NAME agent run"
-    warn "or, to see why the service install failed:"
-    warn "    $BIN_NAME agent install"
+    warn "Its startup log, if the service did start and then exit:"
+    if [ "$(uname -s)" = "Darwin" ]; then
+        warn "    tail -n 50 ~/Library/Logs/atlasctl-agent.log"
+    else
+        warn "    journalctl --user -u atlasctl-agent -n 50"
+    fi
 }
 
 check_docker() {
@@ -273,11 +303,28 @@ main() {
     dir="${ATLASCTL_INSTALL_DIR:-$HOME/.local/bin}"
     mkdir -p "$dir"
     [ -f "$tmp/$BIN_NAME" ] || die "the archive did not contain $BIN_NAME"
-    # Install to a temp name and rename, so an interrupted install cannot leave
-    # a half-written binary on PATH.
-    install -m 0755 "$tmp/$BIN_NAME" "$dir/.$BIN_NAME.new"
-    mv -f "$dir/.$BIN_NAME.new" "$dir/$BIN_NAME"
-    info "installed $dir/$BIN_NAME"
+
+    # Ask the two binaries their versions rather than parsing a release tag: the
+    # downloaded one is already here and already checksum-verified, so this
+    # needs no second endpoint and cannot be fooled by a tag naming scheme that
+    # changes. An unreadable or non-answering existing binary compares unequal,
+    # which lands on the upgrade path -- the safe direction.
+    new_version=$("$tmp/$BIN_NAME" --version 2>/dev/null || true)
+    old_version=""
+    [ -x "$dir/$BIN_NAME" ] && old_version=$("$dir/$BIN_NAME" --version 2>/dev/null || true)
+
+    same_version=""
+    if [ -n "$new_version" ] && [ "$old_version" = "$new_version" ]; then
+        same_version="yes"
+        info "$new_version is already installed here — keeping it."
+    else
+        [ -z "$old_version" ] || info "upgrading $old_version -> $new_version"
+        # Install to a temp name and rename, so an interrupted install cannot leave
+        # a half-written binary on PATH.
+        install -m 0755 "$tmp/$BIN_NAME" "$dir/.$BIN_NAME.new"
+        mv -f "$dir/.$BIN_NAME.new" "$dir/$BIN_NAME"
+        info "installed $dir/$BIN_NAME"
+    fi
 
     case ":$PATH:" in
         *":$dir:"*) ;;
@@ -289,7 +336,7 @@ main() {
 
     check_docker
     check_sparkrun
-    install_agent "$dir/$BIN_NAME" "$join" "$grant_control"
+    install_agent "$dir/$BIN_NAME" "$join" "$grant_control" "$same_version"
 
     info "done. Try:"
     info "    $BIN_NAME list"
