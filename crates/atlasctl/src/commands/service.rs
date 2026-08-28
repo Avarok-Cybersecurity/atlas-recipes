@@ -218,12 +218,12 @@ pub fn uninstall() -> Result<()> {
 /// Zero when it cannot be determined: only launchd reads it, and on macOS a
 /// home directory always has an owner, so the fallback is unreachable there.
 #[cfg(unix)]
-fn uid_of(home: &std::path::Path) -> u32 {
+pub(crate) fn uid_of(home: &std::path::Path) -> u32 {
     use std::os::unix::fs::MetadataExt;
     std::fs::metadata(home).map(|m| m.uid()).unwrap_or(0)
 }
 
 #[cfg(not(unix))]
-fn uid_of(_home: &std::path::Path) -> u32 {
+pub(crate) fn uid_of(_home: &std::path::Path) -> u32 {
     0
 }

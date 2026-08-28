@@ -31,9 +31,11 @@ pub fn token(args: &AgentTokenArgs) -> Result<()> {
 ///
 /// Pure so it can be tested: the probe itself is a socket connect, and the
 /// interesting behaviour is which advice an operator gets, not whether the
-/// kernel can refuse a connection.
+/// kernel can refuse a connection. `installed` is passed in for the same
+/// reason — whether a unit exists on disk is I/O, and which advice follows
+/// from it is a rule.
 #[must_use]
-pub fn status_advice(port: u16) -> Vec<String> {
+pub fn status_advice(port: u16, installed: bool) -> Vec<String> {
     let mut out = Vec::new();
     if port == atlasctl_agent::DEFAULT_PORT {
         // Naming the flag matters more than it looks: an operator who installed
@@ -46,7 +48,29 @@ pub fn status_advice(port: u16) -> Vec<String> {
                 .to_owned(),
         );
     }
-    out.push("or start it with: atlasctl agent run".to_owned());
+    // `agent install`, not `agent run`. The old advice was the one command that
+    // does not survive the terminal it was typed in, so a machine "fixed" that
+    // way silently leaves the fleet at the next logout — and every other
+    // surface, including the website's own guide, says `install`. Since #112 it
+    // also STARTS a service that is merely stopped, which is the state this
+    // branch is most often reached in.
+    if installed {
+        out.push(
+            "a service IS installed here but nothing is listening.\n  \
+             Start it with:  atlasctl agent install"
+                .to_owned(),
+        );
+    } else {
+        out.push(
+            "no service is installed on this machine.\n  \
+             Install and start one with:  atlasctl agent install"
+                .to_owned(),
+        );
+    }
+    out.push(
+        "or run it in this terminal, for as long as it stays open:\n  atlasctl agent run"
+            .to_owned(),
+    );
     out
 }
 
@@ -65,7 +89,18 @@ pub fn status(args: &AgentStatusArgs) -> Result<()> {
         }
         Err(e) => {
             println!("agent: not running on {addr} ({e})");
-            for line in status_advice(args.port) {
+            // Best effort: a machine whose home directory cannot be read is a
+            // machine we cannot make this claim about, and guessing "installed"
+            // either way would send the operator to the wrong command.
+            let installed = crate::hostinfo::home_dir().is_ok_and(|home| {
+                crate::service::installed_unit(
+                    &atlasctl_core::io::StdFileSystem,
+                    &home,
+                    crate::commands::service::uid_of(&home),
+                )
+                .is_ok_and(|u| u.is_some())
+            });
+            for line in status_advice(args.port, installed) {
                 println!("{line}");
             }
             bail!("no agent is listening on {addr}")
@@ -80,7 +115,7 @@ mod status_tests {
     /// An operator on the default port may simply not know the flag exists.
     #[test]
     fn the_default_port_suggests_looking_elsewhere_first() {
-        let a = status_advice(atlasctl_agent::DEFAULT_PORT);
+        let a = status_advice(atlasctl_agent::DEFAULT_PORT, false);
         assert!(
             a.iter().any(|l| l.contains("--port")),
             "must name the flag: {a:?}"
@@ -92,7 +127,7 @@ mod status_tests {
     /// they gave was not the one probed.
     #[test]
     fn an_explicit_port_is_not_second_guessed() {
-        let a = status_advice(9000);
+        let a = status_advice(9000, false);
         assert!(
             !a.iter().any(|l| l.contains("--port")),
             "must not re-suggest the flag: {a:?}"
@@ -101,5 +136,25 @@ mod status_tests {
             a.iter().any(|l| l.contains("agent run")),
             "still offers a start"
         );
+    }
+
+    /// The two states an operator is actually in, and they need different
+    /// commands. Reporting only "not running" made "I installed it and it
+    /// stopped" indistinguishable from "I never installed it", and the single
+    /// piece of advice offered — `agent run` — was wrong for both: it is the
+    /// one command that does not survive the terminal it was typed in.
+    #[test]
+    fn a_stopped_service_and_a_missing_one_are_told_apart() {
+        let stopped = status_advice(9000, true).join("\n");
+        let missing = status_advice(9000, false).join("\n");
+        assert!(stopped.contains("service IS installed"), "{stopped}");
+        assert!(missing.contains("no service is installed"), "{missing}");
+        // Both lead with the command that works in either case and persists.
+        for a in [&stopped, &missing] {
+            assert!(a.contains("atlasctl agent install"), "{a}");
+            let install = a.find("agent install").expect("offers install");
+            let run = a.find("agent run").expect("still offers the foreground");
+            assert!(install < run, "the persistent option must come first: {a}");
+        }
     }
 }
