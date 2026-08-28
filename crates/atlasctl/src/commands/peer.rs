@@ -141,9 +141,16 @@ pub fn add(args: &PeerAddArgs) -> Result<()> {
     println!();
     println!("  Verification words:  {}", paired.verification);
     println!();
+    // SANITISED, and this is the site that matters most. `paired.name` comes
+    // off the not-yet-trusted peer's hello frame, and it is printed BETWEEN
+    // the verification words and the y/N prompt. A name carrying ANSI escapes
+    // ("\x1b[2K\x1b[1A…") can erase and repaint the words the operator is
+    // about to compare — defeating the out-of-band check the whole SPAKE2
+    // ceremony exists to enable. The storage site 20 lines below already
+    // wraps it; the human-facing one did not.
     println!(
         "  `atlasctl agent pair` on {} is showing the same words.",
-        paired.name
+        DisplayName::new(&paired.name).as_str()
     );
     println!("  If it is showing something else, something is relaying this");
     println!("  connection — press Ctrl-C now and nothing will be trusted.");
@@ -180,10 +187,14 @@ pub fn add(args: &PeerAddArgs) -> Result<()> {
     // like a box that is switched off. The remedies are unrelated, so say
     // which situation this could be while the operator is still standing at
     // the keyboard.
-    println!("Paired with {} ({}).", paired.name, paired.node.short());
+    println!(
+        "Paired with {} ({}).",
+        DisplayName::new(&paired.name).as_str(),
+        paired.node.short()
+    );
     println!(
         "  {} has to have accepted too. If it said \"Nothing was trusted\",",
-        paired.name
+        DisplayName::new(&paired.name).as_str()
     );
     println!("  pair again — otherwise it will look unreachable from here.");
     Ok(())
