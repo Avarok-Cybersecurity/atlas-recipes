@@ -34,8 +34,16 @@ detect_target() {
     case "$os" in
         Linux)  os_part="unknown-linux-musl" ;;
         Darwin) os_part="apple-darwin" ;;
+        # Git Bash and MSYS reach here on Windows. They are not the way in:
+        # the Windows build is native, and the installer for it is a different
+        # script. Naming that beats "not supported", which was true when it was
+        # written and would now send someone away from a working install.
+        MINGW*|MSYS*|CYGWIN*|Windows_NT)
+            die "this is the unix installer. On Windows, run in PowerShell:
+    irm https://atlasinference.io/install.ps1 | iex"
+            ;;
         *)
-            die "unsupported operating system: $os. atlasctl supports Linux and macOS; Windows is not supported."
+            die "unsupported operating system: $os. atlasctl supports Linux, macOS and Windows."
             ;;
     esac
     case "$arch" in

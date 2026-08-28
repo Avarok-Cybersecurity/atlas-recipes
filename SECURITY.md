@@ -64,6 +64,23 @@ A remote registry you add can name any container image. It runs under the same
 unprivileged profile as everything else, but an image you do not trust is code
 you do not trust. Add registries you would accept code from.
 
+**On Windows, the secrets are protected by a directory, not by a mode.**
+`browser.token` and `agent.key` live under `%LOCALAPPDATA%\atlasctl`, whose
+inherited ACL grants the owning user, SYSTEM and Administrators — the same
+trust boundary as `~/.config` at `0700`, where root reads everything too. There
+is no mode bit to set and no equivalent of the unix check that a token has not
+been widened, so what atlasctl verifies instead is *containment*: a secret must
+live inside your user profile, and one destined elsewhere is refused before the
+bytes are written. That is a weaker statement than the unix check and is not
+presented as an equivalent one. If you point `--config-dir` at a network share
+or a directory you have widened yourself, atlasctl will refuse the share and
+cannot detect the second case.
+
+`%LOCALAPPDATA%` and not `%APPDATA%` is deliberate: `%APPDATA%` roams between
+machines on a domain, and `agent.key` is *this machine's* identity. Roaming it
+would give two machines one node identity, which is sharing a private key by
+copying a directory.
+
 ## Reproducing the parity claim
 
 Serve commands are byte-identical to the reference implementation's across the
