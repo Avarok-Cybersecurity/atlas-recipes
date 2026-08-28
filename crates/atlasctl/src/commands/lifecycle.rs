@@ -45,6 +45,14 @@ fn stop_with(runner: &dyn ProcessRunner, args: &StopArgs) -> Result<()> {
         let out = runner.run(&["docker".into(), "stop".into(), name.clone()])?;
         if out.success() {
             println!("stopped {name}");
+        } else if absent(&out.stderr) {
+            // Not a failure: the state the operator asked for is already true.
+            // This printed "could not stop atlas-x: Error response from daemon:
+            // No such container: atlas-x" and then exited non-zero, sending
+            // someone to inspect docker over a recipe that was simply never
+            // started. Under --all it is a race -- the container ended between
+            // the listing and the stop -- which is equally not a failure.
+            println!("{name} is not running");
         } else {
             let why = out.stderr.trim();
             eprintln!("could not stop {name}: {why}");
@@ -69,6 +77,38 @@ fn stop_with(runner: &dyn ProcessRunner, args: &StopArgs) -> Result<()> {
 /// replaces ran `sleep infinity` as PID 1, so its `docker logs` showed nothing
 /// and it had to tail a file inside the container instead.
 pub fn logs(args: &LogsArgs) -> Result<()> {
+    logs_with(&StdProcessRunner, args)
+}
+
+/// `logs`, with the runner injected so the not-started path is testable.
+fn logs_with(runner: &dyn ProcessRunner, args: &LogsArgs) -> Result<()> {
+    let name = container_of(&args.recipe);
+
+    // Ask whether the container exists before streaming. `docker logs` on a
+    // container that is not there prints the daemon's own line and exits 1,
+    // which surfaced as "`docker logs` exited with status 1" -- accurate, and
+    // no help to anyone. Asked as a filter rather than by matching the error
+    // text, because the daemon words it differently per command: `stop` and
+    // `logs` say "No such container", `inspect` says "no such object".
+    //
+    // `ps -a`, not `ps`: a container that exited still has logs worth reading,
+    // and that is often exactly why someone is here.
+    let probe = runner.run(&[
+        "docker".into(),
+        "ps".into(),
+        "-a".into(),
+        "--filter".into(),
+        format!("name=^{name}$"),
+        "--format".into(),
+        "{{.Names}}".into(),
+    ])?;
+    if probe.success() && probe.stdout.trim().is_empty() {
+        bail!(
+            "no container for `{}` on this machine — it has not been started here. `atlasctl status` lists what is running",
+            args.recipe
+        );
+    }
+
     let mut argv = vec![
         "docker".to_string(),
         "logs".to_string(),
@@ -78,12 +118,22 @@ pub fn logs(args: &LogsArgs) -> Result<()> {
     if args.follow {
         argv.push("--follow".to_string());
     }
-    argv.push(container_of(&args.recipe));
-    let code = StdProcessRunner.run_streaming(&argv)?;
+    argv.push(name);
+    let code = runner.run_streaming(&argv)?;
     if code != 0 {
         bail!("`docker logs` exited with status {code}");
     }
     Ok(())
+}
+
+/// Whether the daemon is saying the container is not there.
+///
+/// Matched on text because `docker stop` exits 1 for every failure and carries
+/// the distinction only in stderr. Lowercased and checked for both spellings,
+/// since the wording is not stable across commands or versions.
+fn absent(stderr: &str) -> bool {
+    let s = stderr.to_ascii_lowercase();
+    s.contains("no such container") || s.contains("no such object")
 }
 
 /// Show what atlasctl has running.
@@ -205,7 +255,10 @@ mod stop_tests {
             stderr: String::new(),
         });
         r.push_result(fail("permission denied"));
-        r.push_result(fail("no such container"));
+        // Was "no such container", which is now the one stderr that means the
+        // stop SUCCEEDED in effect. This test is about two real failures, so it
+        // needs two real failures.
+        r.push_result(fail("device or resource busy"));
 
         let e = stop_with(
             &r,
@@ -264,5 +317,120 @@ mod stop_tests {
             },
         )
         .expect("nothing to do is fine");
+    }
+}
+
+#[cfg(test)]
+mod absent_tests {
+    use super::*;
+    use atlasctl_core::io::RecordingRunner;
+    use atlasctl_core::io::process::Output;
+
+    fn out(status: i32, stdout: &str, stderr: &str) -> Output {
+        Output {
+            status,
+            stdout: stdout.into(),
+            stderr: stderr.into(),
+        }
+    }
+
+    #[test]
+    fn the_daemons_two_spellings_of_gone_are_both_recognised() {
+        assert!(absent(
+            "Error response from daemon: No such container: atlas-x"
+        ));
+        assert!(absent("Error: no such object: atlas-x"));
+        // Real failures must not be swallowed by this.
+        assert!(!absent("permission denied"));
+        assert!(!absent("device or resource busy"));
+        assert!(!absent(""));
+    }
+
+    /// Stopping something that is not running is the state the operator asked
+    /// for. It used to print the daemon's own line and exit non-zero.
+    #[test]
+    fn stopping_a_recipe_that_is_not_running_is_not_a_failure() {
+        let r = RecordingRunner::new();
+        r.push_result(out(
+            1,
+            "",
+            "Error response from daemon: No such container: atlas-q",
+        ));
+        stop_with(
+            &r,
+            &StopArgs {
+                recipe: Some("q".into()),
+                all: false,
+            },
+        )
+        .expect("a recipe that is not running must not be an error");
+    }
+
+    /// Under --all this is a race: the container ended between the listing and
+    /// the stop. Equally not a failure, and it must not mask a real one.
+    #[test]
+    fn a_vanished_container_does_not_mask_a_real_failure() {
+        let r = RecordingRunner::new();
+        r.push_result(out(0, "atlas-a\natlas-b\n", ""));
+        r.push_result(out(
+            1,
+            "",
+            "Error response from daemon: No such container: atlas-a",
+        ));
+        r.push_result(out(1, "", "permission denied"));
+        let e = stop_with(
+            &r,
+            &StopArgs {
+                recipe: None,
+                all: true,
+            },
+        )
+        .expect_err("the real failure must still fail the command");
+        let msg = e.to_string();
+        assert!(msg.contains("atlas-b"), "names what actually failed: {msg}");
+        assert!(
+            !msg.contains("atlas-a"),
+            "must not blame the one that was already gone: {msg}"
+        );
+    }
+
+    #[test]
+    fn logs_for_a_recipe_never_started_here_says_so_and_never_streams() {
+        let r = RecordingRunner::new();
+        r.push_result(out(0, "\n", "")); // ps -a matched nothing
+        let e = logs_with(
+            &r,
+            &LogsArgs {
+                recipe: "q".into(),
+                tail: 100,
+                follow: false,
+            },
+        )
+        .expect_err("there is nothing to show");
+        let msg = e.to_string();
+        assert!(msg.contains("has not been started here"), "{msg}");
+        assert!(
+            msg.contains("atlasctl status"),
+            "points somewhere useful: {msg}"
+        );
+        assert_eq!(r.calls().len(), 1, "must not have run `docker logs` at all");
+    }
+
+    #[test]
+    fn logs_for_an_exited_container_still_stream() {
+        let r = RecordingRunner::new();
+        r.push_result(out(0, "atlas-q\n", "")); // ps -a found it, exited or not
+        r.push_result(out(0, "", ""));
+        logs_with(
+            &r,
+            &LogsArgs {
+                recipe: "q".into(),
+                tail: 100,
+                follow: false,
+            },
+        )
+        .expect("a stopped container still has logs worth reading");
+        let argv = &r.calls()[1];
+        assert!(argv.contains(&"logs".to_string()), "{argv:?}");
     }
 }
