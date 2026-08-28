@@ -50,7 +50,10 @@ function Assert-Checksum {
     param($Archive, $SumsFile)
     $name = Split-Path -Leaf $Archive
     $want = $null
-    foreach ($line in Get-Content $SumsFile) {
+    # -LiteralPath, like every other path this script touches: `Get-Content`
+    # globs, and a directory named `[build]` is legal and would fail the
+    # checksum lookup with "cannot find path" rather than a verdict.
+    foreach ($line in Get-Content -LiteralPath $SumsFile) {
         $parts = $line -split '\s+', 2
         if ($parts.Count -eq 2 -and $parts[1].Trim() -eq $name) { $want = $parts[0].Trim().ToLower() }
     }
@@ -64,7 +67,7 @@ function Assert-Checksum {
 
 function Get-Version {
     param($Exe)
-    if (-not (Test-Path $Exe)) { return '' }
+    if (-not (Test-Path -LiteralPath $Exe)) { return '' }
     # A binary that cannot be run compares unequal, which lands on the upgrade
     # path -- the safe direction.
     try { return (& $Exe --version 2>$null | Select-Object -First 1) } catch { return '' }
@@ -174,7 +177,7 @@ try {
 
     Expand-Archive -Path $archive -DestinationPath $tmp -Force
     $staged = Join-Path $tmp "$BinName.exe"
-    if (-not (Test-Path $staged)) { Die "the archive did not contain $BinName.exe" }
+    if (-not (Test-Path -LiteralPath $staged)) { Die "the archive did not contain $BinName.exe" }
 
     $dir = if ($env:ATLASCTL_INSTALL_DIR) {
         $env:ATLASCTL_INSTALL_DIR
@@ -200,7 +203,7 @@ try {
         # installer is upgrading is exactly such a process. Move it aside first:
         # Windows permits renaming a running image, and the stale copy is
         # cleaned up on the next install.
-        if (Test-Path $exe) {
+        if (Test-Path -LiteralPath $exe) {
             $old = "$exe.old"
             Remove-Item -Force $old -ErrorAction SilentlyContinue
             try { Move-Item -Force $exe $old } catch { }

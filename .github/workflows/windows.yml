@@ -49,6 +49,13 @@ jobs:
           if ($errs) { $errs | ForEach-Object { Write-Host $_ }; exit 1 }
           Write-Host "install.ps1 parses"
 
+      # Parsing is not deciding. This drives the checksum gate — the decision
+      # standing between `irm | iex` and executing arbitrary bytes — and the
+      # version comparison that chooses between upgrading and skipping.
+      - name: install.ps1 behaviour
+        shell: pwsh
+        run: ./scripts/tests/install-ps1.test.ps1
+
       # The scheduled-task plan is the half no unit test can reach: whether
       # Task Scheduler ACCEPTS this XML, whether the task then reports Running,
       # and whether uninstall removes it. Every one of those has failed for a
