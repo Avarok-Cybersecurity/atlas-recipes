@@ -289,4 +289,8 @@ contains "no held port: offers the foreground command" "$out" "agent run"
 contains "and names the platform's real log"          "$out" "journalctl"
 
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
-[ "$fail" -eq 0 ]
+# Explicit, not inherited. `[ "$fail" -eq 0 ]` as the last command happens to
+# be right here, but the PowerShell counterpart made exactly this mistake —
+# reporting "0 failed" and then exiting 1, because a case above had run a child
+# process that set the status.
+if [ "$fail" -eq 0 ]; then exit 0; else exit 1; fi

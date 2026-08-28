@@ -143,4 +143,9 @@ Should-Contain 'this runner resolves to a real target' $t 'pc-windows-msvc'
 
 Write-Host ""
 Write-Host "  $script:pass passed, $script:fail failed"
+# Explicit BOTH ways. Falling off the end leaves the script's status as
+# whatever the last command set — and one of the cases above deliberately runs
+# a child pwsh that exits 1, so the suite reported "0 failed" and then failed
+# the job with it.
 if ($script:fail -gt 0) { exit 1 }
+exit 0
