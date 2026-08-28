@@ -141,3 +141,28 @@ fn the_beacon_advertises_nothing_a_stranger_could_shop_from() {
         );
     }
 }
+
+/// An IPv6 literal is nothing but colons, so "does it already carry a port"
+/// cannot be answered by looking for one. This is reached from the manual
+/// address box and a hand-typed `peer add` — exactly where someone types an
+/// address rather than a name.
+#[test]
+fn an_ipv6_literal_gets_the_default_port_rather_than_being_torn_at_a_colon() {
+    let bare = resolve_manual("::1", 34334).expect("a bare literal must resolve");
+    assert_eq!(bare[0].port(), 34334, "the default port must be applied");
+    assert!(bare[0].is_ipv6());
+
+    let bracketed = resolve_manual("[::1]", 34334).expect("brackets without a port must resolve");
+    assert_eq!(bracketed[0].port(), 34334);
+
+    // And a bracketed literal that DOES name a port keeps it.
+    let with = resolve_manual("[::1]:9999", 34334).expect("resolves");
+    assert_eq!(with[0].port(), 9999);
+}
+
+/// Whitespace survives a copy out of a browser or a chat window.
+#[test]
+fn a_pasted_address_with_spaces_around_it_still_resolves() {
+    let a = resolve_manual("  127.0.0.1  ", 34334).expect("resolves");
+    assert_eq!(a[0].port(), 34334);
+}
