@@ -88,6 +88,14 @@ pub fn run(args: &RunArgs) -> Result<()> {
     for c in cautions(&plan.docker.command) {
         eprintln!("warning: {c}");
     }
+    // Checked HERE and not only in `doctor`, because this is where the cost
+    // lands: a launch begun on a full disk pulls for forty minutes and then
+    // fails with a docker error that never mentions space. A warning rather
+    // than a refusal — the weights may already be cached, in which case nothing
+    // is pulled and the number is irrelevant.
+    if let Some(why) = disk_caution_for(&host.hf_cache_dir) {
+        eprintln!("warning: {why}");
+    }
 
     if args.print {
         if args.portable {
@@ -231,6 +239,16 @@ fn setting_shaped(value: &str) -> bool {
 /// The accelerator comes from the machine, because the warning is about the
 /// hardware the container will run on and a recipe written for one card is
 /// routinely run on another.
+/// Whether the filesystem that will hold the weights has room for them.
+///
+/// The HF cache, not the working directory: that is where a model lands, and it
+/// is routinely a different filesystem from the one `doctor` reports on.
+fn disk_caution_for(hf_cache_dir: &str) -> Option<String> {
+    let path = std::path::Path::new(hf_cache_dir);
+    let free = atlasctl_core::platform::free_bytes(path)?;
+    super::doctor_checks::disk_caution(free, hf_cache_dir)
+}
+
 fn cautions(argv: &[String]) -> Vec<String> {
     let accelerator =
         atlasctl_agent::telemetry::accelerator_name(&StdProcessRunner).unwrap_or_default();
