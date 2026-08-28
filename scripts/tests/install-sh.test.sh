@@ -36,6 +36,7 @@ contains() { # name haystack needle
 # --- detect_target ------------------------------------------------------------
 # Runs in a subshell per case so the stubbed `uname` cannot leak.
 target_for() { # os arch
+    # shellcheck source=/dev/null  # generated above, from install.sh
     ( . "$WORK/lib.sh"
       # shellcheck disable=SC2317  # called indirectly, by detect_target
       uname() { if [ "$1" = "-s" ]; then echo "$OS"; else echo "$ARCH"; fi; }
@@ -56,6 +57,7 @@ contains "an unknown arch is refused by name"      "$(target_for Linux mips64)" 
 printf 'payload\n' > "$WORK/atlasctl-x86_64-unknown-linux-musl.tar.xz"
 good=$(sha256sum "$WORK/atlasctl-x86_64-unknown-linux-musl.tar.xz" | awk '{print $1}')
 
+# shellcheck source=/dev/null  # generated above, from install.sh
 verify() { ( . "$WORK/lib.sh"; verify_checksum "$1" "$2" ) 2>&1; }
 
 printf '%s  atlasctl-x86_64-unknown-linux-musl.tar.xz\n' "$good" > "$WORK/SUMS.good"
@@ -91,7 +93,9 @@ EOF
 chmod +x "$WORK/fake-atlasctl"
 
 agent_run() { # same_version join running supervised
+    # shellcheck source=/dev/null  # generated above, from install.sh
     ( . "$WORK/lib.sh"
+      # shellcheck disable=SC2317  # both stubs are called by install_agent
       if [ "$4" = yes ]; then service_installed() { return 0; }; else service_installed() { return 1; }; fi
       RUNNING="$3" install_agent "$WORK/fake-atlasctl" "$2" "" "$1" ) 2>&1
 }
