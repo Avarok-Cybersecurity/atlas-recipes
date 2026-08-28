@@ -256,6 +256,11 @@ jobs:
             runner: macos-14
           - target: x86_64-apple-darwin
             runner: macos-14
+          # x86_64 only. Windows-on-ARM exists, but Docker Desktop is what
+          # atlasctl drives and its ARM64 Windows story is not one we can
+          # test, so shipping a binary for it would be shipping a promise.
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2022
     steps:
       - uses: actions/checkout@v7
         with:
@@ -277,6 +282,7 @@ jobs:
       # container, with no glibc version to match.
       - run: cargo build --release --locked -p atlasctl --target ${{ matrix.target }}
       - name: package
+        if: ${{ !contains(matrix.target, 'windows') }}
         run: |
           set -eu
           out="atlasctl-${{ matrix.target }}"
@@ -284,13 +290,31 @@ jobs:
           cp "target/${{ matrix.target }}/release/atlasctl" "dist/$out/"
           cp LICENSE README.md "dist/$out/" 2>/dev/null || true
           tar -C "dist/$out" -cJf "dist/${out}.tar.xz" .
+      # A zip, not a tar.xz. Windows has shipped `tar` since 1803, but nothing
+      # in the shell expands one by double-click, and `Expand-Archive` — the
+      # one command an install script can rely on being there — reads zip and
+      # nothing else.
+      - name: package (windows)
+        if: ${{ contains(matrix.target, 'windows') }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = "atlasctl-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "dist/$out" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/atlasctl.exe" "dist/$out/"
+          foreach ($f in 'LICENSE', 'README.md') {
+            if (Test-Path $f) { Copy-Item $f "dist/$out/" }
+          }
+          Compress-Archive -Path "dist/$out/*" -DestinationPath "dist/$out.zip" -Force
       - uses: actions/attest-build-provenance@v2
         with:
-          subject-path: dist/atlasctl-${{ matrix.target }}.tar.xz
+          subject-path: dist/atlasctl-${{ matrix.target }}.*
       - uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.target }}
-          path: dist/*.tar.xz
+          path: |
+            dist/*.tar.xz
+            dist/*.zip
 
   github-release:
     name: publish release assets
@@ -307,10 +331,15 @@ jobs:
           merge-multiple: true
       - name: checksums
         working-directory: dist
-        run: sha256sum ./*.tar.xz | sed 's| \./| |' > SHA256SUMS
+        # Both extensions, one file: install.sh and install.ps1 each look up
+        # the archive they downloaded by name, so an omitted class of artifact
+        # fails as "refusing to install unverified binaries" rather than as a
+        # missing checksum.
+        run: sha256sum ./*.tar.xz ./*.zip | sed 's| \./| |' > SHA256SUMS
       # install.sh rides along on every release so a user can diff the script
       # the website served against the one attached to the release.
       - run: cp scripts/install.sh dist/install.sh
+      - run: cp scripts/install.ps1 dist/install.ps1
       - name: upload
         env:
           GH_TOKEN: ${{ github.token }}

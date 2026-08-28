@@ -34,3 +34,65 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: cargo test
         run: cargo test --workspace
+
+      # A parse pass, not a run: the installer downloads a release, and there
+      # is no Windows release until this lands. A syntax error in a script
+      # served by `irm | iex` is the worst possible failure mode -- it fails
+      # halfway through, on the user's machine, with no way back.
+      - name: parse install.ps1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $errs = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            "scripts/install.ps1", [ref]$null, [ref]$errs)
+          if ($errs) { $errs | ForEach-Object { Write-Host $_ }; exit 1 }
+          Write-Host "install.ps1 parses"
+
+      # The scheduled-task plan is the half no unit test can reach: whether
+      # Task Scheduler ACCEPTS this XML, whether the task then reports Running,
+      # and whether uninstall removes it. Every one of those has failed for a
+      # reason a pure planner cannot see -- a rejected encoding, a quoting bug,
+      # a task that exists but whose process died.
+      - name: install, verify and remove the agent for real
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo build --release -p atlasctl
+          $exe = "target/release/atlasctl.exe"
+
+          & $exe agent install --no-discovery
+          if ($LASTEXITCODE -ne 0) { throw "agent install failed" }
+
+          $task = Get-ScheduledTask -TaskName 'atlasctl-agent' -ErrorAction Stop
+          Write-Host "task state: $($task.State)"
+
+          # The install claims it started; prove the port is actually open
+          # rather than trusting the claim. This is the exact failure the
+          # `verify` step exists for.
+          $up = $false
+          foreach ($i in 1..30) {
+            if (Get-NetTCPConnection -LocalPort 34333 -State Listen -ErrorAction SilentlyContinue) {
+              $up = $true; break
+            }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $up) {
+            $log = "$env:LOCALAPPDATA\atlasctl\atlasctl-agent.log"
+            if (Test-Path $log) { Write-Host "--- agent log ---"; Get-Content $log }
+            else { Write-Host "no log at $log" }
+            throw "the agent never listened on 34333"
+          }
+          Write-Host "the agent is listening"
+
+          # Installing twice is the reported failure on macOS and the reason
+          # pre_activate exists. It must be an upgrade, not an error.
+          & $exe agent install --no-discovery
+          if ($LASTEXITCODE -ne 0) { throw "re-install must upgrade in place, not fail" }
+
+          & $exe agent uninstall
+          if ($LASTEXITCODE -ne 0) { throw "agent uninstall failed" }
+          if (Get-ScheduledTask -TaskName 'atlasctl-agent' -ErrorAction SilentlyContinue) {
+            throw "uninstall left the task behind"
+          }
+          Write-Host "install / re-install / uninstall all clean"
