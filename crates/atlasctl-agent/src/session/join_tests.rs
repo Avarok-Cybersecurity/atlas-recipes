@@ -14,6 +14,7 @@ use atlasctl_protocol::{ClientMsg, ServerMsg};
 /// A session whose agent can take on a new machine.
 fn ready_with_window<'a>(f: &'a Fixture, w: &'a crate::joining::JoinWindow) -> Session<'a> {
     let (mut s, _) = Session::new(SessionDeps {
+        accelerator: "",
         registry: &f.registry,
         launcher: &f.launcher,
         token: TOKEN,
@@ -97,6 +98,7 @@ fn minting_before_the_handshake_is_refused() {
     let f = Fixture::new();
     let w = crate::joining::JoinWindow::default();
     let (mut s, _) = Session::new(SessionDeps {
+        accelerator: "",
         registry: &f.registry,
         launcher: &f.launcher,
         token: TOKEN,

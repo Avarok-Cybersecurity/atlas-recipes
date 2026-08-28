@@ -48,6 +48,7 @@ impl Fixture {
 
     pub(super) fn session(&self) -> Session<'_> {
         let (s, _welcome) = Session::new(SessionDeps {
+            accelerator: "",
             registry: &self.registry,
             launcher: &self.launcher,
             token: TOKEN,
@@ -80,6 +81,7 @@ impl Fixture {
 fn the_agent_speaks_first_with_a_version_range() {
     let f = Fixture::new();
     let (_s, welcome) = Session::new(SessionDeps {
+        accelerator: "",
         registry: &f.registry,
         launcher: &f.launcher,
         token: TOKEN,

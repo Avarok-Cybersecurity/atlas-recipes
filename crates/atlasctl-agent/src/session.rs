@@ -36,6 +36,11 @@ pub struct SessionDeps<'a> {
     pub token: &'a str,
     /// Whether this machine can run a recipe at all.
     pub can_launch: Result<(), String>,
+    /// What this machine's accelerator reports itself to be. Carried so the
+    /// launch path can refuse a setting that is merely CAUTIONED at a keyboard
+    /// — there is no operator on this surface to read a warning. Empty when
+    /// the probe found nothing, which gates nothing.
+    pub accelerator: &'a str,
     /// What this agent knows about other machines.
     ///
     /// `None` is a single-node agent: the fleet verbs answer with this machine
@@ -331,6 +336,7 @@ impl<'a> Session<'a> {
             launcher: self.deps.launcher,
             telemetry: self.deps.telemetry,
             can_launch: &self.deps.can_launch,
+            accelerator: self.deps.accelerator,
         }
     }
 

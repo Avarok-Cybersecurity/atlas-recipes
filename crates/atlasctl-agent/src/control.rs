@@ -38,6 +38,10 @@ pub struct LocalControl<'a> {
     pub telemetry: Option<&'a dyn LaunchTelemetry>,
     /// Whether this machine can run a recipe at all.
     pub can_launch: &'a Result<(), String>,
+    /// What this machine's accelerator reports itself to be, for the
+    /// hardware-aware refusal in [`Self::launch`]. Empty when the probe found
+    /// nothing — which reads as "not GB10" and so gates nothing.
+    pub accelerator: &'a str,
 }
 
 impl LocalControl<'_> {
@@ -109,6 +113,33 @@ impl LocalControl<'_> {
             });
         }
         let overrides = check_settings(requested)?;
+        // A caution the CLI prints and proceeds past is worth nothing here:
+        // this path is driven by the browser and by a granted remote
+        // controller, and there is no operator at the keyboard to read it. On
+        // a GB10 the failure it warns about is a hard freeze needing a power
+        // cycle — unified memory leaves no framebuffer to fall back on — so
+        // the unattended surface refuses what the attended one merely warns
+        // about.
+        //
+        // This gates OVERRIDES only. A recipe's own value never passes through
+        // here, so the shipped 0.9 profiles keep working; what is refused is a
+        // number someone sent over the wire.
+        for (key, value) in &overrides {
+            if let atlasctl_core::ScalarValue::Float(f) = value
+                && let Some(why) = atlasctl_core::settings::caution(key, *f, self.accelerator)
+            {
+                // `Denied` is the exact vocabulary already here: "the setting
+                // exists but clients may not set it", rendered as "cannot be
+                // set remotely". That is the claim being made — not that the
+                // value is out of range, which it is not.
+                return Err(AgentError::BadSettings {
+                    errors: vec![atlasctl_protocol::settings::SettingError::Denied {
+                        key: key.clone(),
+                        reason: why,
+                    }],
+                });
+            }
+        }
         self.launcher.launch(&recipe, &overrides)
     }
 
@@ -264,6 +295,7 @@ pub struct ControlHost {
     launcher: Box<dyn Launcher>,
     telemetry: Option<Box<dyn LaunchTelemetry>>,
     can_launch: Result<(), String>,
+    accelerator: String,
 }
 
 impl ControlHost {
@@ -274,12 +306,14 @@ impl ControlHost {
         launcher: Box<dyn Launcher>,
         telemetry: Option<Box<dyn LaunchTelemetry>>,
         can_launch: Result<(), String>,
+        accelerator: String,
     ) -> Self {
         Self {
             registry,
             launcher,
             telemetry,
             can_launch,
+            accelerator,
         }
     }
 
@@ -287,6 +321,7 @@ impl ControlHost {
     #[must_use]
     pub fn control(&self) -> LocalControl<'_> {
         LocalControl {
+            accelerator: &self.accelerator,
             registry: &self.registry,
             launcher: self.launcher.as_ref(),
             telemetry: self.telemetry.as_deref(),

@@ -267,6 +267,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
             )),
         ))),
         can_launch.clone(),
+        accelerator.clone(),
     ));
 
     let state = Arc::new(AgentState {
@@ -279,6 +280,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         )),
         token: tok.clone().unwrap_or_default(),
         can_launch: can_launch.clone(),
+        accelerator: accelerator.clone(),
         joining: Some(Arc::clone(&joining)),
         port: args.port,
         allow_dev_origins: args.dev_origins,
