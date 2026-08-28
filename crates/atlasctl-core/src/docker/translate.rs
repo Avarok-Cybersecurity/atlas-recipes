@@ -64,6 +64,19 @@ pub enum TranslateError {
         source: NotLaunchable,
     },
 
+    /// A recipe tried to set the operator's network-egress policy.
+    #[error(
+        "{name}: a recipe may not set {key}. Offline-by-default is the \
+         operator's policy, not the recipe's — a recipe that could flip it \
+         could also decide, silently, that this launch may reach the network"
+    )]
+    EgressOverride {
+        /// Recipe name.
+        name: String,
+        /// The key it tried to set.
+        key: String,
+    },
+
     /// Two settings would render the same flag.
     #[error("{name}: {source}")]
     AliasConflict {
@@ -228,7 +241,7 @@ pub fn translate(
         auto_remove: true,
         restart: None,
         name: container_name(&recipe.name, placement),
-        env: build_env(recipe, host, placement, collective),
+        env: build_env(recipe, host, placement, collective)?,
         volumes: BTreeMap::from([(host.hf_cache_dir.clone(), CONTAINER_HF_HOME.to_string())]),
         image: recipe.container.clone(),
         command,
@@ -269,14 +282,26 @@ fn container_name(recipe: &str, placement: &Placement) -> String {
 /// Container environment: our standard block, the fabric block for a cluster
 /// launch, then the recipe's own.
 ///
-/// The recipe wins on collision — it is the more specific statement of intent —
-/// and `$VAR` in its values expands against the host snapshot.
+/// `$VAR` in a recipe's values expands against an ALLOWLIST of the host's
+/// environment, never the whole of it, and a recipe cannot overwrite the
+/// offline block above.
+///
+/// Both restrictions exist because a recipe is not ours. Recipes are fetched
+/// from a remote index and the recipe also names the image it runs, so
+/// expanding `${HF_TOKEN}` or `${AWS_SECRET_ACCESS_KEY}` against the agent's
+/// real environment hands the operator's secrets to code the recipe author
+/// chose — and setting `HF_HUB_OFFLINE=0` re-opens the network to carry them
+/// out. Neither needs a bug elsewhere to work; the two together are just what
+/// "the recipe wins on collision" meant.
+///
+/// No recipe in this repository references `$VAR` at all, and none sets the
+/// offline keys, so this narrows a capability nothing shipped is using.
 fn build_env(
     recipe: &Recipe,
     host: &HostSnapshot,
     placement: &Placement,
     collective: &dyn CollectiveEnv,
-) -> BTreeMap<String, String> {
+) -> Result<BTreeMap<String, String>, TranslateError> {
     let mut env = BTreeMap::from([
         // Offline by default: weights are pre-fetched, and a launch that
         // silently reaches out to the network is a launch you cannot reproduce.
@@ -289,10 +314,69 @@ fn build_env(
         env.extend(collective.cluster_env());
     }
     for (k, v) in &recipe.env {
-        env.insert(k.clone(), host.expand(v));
+        // The offline block is this launcher's statement, not the recipe's.
+        // Silently letting the more specific value win is right for tuning and
+        // wrong for the switch that decides whether the container can reach
+        // the network at all.
+        // Refused, not dropped. Silently ignoring it would launch the
+        // container under a policy the recipe author did not choose, which is
+        // worse than either honouring or refusing — the author is owed an
+        // answer either way.
+        if EGRESS_ENV.contains(&k.as_str()) {
+            return Err(TranslateError::EgressOverride {
+                name: recipe.name.clone(),
+                key: k.clone(),
+            });
+        }
+        env.insert(k.clone(), expand_allowed(host, v));
     }
-    env
+    Ok(env)
 }
 
+/// Keys that decide whether this launch may reach the network.
+///
+/// `HF_HOME` is deliberately NOT here: it is a path inside the container, not
+/// a boundary, and a custom cache layout is a real thing a recipe may want.
+/// Forbid what is dangerous, only what is dangerous.
+const EGRESS_ENV: [&str; 2] = ["HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"];
+
+/// Host variables a recipe's `$VAR` may read.
+///
+/// An allowlist, not a deny list: the interesting names are the ones nobody
+/// thought to forbid. Adding an entry is a security decision — it publishes
+/// that variable's value to any image any recipe names — and belongs with the
+/// same scrutiny as the settings deny list.
+const PASSTHROUGH_ENV: [&str; 6] = [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+];
+
+/// Expand `$VAR` against the passthrough allowlist only.
+///
+/// A name outside the list reads as unset, which `HostSnapshot::expand`
+/// already renders as the empty string. That is the existing contract for an
+/// unset variable — "deliberately not an error: failing a launch over an unset
+/// optional would be worse" — so a recipe asking for something it may not have
+/// behaves exactly as if the host did not have it.
+fn expand_allowed(host: &HostSnapshot, raw: &str) -> String {
+    let allowed = HostSnapshot {
+        env: host
+            .env
+            .iter()
+            .filter(|(k, _)| PASSTHROUGH_ENV.contains(&k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+        ..host.clone()
+    };
+    allowed.expand(raw)
+}
+
+#[cfg(test)]
+#[path = "translate/env_tests.rs"]
+mod env_tests;
 #[cfg(test)]
 mod tests;
