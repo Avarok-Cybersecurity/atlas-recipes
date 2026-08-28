@@ -49,10 +49,21 @@ const fn e(
 #[rustfmt::skip]
 pub static EXPOSED: &[(&str, Disposition)] = &[
     // --- Server -------------------------------------------------------------
+    // `port` is the whole TCP domain, not the IANA registered range. 1024-49151
+    // was a sensible min/max for a form control, and it read as a bound; it was
+    // not one. A bound in this table states the values on which the tool is
+    // CORRECT, and 80, 443 and 65000 all are — sub-1024 binds fine when docker
+    // is root-capable, which it is here, and 49152+ is legal TCP merely
+    // conventioned for ephemeral allocation. Enforcing it on `-o` therefore
+    // removed capability rather than preventing a mistake. 0 is excluded: "let
+    // the kernel choose" is meaningless for a port the operator must dial.
+    //
+    // Contrast `gpu_memory_utilization`'s Float(0.10, 0.95) in memory.rs, which
+    // IS a domain: no deployment of this tool on GB10 is correct at 5.
     (
         "port",
         e(
-            Int(1024, 49151),
+            Int(1, 65535),
             "Port",
             "Port the model server listens on.",
             None,

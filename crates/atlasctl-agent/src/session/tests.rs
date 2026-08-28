@@ -268,7 +268,10 @@ fn an_out_of_range_setting_blocks_the_launch() {
     let out = s.handle(ClientMsg::Launch {
         id: 1,
         recipe: id(REAL),
-        settings: set(&[("port", SettingValue::Int(1))]),
+        // 1 was the example here until `port`'s bound was corrected to the
+        // real TCP domain; it is a valid port. This test is about an
+        // out-of-range value, so it needs one that actually is.
+        settings: set(&[("port", SettingValue::Int(99_999))]),
         on: None,
     });
     assert!(matches!(

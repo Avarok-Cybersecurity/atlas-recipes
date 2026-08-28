@@ -130,8 +130,11 @@ fn valid_settings_pass_through_typed() {
 fn every_problem_is_reported_at_once() {
     // Fixing a form one rejection at a time is a bad experience and encourages
     // people to stop reading the errors.
+    // `port: 1` used to be a third problem here. It is a real TCP port and the
+    // bound was widened to the actual domain, so the case now uses a value that
+    // genuinely is not one.
     let err = validate(&req(&[
-        ("port", SettingValue::Int(1)),
+        ("port", SettingValue::Int(99_999)),
         ("cache_dir", SettingValue::Str("/tmp".into())),
         ("nope", SettingValue::Int(1)),
     ]))
@@ -229,9 +232,8 @@ fn a_value_outside_the_declared_range_is_refused() {
         .expect_err("5 is not a fraction");
     assert!(e.to_string().contains("0.95"), "names the ceiling: {e}");
 
-    let e =
-        super::check_override("port", &ScalarValue::Int(99_999)).expect_err("above the port range");
-    assert!(e.to_string().contains("49151"), "{e}");
+    let e = super::check_override("port", &ScalarValue::Int(99_999)).expect_err("not a TCP port");
+    assert!(e.to_string().contains("65535"), "{e}");
 }
 
 #[test]
@@ -240,8 +242,8 @@ fn values_inside_the_range_pass_including_the_endpoints() {
         super::check_override("gpu_memory_utilization", &ScalarValue::Float(v))
             .unwrap_or_else(|e| panic!("{v} is inside the declared bound: {e}"));
     }
-    super::check_override("port", &ScalarValue::Int(1024)).expect("lower endpoint");
-    super::check_override("port", &ScalarValue::Int(49_151)).expect("upper endpoint");
+    super::check_override("port", &ScalarValue::Int(1)).expect("lower endpoint");
+    super::check_override("port", &ScalarValue::Int(65_535)).expect("upper endpoint");
 }
 
 /// A local shell is not a webpage. Refusing these here would stop someone
@@ -252,4 +254,31 @@ fn a_denied_or_unknown_key_is_not_this_functions_business() {
         .expect("denied keys are a remote-client rule, not a local one");
     super::check_override("nosuchkey", &ScalarValue::Int(1))
         .expect("unknown keys are warned about by the launcher, not refused here");
+}
+
+/// A bound states where the tool is CORRECT, not what a form should suggest.
+/// `port` was declared as the IANA registered range, so once #102 enforced
+/// bounds on `-o`, `-o port=80` — legitimate when docker is root-capable —
+/// was refused for the first time.
+#[test]
+fn the_port_bound_is_the_tcp_domain_not_the_registered_range() {
+    for p in [1_i64, 80, 443, 1024, 8000, 49151, 49152, 65000, 65535] {
+        super::check_override("port", &ScalarValue::Int(p))
+            .unwrap_or_else(|e| panic!("port {p} is a real port: {e}"));
+    }
+    for p in [0_i64, 65536, -1] {
+        super::check_override("port", &ScalarValue::Int(p)).expect_err("outside the TCP domain");
+    }
+}
+
+/// The bound that is genuinely protective must keep refusing. Widening `port`
+/// is a data fix, not a retreat from enforcing bounds.
+#[test]
+fn the_utilisation_bound_still_refuses_what_would_wedge_the_box() {
+    super::check_override("gpu_memory_utilization", &ScalarValue::Float(5.0))
+        .expect_err("5 is not a fraction");
+    super::check_override("gpu_memory_utilization", &ScalarValue::Float(1.0))
+        .expect_err("1.0 leaves nothing for anything else");
+    super::check_override("gpu_memory_utilization", &ScalarValue::Float(0.85))
+        .expect("the value the shipped recipes use");
 }
