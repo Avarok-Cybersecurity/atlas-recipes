@@ -212,3 +212,44 @@ fn the_enumerated_values_still_match_the_engine() {
          and killed every launch that chose it"
     );
 }
+
+// ---- CLI overrides against declared bounds ---------------------------------
+//
+// `validate` serves a webpage and refuses denied and unknown keys too.
+// `check_override` serves a local operator and must NOT: the deny list says
+// what a remote client may set, and an unknown key already draws a warning
+// naming the value it will not apply. What it must catch is the case the CLI
+// passed through in silence — a value outside the range the project declares.
+
+#[test]
+fn a_value_outside_the_declared_range_is_refused() {
+    // Rendered `--gpu-memory-utilization 5` before this, against a declared
+    // Float(0.10, 0.95), on hardware where 0.90 has needed a power cycle.
+    let e = super::check_override("gpu_memory_utilization", &ScalarValue::Float(5.0))
+        .expect_err("5 is not a fraction");
+    assert!(e.to_string().contains("0.95"), "names the ceiling: {e}");
+
+    let e =
+        super::check_override("port", &ScalarValue::Int(99_999)).expect_err("above the port range");
+    assert!(e.to_string().contains("49151"), "{e}");
+}
+
+#[test]
+fn values_inside_the_range_pass_including_the_endpoints() {
+    for v in [0.10_f64, 0.85, 0.95] {
+        super::check_override("gpu_memory_utilization", &ScalarValue::Float(v))
+            .unwrap_or_else(|e| panic!("{v} is inside the declared bound: {e}"));
+    }
+    super::check_override("port", &ScalarValue::Int(1024)).expect("lower endpoint");
+    super::check_override("port", &ScalarValue::Int(49_151)).expect("upper endpoint");
+}
+
+/// A local shell is not a webpage. Refusing these here would stop someone
+/// configuring their own machine, which is not what the deny list is for.
+#[test]
+fn a_denied_or_unknown_key_is_not_this_functions_business() {
+    super::check_override("host", &ScalarValue::Str("0.0.0.0".into()))
+        .expect("denied keys are a remote-client rule, not a local one");
+    super::check_override("nosuchkey", &ScalarValue::Int(1))
+        .expect("unknown keys are warned about by the launcher, not refused here");
+}
