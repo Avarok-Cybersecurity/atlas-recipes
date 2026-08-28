@@ -11,6 +11,10 @@
 //! install that writes a unit naming the wrong binary, or one that enables a
 //! service before reloading the daemon that would notice it exists.
 
+mod windows;
+
+pub use windows::windows_log_path;
+
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
@@ -27,14 +31,17 @@ pub enum ServiceKind {
     Systemd,
     /// A launchd LaunchAgent, on macOS.
     Launchd,
+    /// A Task Scheduler task at logon, on Windows.
+    ///
+    /// A task and not a Windows service, and at logon rather than at boot: a
+    /// service runs in session 0, which cannot reach Docker Desktop's per-user
+    /// named pipe, so the agent would come up healthy and be unable to launch
+    /// anything.
+    ScheduledTask,
 }
 
 impl ServiceKind {
     /// What this build targets.
-    ///
-    /// Windows is deliberately absent rather than guessed at: it needs a
-    /// Scheduled Task at logon, not a service, because session 0 cannot reach
-    /// Docker Desktop's per-user named pipe.
     ///
     /// # Errors
     /// On a platform with no supported supervisor.
@@ -43,6 +50,8 @@ impl ServiceKind {
             Ok(Self::Systemd)
         } else if cfg!(target_os = "macos") {
             Ok(Self::Launchd)
+        } else if cfg!(target_os = "windows") {
+            Ok(Self::ScheduledTask)
         } else {
             bail!(
                 "installing a background service is not supported on this platform yet.\n\
@@ -170,6 +179,7 @@ pub fn plan(kind: ServiceKind, agent: &AgentInvocation, home: &Path, uid: u32) -
     match kind {
         ServiceKind::Systemd => systemd(agent, home),
         ServiceKind::Launchd => launchd(agent, home, uid),
+        ServiceKind::ScheduledTask => windows::scheduled_task(agent, home),
     }
 }
 
@@ -336,7 +346,7 @@ fn shell_words(argv: &[String]) -> String {
 }
 
 /// Escape a value for the plist, which is XML.
-fn xml_escape(s: &str) -> String {
+pub(super) fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
