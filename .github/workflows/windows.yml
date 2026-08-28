@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# Windows is a supported target, so it needs a compiler that says so. Nothing
+# else in CI runs on Windows, and a unix-only API compiles perfectly well on
+# Linux right up to the moment someone asks for a Windows binary.
+name: windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # `check` before `test`: the first port of a unix-only codebase fails to
+      # compile long before it fails a test, and a compile error list is the
+      # thing worth reading.
+      - name: cargo check
+        run: cargo check --workspace --all-targets
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: cargo test
+        run: cargo test --workspace
