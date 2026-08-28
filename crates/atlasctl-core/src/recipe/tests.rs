@@ -161,3 +161,37 @@ fn qualified_name_reflects_provenance() {
     .unwrap();
     assert_eq!(remote.qualified_name(), "@third/r");
 }
+
+/// `model` lands in `spark serve <model>` and `container` in the image operand
+/// of `docker run`, both positionally and neither behind a `--`. A value
+/// starting with `-` is handed straight to an option parser — `container:
+/// --privileged` makes docker read a flag and take the NEXT token as the
+/// image, which is an untrusted field steering the runtime rather than a
+/// launch that cleanly fails.
+///
+/// The audited guarantee that no override VALUE can become flag-shaped covers
+/// what a client sends; these two are recipe fields and were the gap.
+#[test]
+fn a_recipe_field_that_would_be_read_as_an_option_is_refused() {
+    for (field, yaml) in [
+        ("container", "model: org/m\ncontainer: \"--privileged\"\n"),
+        ("model", "model: \"--help\"\ncontainer: img\n"),
+    ] {
+        let err = parse(yaml).expect_err("must refuse a flag-shaped field");
+        let text = format!("{err}");
+        assert!(text.contains(field), "must name the field: {text}");
+        assert!(
+            text.contains("option"),
+            "must say why it is refused: {text}"
+        );
+    }
+}
+
+/// A leading dash is the hazard; a dash anywhere else is an ordinary character
+/// in an image tag or a model id, and refusing those would break real recipes.
+#[test]
+fn an_interior_dash_is_still_an_ordinary_character() {
+    let r = parse("model: unsloth/Qwen3.8-27B-NVFP4\ncontainer: avarok/atlas-gb10:latest\n")
+        .expect("a normal recipe still parses");
+    assert_eq!(r.model, "unsloth/Qwen3.8-27B-NVFP4");
+}
