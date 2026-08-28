@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.1](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.4.0...v0.4.1) (2026-08-28)
+
+
+### Bug Fixes
+
+* **agent:** name what is holding the peer port ([#80](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/80)) ([b7ca139](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/b7ca13942929b08f007fdb2b35008e028c48206f))
+* **fleet:** a beacon must not rewrite a trusted peer's address ([#82](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/82)) ([32b9669](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/32b96695600735e01545fc8df8b81c5c4418c942))
+* **join:** stop telling the operator a code has the length it needs ([#83](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/83)) ([13e17f7](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/13e17f7588ff32a66cfb9afc0ee11355b3b44e3e))
+* **pair:** say that the other machine has to accept too ([#79](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/79)) ([da0decb](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/da0decbe679db88f795d2be65935bfc53be15650))
+* pin mtp_gate=force on the two gate-backing recipes ([#16](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/16)) ([ce399ba](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/ce399ba7d1d335e6b2add767e625236ebe0b0a3b))
+
 ## [0.4.0](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.3.0...v0.4.0) (2026-08-28)
 
 
