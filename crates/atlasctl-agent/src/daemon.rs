@@ -207,9 +207,18 @@ fn spawn_peer_listener(
             let identity = Arc::clone(&identity);
             let serve = Arc::clone(&serve);
             tokio::spawn(async move {
-                let Ok(mut tls) = acceptor.accept(tcp).await else {
-                    // An unpaired caller failing the handshake is the system
-                    // working, not an incident worth logging.
+                // BOUNDED. Neither of the two short phases below may run
+                // forever: this handler is a spawned task holding an fd, and a
+                // caller that connects and simply stops talking would hold both
+                // until the process exits. That is reachable by anyone who can
+                // route to this port, needs no credentials, and leaves nothing
+                // in a log. Only these phases are bounded -- a PINNED peer's
+                // link below is long-lived on purpose and gets no deadline.
+                let Ok(Ok(mut tls)) =
+                    tokio::time::timeout(HANDSHAKE_TIMEOUT, acceptor.accept(tcp)).await
+                else {
+                    // An unpaired caller failing (or stalling) the handshake is
+                    // the system working, not an incident worth logging.
                     return;
                 };
 
@@ -220,7 +229,15 @@ fn spawn_peer_listener(
                 let peer = peer_of(&tls);
                 let pinned = peer.is_some_and(|id| pins.is_pinned(id).unwrap_or(false));
                 if !pinned {
-                    serve_join(&mut tls, &identity, &pins, &joining, &fleet).await;
+                    // A pairing ceremony is four frames between two machines on
+                    // a LAN; thirty seconds is far past generous. Without this a
+                    // stranger who completes the handshake and then goes quiet
+                    // sits in `read_frame` forever.
+                    let _ = tokio::time::timeout(
+                        JOIN_TIMEOUT,
+                        serve_join(&mut tls, &identity, &pins, &joining, &fleet),
+                    )
+                    .await;
                     return;
                 }
                 let Some(sender) = peer else {
@@ -244,6 +261,14 @@ fn peer_of<S>(
     crate::peer::tls::peer_identity(cert).ok().map(|(id, _)| id)
 }
 
+/// How long an unpinned caller gets to finish a TLS handshake.
+const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// How long an unpinned caller gets to finish the pairing ceremony. Four frames
+/// between two machines on a LAN; the generosity is deliberate, the bound is the
+/// point.
+const JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Serve a machine that is not pinned: it may pair, and nothing else.
 ///
 /// Reached only inside a join window, because that is what let it complete a
@@ -262,6 +287,22 @@ async fn serve_join<S>(
     // Charges a guess up front. Every path out of this function below is
     // therefore already accounted for, including the two that return without
     // running a ceremony at all — previously those were free retries.
+    //
+    // ⚠ The cost of that choice, which is real and not yet paid: this charges
+    // for a CONNECTION, not for a guess at the code. Unpair is one-sided by
+    // design (`fleet/listing.rs`), so a machine we removed still pins us and its
+    // link poller keeps dialing every five seconds. Outside a window those
+    // handshakes are refused cheaply — but the moment a human mints a join code,
+    // that poller's next three connections complete the handshake, land here,
+    // and spend the whole budget in about fifteen seconds. Every "add a machine"
+    // afterwards fails with "that invitation was already used", forever, and
+    // nothing names the ex-peer as the cause.
+    //
+    // Fixing it properly means charging only once the caller has actually
+    // attempted the PAIRING protocol — a non-pairing first frame is not a guess
+    // — which means reading and classifying that frame before `pair::run` owns
+    // the stream. That is a change to the ceremony's shape, and it is not made
+    // here because getting it subtly wrong turns a rate limit into no rate limit.
     let Some(code) = joining.begin_attempt() else {
         // The window closed between the handshake and here.
         return;
