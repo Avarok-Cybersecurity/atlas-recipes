@@ -57,14 +57,24 @@ pub fn parse(raw: &str) -> Result<Join> {
         // being added, by someone who pasted something they did not type.
         let len = code.chars().count();
         let stray: String = code.chars().filter(|c| !c.is_ascii_digit()).collect();
+        // The code itself is NOT echoed, which `peer add --code` has also
+        // stopped doing. A near miss of a LIVE code is the case that matters:
+        // typing 7 of 8 digits puts 7 correct digits of a pairing secret into
+        // the terminal, into a shell history, and into whatever scrapes the
+        // output of `install.sh` in a provisioning run — leaving ~10 candidates
+        // against MAX_ATTEMPTS=3 inside the code's TTL.
+        //
+        // What the operator needs is what is WRONG, not what they pasted: the
+        // length, or the characters that cannot be in a code. Those are the
+        // parts that are not secret.
         if stray.is_empty() {
             bail!(
-                "\"{code}\" is not a join code: it is {len} digits, and this needs exactly {}",
+                "that is not a join code: it is {len} digits, and this needs exactly {}",
                 atlasctl_agent::pairing::CODE_DIGITS
             );
         }
         bail!(
-            "\"{code}\" is not a join code: it must be exactly {} digits, and this \
+            "that is not a join code: it must be exactly {} digits, and this \
              has {stray:?} in it",
             atlasctl_agent::pairing::CODE_DIGITS
         );
@@ -194,5 +204,73 @@ mod tests {
         // Spaces after commas survive a trip through a chat window.
         let j = parse("12345678@ a , b ,, c ").expect("parses");
         assert_eq!(j.hosts, ["a", "b", "c"]);
+    }
+}
+
+#[cfg(test)]
+mod disclosure_tests {
+    use super::*;
+
+    /// A near miss of a LIVE code is the case that matters: seven correct
+    /// digits in a terminal, a shell history, or the captured output of an
+    /// `install.sh` provisioning run leaves ~10 candidates against
+    /// MAX_ATTEMPTS=3 inside the code's TTL. `peer add --code` already
+    /// withholds it; this path is the more exposed of the two.
+    #[test]
+    fn a_refused_code_never_hands_back_its_digits() {
+        // The threat is DIGITS of a live code, not any substring. A refusal
+        // may name the offending characters — "-" or "a" — because a code
+        // contains none of those, so naming them cannot describe a real one.
+        // What must never come back is a run of the digits themselves.
+        for bad in ["1234567", "123456789", "12-345678", "1234567a", "98765432x"] {
+            let e = parse(&format!("{bad}@10.10.10.1"))
+                .expect_err("must refuse")
+                .to_string();
+            let digits: String = bad.chars().filter(char::is_ascii_digit).collect();
+            for len in 4..=digits.len() {
+                for run in digits.as_bytes().windows(len) {
+                    let run = std::str::from_utf8(run).expect("ascii");
+                    assert!(
+                        !e.contains(run),
+                        "a {len}-digit run of the code came back: {e:?} contains {run:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// An all-letter value is not a near miss of an all-digit code, so naming
+    /// its characters describes nothing real — and that naming is the whole
+    /// diagnosis for someone who pasted the wrong thing entirely.
+    #[test]
+    fn a_value_that_could_not_be_a_code_may_be_named() {
+        let e = parse("abcdefgh@h").expect_err("refused").to_string();
+        assert!(e.contains("exactly 8 digits"), "{e}");
+    }
+
+    /// Withholding it must not cost the operator the diagnosis — they are on
+    /// the machine being added, reading this about something they pasted.
+    #[test]
+    fn what_is_wrong_is_still_said() {
+        let short = parse("1234@h").expect_err("refused").to_string();
+        assert!(short.contains("4 digits") && short.contains('8'), "{short}");
+
+        let stray = parse("12-345678@h").expect_err("refused").to_string();
+        assert!(stray.contains("exactly 8 digits"), "{stray}");
+        assert!(
+            stray.contains('-'),
+            "the offending character is named: {stray}"
+        );
+    }
+
+    /// The shape example is documentation, not the operator's secret, and it
+    /// is the most useful line in the message.
+    #[test]
+    fn the_example_in_the_shape_message_is_kept() {
+        let e = parse("12345678").expect_err("no @").to_string();
+        assert!(
+            e.contains("<code>@<host>") && e.contains("12345678@"),
+            "{e}"
+        );
     }
 }
