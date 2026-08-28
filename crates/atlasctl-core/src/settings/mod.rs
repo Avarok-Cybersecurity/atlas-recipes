@@ -2,12 +2,14 @@
 
 //! What a remote client may set on a launch, and the check that enforces it.
 
+mod caution;
 mod denied;
 mod memory;
 mod spec;
 mod table;
 mod values;
 
+pub use caution::caution;
 pub use spec::{BoundSpec, Disposition, Spec};
 
 /// Every flag and its disposition, in declaration order.
