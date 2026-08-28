@@ -49,9 +49,23 @@ pub fn parse(raw: &str) -> Result<Join> {
     let host = host.trim();
 
     if !atlasctl_agent::joining::looks_like_code(code) {
+        // The LENGTH, not the digit count. `looks_like_code` wants
+        // `len() == CODE_DIGITS && all ascii_digit`, so a value carrying a
+        // non-digit can satisfy the count and still be refused — and the
+        // message then read "it is 8 digits, and this needs exactly 8", which
+        // is not a complaint anyone can act on. It is read on the machine
+        // being added, by someone who pasted something they did not type.
+        let len = code.chars().count();
+        let stray: String = code.chars().filter(|c| !c.is_ascii_digit()).collect();
+        if stray.is_empty() {
+            bail!(
+                "\"{code}\" is not a join code: it is {len} digits, and this needs exactly {}",
+                atlasctl_agent::pairing::CODE_DIGITS
+            );
+        }
         bail!(
-            "\"{code}\" is not a join code: it is {} digits, and this needs exactly {}",
-            code.chars().filter(char::is_ascii_digit).count(),
+            "\"{code}\" is not a join code: it must be exactly {} digits, and this \
+             has {stray:?} in it",
             atlasctl_agent::pairing::CODE_DIGITS
         );
     }
@@ -127,6 +141,34 @@ mod tests {
     #[test]
     fn a_non_numeric_code_is_refused() {
         assert!(parse("abcdefgh@host").is_err());
+    }
+
+    /// The message must not contradict itself. `looks_like_code` wants a
+    /// LENGTH of 8 and all-digits; reporting the digit COUNT meant a value
+    /// with eight digits and a stray character was refused with "it is 8
+    /// digits, and this needs exactly 8".
+    #[test]
+    fn a_code_with_a_stray_character_is_told_what_is_wrong_with_it() {
+        let e = parse("12-345678@host")
+            .expect_err("must refuse")
+            .to_string();
+        assert!(
+            !e.contains("it is 8 digits, and this needs exactly 8"),
+            "the old message contradicted itself: {e}"
+        );
+        assert!(e.contains("exactly 8 digits"), "{e}");
+        assert!(
+            e.contains('-'),
+            "naming the offending character is the whole point: {e}"
+        );
+    }
+
+    /// The plain wrong-length case keeps its original, correct wording.
+    #[test]
+    fn a_short_all_digit_code_still_reports_its_length() {
+        let e = parse("1234@host").expect_err("must refuse").to_string();
+        assert!(e.contains("4 digits"), "{e}");
+        assert!(e.contains('8'), "{e}");
     }
 
     #[test]
