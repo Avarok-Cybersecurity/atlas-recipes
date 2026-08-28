@@ -70,6 +70,32 @@ $Repo    = 'Avarok-Cybersecurity/atlas-recipes'
 $BinName = 'atlasctl'
 $Port    = 34333
 
+# Windows PowerShell 5.1 turns the FIRST stderr line of a native command into a
+# TERMINATING error when $ErrorActionPreference is 'Stop'. Both probes below run
+# commands that write to stderr in exactly the state they exist to DETECT --
+# `docker info` when Docker Desktop is installed but its engine is stopped, and
+# `agent status` when no agent is answering -- so under 5.1 the probe aborted the
+# install instead of reporting, stranding the machine with a binary and no agent.
+# pwsh 7 does not do this, which is why the test suite (which runs under pwsh)
+# never saw it. Run the probe with the preference relaxed and judge it by its
+# exit code, which is what the callers already wanted.
+function Invoke-Probe {
+    param([Parameter(Mandatory=$true)][scriptblock]$Probe)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Probe 2>&1 | Out-Null
+        # A probe that never reached a native command leaves $LASTEXITCODE stale;
+        # treating stale-as-zero would report a dead docker as healthy.
+        if ($null -eq $LASTEXITCODE) { return 1 }
+        return $LASTEXITCODE
+    } catch {
+        return 1
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
 function Write-Info { param($m) Write-Host "[atlas] $m" -ForegroundColor Cyan }
 function Write-Warn { param($m) Write-Host "[atlas] $m" -ForegroundColor Yellow }
 function Die { param($m) Write-Host "[atlas] error: $m" -ForegroundColor Red; exit 1 }
@@ -172,8 +198,7 @@ function Install-Agent {
     }
 
     if ($SameVersion) {
-        & $Exe agent status *> $null
-        $answering = $LASTEXITCODE -eq 0
+        $answering = (Invoke-Probe { & $Exe agent status }) -eq 0
         # BOTH, not just the port. An operator who ran `atlasctl agent run` by
         # hand has an agent answering and NO task, and skipping on the port
         # alone left it that way: close the window, reboot, and "the website
@@ -220,8 +245,7 @@ function Test-Docker {
         Write-Warn "https://docs.docker.com/desktop/install/windows-install/"
         return
     }
-    docker info *> $null
-    if ($LASTEXITCODE -ne 0) {
+    if ((Invoke-Probe { docker info }) -ne 0) {
         # Installed but not running is its own state, and its own fix. Telling
         # someone to install what they already have is how a working machine
         # gets called broken.
@@ -288,12 +312,25 @@ try {
         # installer is upgrading is exactly such a process. Move it aside first:
         # Windows permits renaming a running image, and the stale copy is
         # cleaned up on the next install.
+        $old = "$exe.old"
+        $moved = $false
         if (Test-Path -LiteralPath $exe) {
-            $old = "$exe.old"
             Remove-Item -Force $old -ErrorAction SilentlyContinue
-            try { Move-Item -Force $exe $old } catch { }
+            try { Move-Item -Force $exe $old; $moved = $true } catch { }
         }
-        Copy-Item -Force $staged $exe
+        try {
+            Copy-Item -Force $staged $exe
+        } catch {
+            # Without this the machine is left with NO binary at all: the working
+            # exe is stranded at .old and the scheduled task points at a path that
+            # no longer exists. An upgrade that fails must leave the old agent
+            # running, not take the fleet's node offline.
+            if ($moved) {
+                Move-Item -Force $old $exe
+                Die "could not install the new binary ($($_.Exception.Message)); kept $oldVersion"
+            }
+            throw
+        }
         Write-Info "installed $exe"
     }
 
