@@ -62,13 +62,28 @@ impl RecipeRef {
 /// Why a reference could not be resolved.
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveError {
+    /// No registry by that name at all.
+    ///
+    /// Distinct from `NotFound`, which says the registry exists and does not
+    /// carry the recipe. Reporting an unknown registry as the latter sent an
+    /// operator looking for a recipe when the typo was in the scope.
+    #[error("no registry named `{registry}`{}", suggestion(.close))]
+    NoSuchRegistry {
+        /// The registry that was named.
+        registry: String,
+        /// Registries that are close to it, if any.
+        close: Vec<String>,
+    },
+
     /// No recipe of that name in that registry.
-    #[error("no recipe named `{name}` in registry `{registry}`")]
+    #[error("no recipe named `{name}` in registry `{registry}`{}", suggestion(.close))]
     NotFound {
         /// The recipe name.
         name: String,
         /// The registry searched.
         registry: String,
+        /// Similar names in that registry, if any.
+        close: Vec<String>,
     },
 
     /// No recipe of that name anywhere.
@@ -162,24 +177,36 @@ impl RegistrySet {
     /// Resolve a reference to a loaded recipe.
     pub fn resolve(&self, r#ref: &RecipeRef) -> Result<Recipe, ResolveError> {
         match r#ref {
+            // A scoped ref gets the same near-miss list a bare one does. It
+            // did not, so `@atlas/qwen3.8-27b-nvfp4-unsloh` was refused flatly
+            // while the identical bare typo was answered with the recipe it
+            // meant — the scope should not cost the operator the suggestion.
             RecipeRef::Scoped { registry, name } if registry == BUILTIN => self
                 .load_builtin(name)
                 .ok_or_else(|| ResolveError::NotFound {
                     name: name.clone(),
                     registry: registry.clone(),
+                    close: self.close_names(name),
                 })?,
             RecipeRef::Scoped { registry, name } => {
                 let reg = self
                     .remotes
                     .iter()
                     .find(|r| &r.name == registry)
-                    .ok_or_else(|| ResolveError::NotFound {
-                        name: name.clone(),
+                    // The registry itself is missing — say so. Reporting this
+                    // as "no recipe named X in registry Y" claims Y exists.
+                    .ok_or_else(|| ResolveError::NoSuchRegistry {
                         registry: registry.clone(),
+                        close: crate::nearest::nearest(
+                            registry,
+                            std::iter::once(BUILTIN.to_string())
+                                .chain(self.remotes.iter().map(|r| r.name.clone())),
+                        ),
                     })?;
                 reg.load(name).ok_or_else(|| ResolveError::NotFound {
                     name: name.clone(),
                     registry: registry.clone(),
+                    close: crate::nearest::nearest(name, reg.recipe_names()),
                 })?
             }
             RecipeRef::Bare(name) => return self.resolve_bare(name),
@@ -214,6 +241,7 @@ impl RegistrySet {
                 .ok_or_else(|| ResolveError::NotFound {
                     name: name.to_string(),
                     registry: one.name.clone(),
+                    close: crate::nearest::nearest(name, one.recipe_names()),
                 })?
                 .map_err(ResolveError::from),
             many => Err(ResolveError::Ambiguous {
