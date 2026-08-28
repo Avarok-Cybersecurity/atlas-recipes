@@ -35,6 +35,7 @@ pub fn install(args: &crate::cli::AgentInstallArgs) -> Result<()> {
         // same trap the port comment warns about — except this one would move
         // the node's identity rather than its port.
         config_dir: std::env::var_os(crate::configdir::DIR_ENV).map(std::path::PathBuf::from),
+        log_file: None,
     };
     let done = crate::service::install(
         &atlasctl_core::io::StdFileSystem,

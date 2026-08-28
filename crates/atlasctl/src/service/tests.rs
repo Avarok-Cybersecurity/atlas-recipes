@@ -110,6 +110,7 @@ pub(super) fn agent() -> AgentInvocation {
         discovery: true,
         browser: true,
         config_dir: None,
+        log_file: None,
     }
 }
 

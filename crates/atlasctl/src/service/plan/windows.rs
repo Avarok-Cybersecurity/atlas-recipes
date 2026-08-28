@@ -33,18 +33,18 @@ pub(super) fn scheduled_task(agent: &AgentInvocation, home: &Path) -> ServicePla
     let unit_path = dir.join(format!("{SERVICE_NAME}.xml"));
     let log = windows_log_path(home);
 
-    // Run THROUGH cmd so the agent's output lands somewhere. Task Scheduler's
-    // Exec action has no redirection of its own and captures nothing, so the
-    // alternative is an agent that exits at startup and leaves no trace.
-    //
-    // The doubled outer quotes are cmd's documented form: given `/c "..."` it
-    // strips one outer pair, so the inner quoting is what the agent sees.
-    let inner = format!(
-        "{} >> {} 2>&1",
-        windows_command_line(&agent.argv()),
-        windows_quote(&log.display().to_string())
-    );
-    let args = format!("/c \"{inner}\"");
+    // The agent is the task's OWN process, not a child of a shell that
+    // redirects for it. That was the first shape, and it broke the upgrade
+    // path: Task Scheduler's stop terminates only the process it started, so
+    // the `cmd.exe` wrapper died and left the agent orphaned, still holding
+    // the port, and the replacement exited at startup. `--log-file` moves the
+    // redirect inside the agent, which removes the wrapper, the orphan, and a
+    // layer of quoting at once.
+    let mut invocation = agent.clone();
+    invocation.log_file = Some(log.clone());
+    let argv = invocation.argv();
+    let (command, rest) = argv.split_first().expect("argv is never empty");
+    let args = windows_command_line(rest);
 
     // ExecutionTimeLimit PT0S is the whole reason this is XML rather than
     // `schtasks /Create /SC ONLOGON`: that route bakes in a 72-hour limit, and
@@ -90,11 +90,12 @@ pub(super) fn scheduled_task(agent: &AgentInvocation, home: &Path) -> ServicePla
          \x20 </Settings>\n\
          \x20 <Actions Context=\"Author\">\n\
          \x20   <Exec>\n\
-         \x20     <Command>cmd.exe</Command>\n\
+         \x20     <Command>{}</Command>\n\
          \x20     <Arguments>{}</Arguments>\n\
          \x20   </Exec>\n\
          \x20 </Actions>\n\
          </Task>\n",
+        xml_escape(command),
         xml_escape(&args)
     );
 

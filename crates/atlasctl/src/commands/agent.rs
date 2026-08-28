@@ -71,6 +71,12 @@ fn probe_can_launch(runner: &dyn ProcessRunner) -> Result<(), String> {
 
 /// Run the agent in the foreground.
 pub fn run(args: &AgentRunArgs) -> Result<()> {
+    // First, before anything can print: everything below reports through
+    // stderr, and a diagnostic emitted before the redirect is a diagnostic the
+    // operator will never find.
+    if let Some(path) = &args.log_file {
+        atlasctl_core::platform::redirect_stdio(path)?;
+    }
     let config_dir = hostinfo::config_dir()?;
     // Checked once, up front, so a permission problem is reported in full
     // rather than as whichever of the three state files happened to be touched

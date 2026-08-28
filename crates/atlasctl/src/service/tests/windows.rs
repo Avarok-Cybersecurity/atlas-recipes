@@ -42,18 +42,40 @@ fn a_windows_task_runs_on_battery() {
     assert!(p.unit_body.contains("<StopIfGoingOnBatteries>false<"));
 }
 
-/// Task Scheduler's Exec action captures no output at all. Without the
-/// redirect an agent that exits at startup leaves nothing anywhere an operator
-/// would look, and `agent install` prints advice pointing at a file that would
-/// never exist.
+/// Task Scheduler's Exec action captures no output at all. Without a log an
+/// agent that exits at startup leaves nothing anywhere an operator would look,
+/// and `agent install` prints advice naming a file that would never exist.
 #[test]
 fn a_windows_task_keeps_a_log_where_the_advice_says_it_is() {
     let home = Path::new("C:\\Users\\o");
     let p = plan(ServiceKind::ScheduledTask, &agent(), home, 0);
     let log = crate::service::plan::windows_log_path(home);
     let leaf = log.file_name().expect("a file name").to_string_lossy();
+    assert!(p.unit_body.contains("--log-file"), "{}", p.unit_body);
     assert!(p.unit_body.contains(&*leaf), "{}", p.unit_body);
-    assert!(p.unit_body.contains("2&gt;&amp;1"), "{}", p.unit_body);
+}
+
+/// The agent must be the task's OWN process. A shell wrapper that redirects
+/// for it looks equivalent and is not: Task Scheduler's stop terminates only
+/// the process it started, so the wrapper dies, the agent is orphaned still
+/// holding the port, and the replacement exits at startup — which is exactly
+/// what a reinstall did on CI, reporting "installed, but it is NOT running".
+#[test]
+fn a_windows_task_runs_the_agent_directly_and_not_through_a_shell() {
+    let p = plan(
+        ServiceKind::ScheduledTask,
+        &agent(),
+        Path::new("C:\\Users\\o"),
+        0,
+    );
+    for shell in ["cmd.exe", "cmd ", "/c "] {
+        assert!(
+            !p.unit_body.contains(shell),
+            "the task must not run through {shell}: {}",
+            p.unit_body
+        );
+    }
+    assert!(p.unit_body.contains("atlasctl"), "{}", p.unit_body);
 }
 
 /// Replacing the task definition leaves the OLD process running, so an upgrade
@@ -116,6 +138,7 @@ fn a_path_ending_in_a_backslash_survives_quoting() {
         discovery: true,
         browser: true,
         config_dir: Some(PathBuf::from("C:\\Users\\o\\state dir\\")),
+        log_file: None,
     };
     let p = plan(ServiceKind::ScheduledTask, &a, Path::new("C:\\Users\\o"), 0);
     // The trailing backslash must be doubled so it escapes itself rather than
