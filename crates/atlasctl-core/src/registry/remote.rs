@@ -190,13 +190,45 @@ impl RemoteStore {
     /// `git reset --hard` inside a directory the user chose would be an easy
     /// way to destroy their work, so the update path is confined by
     /// construction rather than by care.
+    ///
+    /// `starts_with` alone is not that confinement. It compares COMPONENTS, and
+    /// `<cache>/../../../my-project` begins with `<cache>` by that measure — so
+    /// the guard returned ok for a path that resolves to the user's own work,
+    /// and the hard reset followed. `path` is deserialised straight out of
+    /// `registries.yaml`, so nothing upstream had rejected the `..` either.
+    ///
+    /// Both halves are needed. The lexical check catches a path that does not
+    /// exist yet, where `canonicalize` cannot answer at all; canonicalising
+    /// catches a symlink, which no amount of component inspection can see.
+    ///
+    /// # Errors
+    /// If the target is outside the cache, or cannot be resolved to decide.
     pub fn guard_cache_path(cache_root: &Path, target: &Path) -> Result<()> {
-        if !target.starts_with(cache_root) {
-            bail!(
+        let refuse = |resolved: &Path| -> anyhow::Error {
+            anyhow::anyhow!(
                 "refusing to update {}: it is outside the registry cache at {}",
-                target.display(),
+                resolved.display(),
                 cache_root.display()
-            );
+            )
+        };
+
+        if target
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(refuse(target));
+        }
+        if !target.starts_with(cache_root) {
+            return Err(refuse(target));
+        }
+
+        // A registry being updated has been cloned, so it exists and this
+        // resolves. When it does not, the lexical checks above already stand;
+        // failing to resolve is not treated as permission.
+        if let (Ok(real_target), Ok(real_root)) = (target.canonicalize(), cache_root.canonicalize())
+            && !real_target.starts_with(&real_root)
+        {
+            return Err(refuse(&real_target));
         }
         Ok(())
     }

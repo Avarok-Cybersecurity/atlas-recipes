@@ -123,6 +123,35 @@ pub fn posix_user() -> Option<crate::host::PosixUser> {
     }
 }
 
+/// This machine's name, from the kernel.
+///
+/// `gethostname`, not `/proc/sys/kernel/hostname`. That file is Linux-only, and
+/// `#[cfg(unix)]` includes macOS — where it does not exist, so every Mac fell
+/// through to `$HOSTNAME` (unset under launchd) and advertised itself as the
+/// fallback string instead of its own name.
+#[cfg(unix)]
+fn gethostname() -> Option<String> {
+    // POSIX guarantees HOST_NAME_MAX is meaningful; 256 covers every platform
+    // we build for and the result is truncated rather than overflowing.
+    // `c_char` is signed on x86_64 and unsigned on aarch64, so the alias is
+    // load-bearing: a literal `i8` array fails to build on one of the two
+    // architectures this ships for.
+    let mut buf = [0 as libc::c_char; 256];
+    // SAFETY: `buf` is a live array of exactly the length passed, and
+    // gethostname writes at most that many bytes into it.
+    if unsafe { libc::gethostname(buf.as_mut_ptr(), buf.len()) } != 0 {
+        return None;
+    }
+    // NUL-terminate defensively: POSIX leaves truncation unterminated.
+    buf[255] = 0;
+    // SAFETY: `buf` is NUL-terminated by the line above at the latest.
+    let s = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) };
+    s.to_str()
+        .ok()
+        .map(ToOwned::to_owned)
+        .filter(|s| !s.is_empty())
+}
+
 /// Free bytes on the filesystem holding `path`, when it can be determined.
 ///
 /// One implementation, because "how much room is left" was asked in two places
@@ -326,7 +355,7 @@ pub fn which(name: &str) -> Option<std::path::PathBuf> {
 #[must_use]
 pub fn hostname_or(fallback: &str) -> String {
     #[cfg(unix)]
-    let from_os = std::fs::read_to_string("/proc/sys/kernel/hostname").ok();
+    let from_os = gethostname();
     #[cfg(windows)]
     let from_os = std::env::var("COMPUTERNAME").ok();
 
