@@ -2,14 +2,17 @@
 
 use super::*;
 use atlasctl_core::docker::profile::{NvidiaDevices, ROOTLESS_V1};
+use atlasctl_core::host::PosixUser;
 use atlasctl_core::io::RecordingRunner;
 use atlasctl_core::io::process::Output;
 use atlasctl_core::recipe::Provenance;
 
 fn host() -> HostSnapshot {
     HostSnapshot {
-        uid: 1000,
-        gid: 1000,
+        posix_user: Some(PosixUser {
+            uid: 1000,
+            gid: 1000,
+        }),
         home: "/home/spark".into(),
         hf_cache_dir: "/home/spark/.cache/huggingface".into(),
         env: BTreeMap::new(),

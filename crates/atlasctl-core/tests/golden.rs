@@ -17,7 +17,7 @@ use atlasctl_core::chain::{Overrides, UserConfig};
 use atlasctl_core::docker::collective::NcclRoce;
 use atlasctl_core::docker::profile::{NvidiaDevices, ROOTLESS_V1};
 use atlasctl_core::docker::translate::{DEFAULT_MASTER_PORT, LaunchContext, Placement, translate};
-use atlasctl_core::host::HostSnapshot;
+use atlasctl_core::host::{HostSnapshot, PosixUser};
 use atlasctl_core::recipe::{Provenance, Recipe};
 use atlasctl_core::scalar::ScalarValue;
 use atlasctl_core::settings::{self, Disposition};
@@ -28,8 +28,10 @@ use std::path::PathBuf;
 /// A host that does not exist, so goldens are identical on every machine.
 fn fixed_host() -> HostSnapshot {
     HostSnapshot {
-        uid: 1000,
-        gid: 1000,
+        posix_user: Some(PosixUser {
+            uid: 1000,
+            gid: 1000,
+        }),
         home: "/home/spark".into(),
         hf_cache_dir: "/home/spark/.cache/huggingface".into(),
         env: BTreeMap::new(),

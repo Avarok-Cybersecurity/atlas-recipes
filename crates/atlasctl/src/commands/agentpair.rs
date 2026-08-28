@@ -192,9 +192,7 @@ fn dial_hosts() -> Vec<String> {
 }
 
 fn hostname_hint() -> String {
-    std::fs::read_to_string("/proc/sys/kernel/hostname")
-        .map(|h| h.trim().to_owned())
-        .unwrap_or_else(|_| "<this-machine>".to_owned())
+    atlasctl_core::platform::hostname()
 }
 
 /// Every place to dial, as one `peer add` target.

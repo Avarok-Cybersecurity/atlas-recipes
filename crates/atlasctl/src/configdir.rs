@@ -37,12 +37,10 @@ pub fn resolve() -> Result<PathBuf> {
     {
         return Ok(PathBuf::from(dir));
     }
-    let base = std::env::var("XDG_CONFIG_HOME")
-        .or_else(|_| std::env::var("HOME").map(|h| format!("{h}/.config")))
-        .with_context(|| {
-            format!("neither {DIR_ENV}, XDG_CONFIG_HOME nor HOME is set, so there is nowhere to keep this node's identity")
-        })?;
-    Ok(PathBuf::from(base).join("atlasctl"))
+    let base = atlasctl_core::platform::config_base().with_context(|| {
+        format!("{DIR_ENV} is not set either, so there is nowhere to keep this node's identity")
+    })?;
+    Ok(base.join("atlasctl"))
 }
 
 /// What a directory looks like to the process trying to use it.

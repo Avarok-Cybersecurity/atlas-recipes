@@ -174,7 +174,47 @@ fn free_bytes(path: &std::path::Path) -> Option<f64> {
         )]
         Some(stat.f_bavail as f64 * stat.f_frsize as f64)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+        // Same walk as the unix arm and for the same reason: the cache
+        // directory may not exist yet, and what matters is the volume that
+        // would hold it.
+        let mut probe = path;
+        while !probe.exists() {
+            probe = probe.parent()?;
+        }
+        let wide: Vec<u16> = probe
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut avail: u64 = 0;
+        // SAFETY: `wide` is NUL-terminated and outlives the call; `avail` is
+        // written only by it and read only after it reports success. The two
+        // total-size outputs are not wanted, and NULL is documented as the way
+        // to decline them.
+        let ok = unsafe {
+            GetDiskFreeSpaceExW(
+                wide.as_ptr(),
+                &raw mut avail,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return None;
+        }
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "free space is displayed in gigabytes"
+        )]
+        // Available to THIS user, not the volume total: a per-user quota is
+        // the number that decides whether a pull fits.
+        Some(avail as f64)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = path;
         None
