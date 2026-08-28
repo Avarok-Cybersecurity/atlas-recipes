@@ -17,7 +17,12 @@ pub fn run() -> Result<()> {
     problems += check_docker();
     // The three that were added after the fact, each one a failure somebody hit
     // during onboarding and diagnosed from an error naming the wrong thing.
-    for f in [check_config_dir(), check_agent(), check_reachable()] {
+    for f in [
+        check_config_dir(),
+        check_agent(),
+        check_reachable(),
+        check_disk(),
+    ] {
         println!("{}", f.line);
         problems += usize::from(f.problem);
     }
@@ -122,6 +127,33 @@ fn which(name: &str) -> Option<std::path::PathBuf> {
 }
 
 /// Where the agent keeps its identity, its pins and its browser token.
+/// Free space where docker and the model cache live.
+///
+/// Read with `df -Pk`: POSIX output is one line per filesystem with a fixed
+/// column order, which `df` without `-P` does not guarantee — a long device
+/// name wraps and the figure moves to the next line.
+///
+/// A machine we cannot measure is reported as ok rather than as a problem: an
+/// unreadable `df` says nothing about whether there is room, and doctor now
+/// exits non-zero on a problem, so guessing here would fail a healthy box.
+fn check_disk() -> Finding {
+    let out = StdProcessRunner.run(&["df".into(), "-Pk".into(), ".".into()]);
+    let free_kb = out.ok().and_then(|o| {
+        if !o.success() {
+            return None;
+        }
+        o.stdout
+            .lines()
+            .nth(1)
+            .and_then(|l| l.split_whitespace().nth(3).map(str::to_owned))
+            .and_then(|k| k.parse::<u64>().ok())
+    });
+    match free_kb {
+        Some(kb) => doctor_checks::disk_space(kb.saturating_mul(1024), "."),
+        None => doctor_checks::disk_unknown(),
+    }
+}
+
 fn check_config_dir() -> Finding {
     match crate::hostinfo::usable_config_dir() {
         Ok(dir) => doctor_checks::config_dir(ConfigDirState::Writable(dir.display().to_string())),
