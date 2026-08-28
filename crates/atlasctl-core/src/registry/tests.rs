@@ -299,3 +299,61 @@ fn at_most_three_names_are_offered() {
         assert!(reg.close_names(probe).len() <= 3, "{probe}");
     }
 }
+
+// ---- scoped refs ------------------------------------------------------------
+//
+// A scope should cost the operator nothing. Before this, `@atlas/<typo>` was
+// refused flatly while the identical BARE typo was answered with the recipe it
+// meant, and a misspelt REGISTRY was reported as "no recipe named X in registry
+// Y" — which claims Y exists and sends someone looking for the wrong thing.
+
+#[test]
+fn a_scoped_typo_gets_the_same_suggestion_as_a_bare_one() {
+    let set = RegistrySet::builtin_only();
+    let bare = set
+        .resolve(&RecipeRef::parse("qwen3.8-27b-nvfp4-unsloh"))
+        .expect_err("refused")
+        .to_string();
+    let scoped = set
+        .resolve(&RecipeRef::parse("@atlas/qwen3.8-27b-nvfp4-unsloh"))
+        .expect_err("refused")
+        .to_string();
+    assert!(bare.contains("Did you mean"), "{bare}");
+    assert!(
+        scoped.contains("Did you mean"),
+        "the scope cost the hint: {scoped}"
+    );
+    assert!(
+        scoped.contains("qwen3.8-27b-nvfp4-unsloth"),
+        "and it must name the recipe meant: {scoped}"
+    );
+}
+
+#[test]
+fn an_unknown_registry_is_not_reported_as_a_missing_recipe() {
+    let e = RegistrySet::builtin_only()
+        .resolve(&RecipeRef::parse("@nosuch/foo"))
+        .expect_err("refused")
+        .to_string();
+    assert!(e.contains("no registry named `nosuch`"), "{e}");
+    assert!(
+        !e.contains("no recipe named"),
+        "claiming the registry exists is the bug: {e}"
+    );
+}
+
+#[test]
+fn a_near_miss_registry_is_suggested() {
+    let e = RegistrySet::builtin_only()
+        .resolve(&RecipeRef::parse("@atlaz/foo"))
+        .expect_err("refused")
+        .to_string();
+    assert!(e.contains("Did you mean atlas?"), "{e}");
+}
+
+#[test]
+fn a_correct_scoped_ref_still_resolves() {
+    RegistrySet::builtin_only()
+        .resolve(&RecipeRef::parse("@atlas/qwen3.8-27b-nvfp4-unsloth"))
+        .expect("the qualified form is the documented one");
+}
