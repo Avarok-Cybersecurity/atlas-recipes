@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-only
+# Every `.` in this file sources $WORK/lib.sh, generated at run time from
+# install.sh below — there is no path shellcheck could follow. A file-level
+# directive has to precede all code, which is why it sits up here rather than
+# beside the sources it is about.
+# shellcheck disable=SC1091
 #
 # Tests for scripts/install.sh — the `curl … | sh` one-liner.
 #
@@ -17,10 +22,6 @@
 
 set -u
 
-# Every `.` in this file sources $WORK/lib.sh, which is generated at run time
-# from install.sh a few lines below — there is no path shellcheck could follow,
-# and saying so once beats a directive above each of the eight helpers.
-# shellcheck disable=SC1091
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 WORK=$(mktemp -d)
