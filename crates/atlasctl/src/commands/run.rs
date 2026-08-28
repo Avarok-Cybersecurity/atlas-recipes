@@ -10,9 +10,11 @@ use atlasctl_core::chain::UserConfig;
 use atlasctl_core::docker::collective::NcclRoce;
 use atlasctl_core::docker::profile::{NvidiaDevices, ROOTLESS_V1};
 use atlasctl_core::docker::translate::{LaunchContext, translate};
+use atlasctl_core::hfcache;
 use atlasctl_core::io::{ProcessRunner, StdProcessRunner};
 use atlasctl_core::nearest;
 use atlasctl_core::registry::RecipeRef;
+use std::path::Path;
 
 /// Launch a recipe, or print the command it would run.
 pub fn run(args: &RunArgs) -> Result<()> {
@@ -89,6 +91,26 @@ pub fn run(args: &RunArgs) -> Result<()> {
             println!("{}", plan.docker);
         }
         return Ok(());
+    }
+
+    // The container is launched with HF_HUB_OFFLINE=1, so a model that is not
+    // already in the host cache cannot be fetched from inside it. Said here,
+    // before the image pull, because otherwise the operator waits through a
+    // multi-gigabyte pull to reach the Hub library's own cache-miss message,
+    // inside a container that has already exited, reachable only via
+    // `atlasctl logs`.
+    if let Some(dir) = hfcache::hub_dir(Path::new(&host.hf_cache_dir), &recipe.model)
+        && !dir.exists()
+    {
+        bail!(
+            "`{}` needs the model `{}`, which is not in {}.\n\
+                 The launch runs offline, so it cannot download it. Fetch it first:\n\
+                   hf download {}",
+            args.recipe,
+            recipe.model,
+            host.hf_cache_dir,
+            recipe.model
+        );
     }
 
     let runner = StdProcessRunner;

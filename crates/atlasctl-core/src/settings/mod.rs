@@ -63,6 +63,36 @@ fn disposition(key: &str) -> Option<&'static Disposition> {
     dispositions().find(|(k, _)| *k == key).map(|(_, d)| d)
 }
 
+/// Check one locally-supplied override against the bound the setting declares.
+///
+/// This is NOT `validate`. That function serves a webpage, so it also refuses
+/// DENIED keys and unknown ones. A local operator is not a webpage: the deny
+/// list is a statement about what a remote client may set, and applying it here
+/// would stop someone from configuring their own machine from their own shell.
+/// An unknown key is likewise left alone — the launcher already warns that it
+/// will not be applied, and that warning names the value.
+///
+/// What it does catch is the case the CLI silently passed through: a value
+/// outside the range the project declares for a setting it does expose.
+/// `-o gpu_memory_utilization=5` rendered `--gpu-memory-utilization 5` against
+/// a declared `Float(0.10, 0.95)`, on hardware where 0.90 has frozen a machine
+/// hard enough to need a power cycle.
+///
+/// # Errors
+/// The bound's own `SettingError` when the value is outside it.
+pub fn check_override(key: &str, value: &ScalarValue) -> Result<(), SettingError> {
+    let Some(Disposition::Expose(spec)) = disposition(key) else {
+        return Ok(());
+    };
+    let sent = match value {
+        ScalarValue::Bool(b) => SettingValue::Bool(*b),
+        ScalarValue::Int(n) => SettingValue::Int(*n),
+        ScalarValue::Float(f) => SettingValue::Float(*f),
+        ScalarValue::Str(s) => SettingValue::Str(s.clone()),
+    };
+    spec.bound.to_bound().check(key, &sent).map(|_| ())
+}
+
 /// Validate a client's requested overrides.
 ///
 /// Returns values ready for the config chain. Every error is collected rather

@@ -35,6 +35,9 @@ pub fn build_overrides(options: &[String], port: Option<u16>) -> Result<Override
     let mut out = Overrides::new();
     for opt in options {
         let (k, v) = parse_override(opt)?;
+        // The declared bound was enforced for the web surface and not here, so
+        // the CLI passed a nonsense value straight into the rendered command.
+        atlasctl_core::settings::check_override(&k, &v)?;
         if out.insert(k.clone(), v).is_some() {
             bail!("`{k}` was given more than once");
         }
