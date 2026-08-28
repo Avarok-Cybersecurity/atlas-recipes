@@ -402,15 +402,13 @@ fn dial_first_reachable(
     addrs: &[std::net::SocketAddr],
     code: &str,
 ) -> Result<(std::net::SocketAddr, crate::peer::pair::Paired)> {
-    let mut why: Vec<String> = Vec::new();
-    for addr in addrs {
-        match driver.pair(*addr, code) {
-            Ok(paired) => return Ok((*addr, paired)),
-            Err(e) => why.push(format!("{addr}: {e:#}")),
-        }
-    }
-    anyhow::bail!(
-        "could not pair over any advertised address — {}",
-        why.join("; ")
-    )
+    // The walk and its stop rule live in `peer::reach`, shared with the
+    // joining direction: only a failure to REACH the peer earns another
+    // address, because every address here is the same machine and a refusal
+    // has already spent one of the code's three attempts.
+    // `{e:#}`, not `.context(…)`: the accumulated reasons belong in the
+    // message itself. Behind a context they only appear when something prints
+    // the whole chain, and the caller nearest the operator prints the top.
+    crate::peer::reach::walk(addrs, |addr| driver.pair(addr, code))
+        .map_err(|e| anyhow::anyhow!("could not pair over any advertised address — {e:#}"))
 }

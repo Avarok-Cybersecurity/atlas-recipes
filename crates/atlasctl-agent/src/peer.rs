@@ -19,6 +19,7 @@ pub mod control;
 pub mod join;
 pub mod link;
 pub mod pair;
+pub mod reach;
 pub mod tls;
 pub mod wire;
 

@@ -33,6 +33,15 @@ impl FakePairing {
             calls: std::sync::Mutex::new(Vec::new()),
         }
     }
+    /// A machine that never answered — the wrong network, a firewall, a box
+    /// asleep. Distinct from [`Self::refusing`] because only this one lets the
+    /// walk move on without spending an attempt.
+    fn unreachable() -> Self {
+        Self {
+            answer: Err(String::new()),
+            calls: std::sync::Mutex::new(Vec::new()),
+        }
+    }
     fn refusing(why: &str) -> Self {
         Self {
             answer: Err(why.to_owned()),
@@ -51,7 +60,18 @@ impl crate::fleet::PeerPairing for Arc<FakePairing> {
             .lock()
             .expect("lock")
             .push((addr, code.to_owned()));
-        self.answer.clone().map_err(|e| anyhow::anyhow!(e))
+        match self.answer.clone() {
+            Ok(p) => Ok(p),
+            // An empty reason stands for a transport failure, which is carried
+            // as a real `io::Error` so the production predicate sees what it
+            // would see in the field rather than a string we shaped for it.
+            Err(e) if e.is_empty() => Err(anyhow::Error::new(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "connection refused",
+            ))
+            .context("dialling the peer")),
+            Err(e) => Err(anyhow::anyhow!(e)),
+        }
     }
 }
 
@@ -169,5 +189,66 @@ fn an_exchange_that_is_never_trusted_writes_nothing() {
     assert!(
         !PinStore::new(&t.0).is_pinned(node).expect("reads"),
         "a refused exchange must never have touched the pin store"
+    );
+}
+
+/// A beacon from a machine that offers several links, like a DGX with two
+/// RoCE addresses and one on the ordinary LAN.
+fn beacon_at(id: NodeId, name: &str, addrs: &[&str]) -> crate::discovery::Beacon {
+    let mut b = beacon(id, name, true);
+    b.addresses = addrs
+        .iter()
+        .map(|a| a.parse::<std::net::IpAddr>().expect("addr"))
+        .collect();
+    b
+}
+
+/// The code allows three attempts and a DGX advertises three addresses, so a
+/// walk that treats a REFUSAL as a reason to try the next one turns a single
+/// mistyped code into a lockout — before the operator has had one real go.
+#[test]
+fn a_machine_that_answered_and_refused_costs_exactly_one_attempt() {
+    let t = Tmp::new("one-attempt");
+    let node = NodeId::from_bytes([6; 32]);
+    let driver = Arc::new(FakePairing::refusing("key confirmation failed"));
+    let f = fleet_at(&t.0).with_pairing(Box::new(Arc::clone(&driver)));
+    f.observe(beacon_at(
+        node,
+        "dgx1",
+        &["10.10.10.9", "10.10.10.13", "192.168.68.68"],
+    ));
+
+    f.pair(node, "13572468").expect_err("must refuse");
+    assert_eq!(
+        driver.calls.lock().expect("lock").len(),
+        1,
+        "every address here is the SAME machine; a refusal already spent an \
+         attempt, so the walk must stop rather than spend the rest"
+    );
+}
+
+/// The other half: when nothing answers, the next address is free, and it is
+/// the whole reason more than one is offered — a laptop can reach only the
+/// last of a DGX's three.
+#[test]
+fn an_address_that_never_answers_moves_on_to_the_next() {
+    let t = Tmp::new("walk-on");
+    let node = NodeId::from_bytes([6; 32]);
+    let driver = Arc::new(FakePairing::unreachable());
+    let f = fleet_at(&t.0).with_pairing(Box::new(Arc::clone(&driver)));
+    f.observe(beacon_at(
+        node,
+        "dgx1",
+        &["10.10.10.9", "10.10.10.13", "192.168.68.68"],
+    ));
+
+    f.pair(node, "13572468")
+        .expect_err("nothing answered anywhere");
+    let calls = driver.calls.lock().expect("lock");
+    assert_eq!(calls.len(), 3, "all three links must be tried");
+    assert_eq!(
+        calls[2].0.ip().to_string(),
+        "192.168.68.68",
+        "the LAN address is last, and is the only one a laptop could use"
     );
 }

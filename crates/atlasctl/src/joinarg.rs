@@ -19,8 +19,15 @@ use anyhow::{Result, bail};
 pub struct Join {
     /// The digits minted by the machine doing the inviting.
     pub code: String,
-    /// Where to dial it, as typed — a host or an address, optionally with a port.
-    pub host: String,
+    /// Every place the inviting machine said it can be reached, in the order
+    /// it offered them, as typed — a host or address, optionally with a port.
+    ///
+    /// A list because the inviting machine cannot know which of its networks
+    /// the new one shares. A DGX offers its RoCE fabric first (correct, and
+    /// fastest, for another DGX) and its ordinary LAN address last; a laptop
+    /// can only reach the last. Naming one would work for whichever machine
+    /// we guessed and fail on the other, remotely, after a clean install.
+    pub hosts: Vec<String>,
 }
 
 /// Split `<code>@<host>` into its parts.
@@ -48,12 +55,21 @@ pub fn parse(raw: &str) -> Result<Join> {
             atlasctl_agent::pairing::CODE_DIGITS
         );
     }
-    if host.is_empty() {
+    // Commas separate the alternatives. Neither a hostname, an IPv4 address,
+    // a `host:port` nor a bracketed IPv6 literal can contain one, so this
+    // cannot split a value that was meant to stay whole.
+    let hosts: Vec<String> = host
+        .split(',')
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if hosts.is_empty() {
         bail!("--join names no machine to dial; expected <code>@<host>");
     }
     Ok(Join {
         code: code.to_owned(),
-        host: host.to_owned(),
+        hosts,
     })
 }
 
@@ -65,14 +81,14 @@ mod tests {
     fn an_ordinary_invitation_splits() {
         let j = parse("12345678@10.10.10.1").expect("parses");
         assert_eq!(j.code, "12345678");
-        assert_eq!(j.host, "10.10.10.1");
+        assert_eq!(j.hosts, ["10.10.10.1"]);
     }
 
     #[test]
     fn a_host_and_port_survives() {
         assert_eq!(
-            parse("12345678@spark:34334").expect("parses").host,
-            "spark:34334"
+            parse("12345678@spark:34334").expect("parses").hosts,
+            ["spark:34334"]
         );
     }
 
@@ -81,12 +97,12 @@ mod tests {
     #[test]
     fn an_ipv6_literal_is_not_torn_apart() {
         let j = parse("12345678@[fe80::1]:34334").expect("parses");
-        assert_eq!(j.host, "[fe80::1]:34334");
+        assert_eq!(j.hosts, ["[fe80::1]:34334"]);
     }
 
     #[test]
     fn surrounding_whitespace_from_a_copy_paste_is_forgiven() {
-        assert_eq!(parse("  12345678@host \n").expect("parses").host, "host");
+        assert_eq!(parse("  12345678@host \n").expect("parses").hosts, ["host"]);
     }
 
     /// The message has to teach the shape, because it is read on the machine
@@ -117,5 +133,24 @@ mod tests {
     fn an_empty_host_is_refused_rather_than_dialled() {
         assert!(parse("12345678@").is_err());
         assert!(parse("12345678@   ").is_err());
+        assert!(
+            parse("12345678@,,").is_err(),
+            "a list of nothing is still nothing to dial"
+        );
+    }
+
+    /// The case this list exists for: a DGX offers its RoCE fabric first and
+    /// its LAN address last, and only the last is reachable from a laptop.
+    #[test]
+    fn every_alternative_the_inviter_offered_is_kept_in_order() {
+        let j = parse("12345678@10.10.10.9,10.10.10.13,192.168.68.68").expect("parses");
+        assert_eq!(j.hosts, ["10.10.10.9", "10.10.10.13", "192.168.68.68"]);
+    }
+
+    #[test]
+    fn a_ragged_list_from_a_copy_paste_still_parses() {
+        // Spaces after commas survive a trip through a chat window.
+        let j = parse("12345678@ a , b ,, c ").expect("parses");
+        assert_eq!(j.hosts, ["a", "b", "c"]);
     }
 }

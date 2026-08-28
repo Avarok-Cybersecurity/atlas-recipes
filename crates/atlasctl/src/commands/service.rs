@@ -93,31 +93,48 @@ fn join_fleet(join: &crate::joinarg::Join, grant_control: bool) -> Result<()> {
     let identity = Identity::load_or_create(&dir)?;
     let pins = PinStore::new(&dir);
 
-    let addrs = atlasctl_agent::discovery::resolve_manual(
-        &join.host,
-        atlasctl_agent::peer::DEFAULT_PEER_PORT,
-    )?;
-    let addr = *addrs
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("{} resolved to no addresses", join.host))?;
+    // Every alternative the inviter offered, flattened in the order given. A
+    // host that will not resolve is recorded rather than fatal: the LAST entry
+    // is often the only one this machine's network can even name.
+    let mut addrs: Vec<std::net::SocketAddr> = Vec::new();
+    let mut unresolved: Vec<String> = Vec::new();
+    for host in &join.hosts {
+        match atlasctl_agent::discovery::resolve_manual(
+            host,
+            atlasctl_agent::peer::DEFAULT_PEER_PORT,
+        ) {
+            Ok(found) => addrs.extend(found),
+            Err(e) => unresolved.push(format!("{host}: {e:#}")),
+        }
+    }
+    if addrs.is_empty() {
+        anyhow::bail!(
+            "none of the addresses in --join could be resolved — {}",
+            unresolved.join("; ")
+        );
+    }
 
-    println!("\njoining the fleet at {addr}…");
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .context("starting a runtime")?;
-    let paired = rt
-        .block_on(atlasctl_agent::peer::join::dial_and_pair(
+
+    // Same walk, same stop rule as pairing a discovered machine: `peer::reach`
+    // owns both, so the joining direction cannot drift from the other one.
+    let (addr, paired) = atlasctl_agent::peer::reach::walk(&addrs, |addr| {
+        println!("\njoining the fleet at {addr}…");
+        rt.block_on(atlasctl_agent::peer::join::dial_and_pair(
             &identity,
             pins.clone(),
             addr,
             &join.code,
         ))
-        .with_context(|| {
-            format!(
-                "could not join {addr}. The code expires, and is good for one machine only — mint a fresh one if this is not the first try."
-            )
-        })?;
+    })
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "could not join the fleet. The code expires, and is good for one machine only — mint a fresh one if this is not the first try.\n  {e:#}"
+        )
+    })?;
 
     atlasctl_agent::fleet::record_pairing(
         &pins,
