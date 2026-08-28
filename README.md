@@ -34,7 +34,9 @@ release, and puts it in `~/.local/bin` (`%LOCALAPPDATA%\Programs\atlasctl` on
 Windows). It needs no Python and no Rust toolchain. Running it again on a
 machine that already has atlasctl is an upgrade, or — when the version is
 already current — a way to start an agent that is installed but stopped.
-`sh scripts/install.sh --uninstall` reverses it.
+`sh scripts/install.sh --uninstall` reverses it; on Windows,
+`atlasctl agent uninstall` removes the task and the binary can be deleted from
+the install directory above.
 
 The background agent is a `systemd --user` service on Linux, a launchd
 LaunchAgent on macOS, and a Task Scheduler task at logon on Windows — a task
