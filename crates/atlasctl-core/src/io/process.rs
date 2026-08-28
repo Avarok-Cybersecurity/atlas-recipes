@@ -164,14 +164,39 @@ mod tests {
         assert!(StdProcessRunner.run(&[]).is_err());
     }
 
+    /// The claim that only unix can express: a shell metacharacter must come
+    /// back as literal text. `/bin/echo` is the BINARY, not the shell builtin,
+    /// so a `;` that survives proves nothing wrapped the argv in `sh -c`.
+    ///
+    /// There is no Windows counterpart, and inventing one would be theatre:
+    /// `echo` is a cmd builtin there, and `;` carries no meaning for any
+    /// Windows shell to strip. What Windows CAN check is the half below.
+    #[cfg(unix)]
     #[test]
-    fn the_real_runner_captures_output_without_a_shell() {
-        // `echo` here is the binary, not a shell builtin, and the metacharacter
-        // must come back as literal text rather than being interpreted.
+    fn the_real_runner_does_not_interpret_metacharacters() {
         let out = StdProcessRunner
             .run(&["/bin/echo".into(), "a;b".into()])
             .expect("echo runs");
         assert!(out.success());
         assert_eq!(out.stdout.trim(), "a;b");
+    }
+
+    /// The half that holds everywhere: a real program runs, its argument
+    /// arrives whole, and its stdout is captured.
+    #[test]
+    fn the_real_runner_captures_a_program_s_output() {
+        let argv: Vec<String> = if cfg!(windows) {
+            vec![
+                "cmd.exe".into(),
+                "/c".into(),
+                "echo".into(),
+                "atlas-ok".into(),
+            ]
+        } else {
+            vec!["/bin/echo".into(), "atlas-ok".into()]
+        };
+        let out = StdProcessRunner.run(&argv).expect("the program runs");
+        assert!(out.success(), "{out:?}");
+        assert_eq!(out.stdout.trim(), "atlas-ok");
     }
 }
