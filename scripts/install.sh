@@ -331,12 +331,23 @@ main() {
                 [ $# -gt 0 ] || die "--join needs a value, e.g. --join 12345678@10.10.10.1"
                 join="$1"
                 ;;
-            --join=*) join="${1#--join=}" ;;
+            --join=*)
+                join="${1#--join=}"
+                # `--join=` with nothing after it read as "no join requested", so
+                # the machine installed, never joined, and the operator walked
+                # away believing it had. install.ps1 refuses this; so does this.
+                [ -n "$join" ] || die "--join= needs a value, e.g. --join=12345678@10.10.10.1"
+                ;;
             # Forwarded, not interpreted: it means "let the fleet I am joining
             # run models on this machine", and only `agent install` can act on
             # it. Noticed here so the operator is told what they just consented
             # to, on the machine they consented on.
             --grant-control) grant_control="--grant-control" ;;
+            # Silence here is how a misspelling (`--grant-contol`, `-Join`)
+            # becomes an install that quietly did not do what was asked.
+            # Warn rather than die: the one-liner is pasted by hand, and
+            # refusing outright would strand someone over a typo they can see.
+            --*) warn "ignoring unrecognised option: $1" ;;
             *) ;;
         esac
         shift

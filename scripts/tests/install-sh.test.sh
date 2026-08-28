@@ -288,6 +288,19 @@ out=$(agent_fail no)
 contains "no held port: offers the foreground command" "$out" "agent run"
 contains "and names the platform's real log"          "$out" "journalctl"
 
+# --- option parsing -----------------------------------------------------------
+# The REAL script, as a subprocess. Both of these decisions happen in main()
+# before anything is fetched, so this cannot reach the network — and running the
+# real thing is the only way to cover a parser that lives inside main().
+# One invocation covers both: the unknown flag warns and parsing CONTINUES, so
+# the `--join=` after it is still reached and still refuses.
+parse_out=$(sh "$ROOT/scripts/install.sh" --bogus-flag --join= 2>&1); parse_rc=$?
+contains "an unrecognised option is named, not silently swallowed" \
+    "$parse_out" "ignoring unrecognised option: --bogus-flag"
+contains "--join= with an empty value refuses" \
+    "$parse_out" "--join= needs a value"
+check "and refusing is non-zero, so a wrapper notices" "1" "$parse_rc"
+
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 # Explicit, not inherited. `[ "$fail" -eq 0 ]` as the last command happens to
 # be right here, but the PowerShell counterpart made exactly this mistake —
