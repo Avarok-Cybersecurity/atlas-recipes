@@ -63,3 +63,49 @@ fn a_paired_machine_is_still_recorded_once_the_table_is_full() {
         "a pinned peer must never be crowded out by strangers"
     );
 }
+
+/// A pin store that cannot be READ is not a fleet with no pins.
+///
+/// `prune` keeps pinned peers regardless of age — that is its stated contract,
+/// because a machine you paired is yours whether or not it is switched on. Read
+/// the pins as "none" on an I/O error and the contract inverts: the idle
+/// pinned peers are exactly the ones dropped, and they stay dropped for as long
+/// as the file is unreadable.
+#[test]
+fn an_unreadable_pin_store_does_not_evict_the_fleet_it_cannot_see() {
+    let t = Tmp::new("prune-blind");
+    let f = fleet_at(&t.0);
+    let mine = NodeId::from_bytes([7; 32]);
+    crate::fleet::record_pairing(
+        &f.pins,
+        mine,
+        "cd".repeat(32).as_str(),
+        atlasctl_protocol::fleet::DisplayName::new("switched-off-dgx"),
+        0,
+        None,
+        false,
+    )
+    .expect("pin");
+    f.observe(beacon(mine, "switched-off-dgx", true));
+
+    // It has since been switched off for longer than the window: without the
+    // pin, this sighting is stale and prune drops it.
+    {
+        let mut seen = f.lock_seen().expect("lock");
+        let s = seen.get_mut(&mine).expect("just observed");
+        s.at = std::time::Instant::now()
+            .checked_sub(crate::fleet::UNREACHABLE_AFTER + std::time::Duration::from_secs(1))
+            .expect("the test clock is past the window");
+    }
+
+    // Now the pin file becomes unreadable — a partial write, a bad disk, a
+    // half-finished save.
+    std::fs::write(t.0.join("peers.json"), b"{ this is not json").expect("corrupt");
+
+    f.prune();
+    assert!(
+        f.lock_seen().expect("lock").contains_key(&mine),
+        "a pinned peer was evicted because its pin file could not be parsed; \
+         the operator would see their fleet vanish over an I/O error"
+    );
+}

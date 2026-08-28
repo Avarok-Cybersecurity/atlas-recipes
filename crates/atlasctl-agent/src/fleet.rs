@@ -413,7 +413,15 @@ impl LocalFleet {
     /// pinned. A pinned peer stays in the list, marked unreachable, because it
     /// is still part of your fleet even when it is switched off.
     pub fn prune(&self) {
-        let pinned = self.pins.load().unwrap_or_default();
+        // A pin store we could not READ is not a fleet with no pins: reading
+        // it as empty evicts every idle pinned peer — the machines the doc
+        // above promises to keep — for as long as the file stays unreadable.
+        // Skipping a tick is safe because the table is capped
+        // (`MAX_SIGHTINGS`), so deferring cannot grow it without bound.
+        let Ok(pinned) = self.pins.load() else {
+            self.prune_vouches();
+            return;
+        };
         if let Ok(mut seen) = self.seen.lock() {
             seen.retain(|id, s| pinned.contains_key(id) || s.at.elapsed() < UNREACHABLE_AFTER);
         }

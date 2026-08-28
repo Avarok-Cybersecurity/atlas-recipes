@@ -114,7 +114,12 @@ fn addresses_by_interface() -> Result<BTreeMap<String, Vec<String>>> {
 
 impl FabricProvider for LinuxFabric {
     fn raw_interfaces(&self) -> Result<Vec<RawIface>> {
-        let addrs = addresses_by_interface().unwrap_or_default();
+        // NOT `unwrap_or_default()`. `ip` missing — a slim container without
+        // iproute2 — would otherwise give every interface an empty address
+        // list, and a caller cannot tell that from a machine that genuinely
+        // has no address. It then reports "no usable network link", sending
+        // the operator to inspect a network that was never the problem.
+        let addrs = addresses_by_interface()?;
         let rdma = rdma_backed_interfaces();
 
         let entries = std::fs::read_dir(NET_DIR).with_context(|| format!("reading {NET_DIR}"))?;
