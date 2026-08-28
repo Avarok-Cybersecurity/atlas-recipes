@@ -133,8 +133,22 @@ pub(super) fn scheduled_task(agent: &AgentInvocation, home: &Path) -> ServicePla
         // The same question `is-active` answers: the task EXISTING is not the
         // agent running, and `Get-ScheduledTask` alone would report success for
         // a task whose process died on startup.
+        // Polled, not sampled once. `Start-ScheduledTask` returns as soon as
+        // the scheduler has ACCEPTED the request, not when the process is up,
+        // so a single read right after it reports `Ready` and the install
+        // announces "installed, but it is NOT running" for an agent that is
+        // about to be. That is what a REINSTALL did on CI, because a replaced
+        // task has to be stopped and started rather than merely started. Ten
+        // seconds is long enough for that, and short enough that a genuinely
+        // crash-looping agent is still reported as one.
         verify: ps(&format!(
-            "if ((Get-ScheduledTask -TaskName '{SERVICE_NAME}'              -ErrorAction SilentlyContinue).State -eq 'Running')              {{ exit 0 }} else {{ exit 1 }}"
+            "$deadline = (Get-Date).AddSeconds(10); \
+             do {{ \
+               if ((Get-ScheduledTask -TaskName '{SERVICE_NAME}' \
+                    -ErrorAction SilentlyContinue).State -eq 'Running') {{ exit 0 }}; \
+               Start-Sleep -Milliseconds 250 \
+             }} while ((Get-Date) -lt $deadline); \
+             exit 1"
         )),
         best_effort: Vec::new(),
         deactivate: vec![ps(&format!(
