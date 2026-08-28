@@ -26,10 +26,20 @@ pub fn run() -> Result<()> {
     println!();
     if problems == 0 {
         println!("no problems found");
-    } else {
-        println!("{problems} problem(s) found");
+        return Ok(());
     }
-    Ok(())
+
+    // A diagnostic that always exits 0 cannot be gated on. SECURITY.md tells an
+    // operator to run this to find a compromised sparkrun install -- a registry
+    // redirect that lets someone else's recipes run shell commands on this host
+    // -- and a script wrapping that check had no way to see the answer, because
+    // the report went to stdout and the status was always success. Reporting a
+    // finding is not the same as failing to run, but every tool that gates on
+    // this one can only read the status, so `brew doctor`'s convention applies:
+    // print the report, then exit non-zero.
+    Err(anyhow::anyhow!(
+        "{problems} problem(s) found — see the report above"
+    ))
 }
 
 fn check_docker() -> usize {
