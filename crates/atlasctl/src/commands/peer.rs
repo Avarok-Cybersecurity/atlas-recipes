@@ -85,6 +85,28 @@ pub fn age_text(then: u64, now: u64) -> String {
 /// ceremony fails — which is what both a wrong code and a relayed connection
 /// look like.
 pub fn add(args: &PeerAddArgs) -> Result<()> {
+    // Checked here, before a socket is opened. The ceremony checks it too, but
+    // only once a TLS session is up, so a typo in the operator's own hand came
+    // back as "could not pair with <machine>" naming an address and a port --
+    // which reads as "that machine refused you" and sends someone to go look at
+    // the other box. It also spent a connection to learn something knowable
+    // without one.
+    //
+    // The code itself is NOT echoed: a one-digit typo of a live code would put
+    // seven correct digits of a pairing secret into the terminal and any log
+    // scraping it.
+    if !atlasctl_agent::pairing::looks_like_code(&args.code) {
+        let n = args.code.chars().count();
+        let what = if n == 8 {
+            "every character has to be a digit".to_string()
+        } else {
+            format!("this one is {n} character(s)")
+        };
+        anyhow::bail!(
+            "a pairing code is 8 digits, and {what}. Read it off `atlasctl agent pair` on the machine you are adding."
+        );
+    }
+
     let dir = crate::hostinfo::usable_config_dir()?;
     let identity = Identity::load_or_create(&dir)?;
     let pins = PinStore::new(&dir);
