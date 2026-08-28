@@ -209,6 +209,70 @@ pub const fn home_placeholder() -> &'static str {
     }
 }
 
+/// Send this process's stdout and stderr to `path`, appending.
+///
+/// Exists because a supervised agent's output has to land somewhere an
+/// operator can read. The alternative — wrapping the command in a shell that
+/// redirects — costs more than it looks on Windows: Task Scheduler's stop
+/// terminates only the process it started, so a `cmd.exe` wrapper is killed
+/// and the agent it launched is ORPHANED, still holding the port, and the
+/// replacement exits at startup. Measured on CI, where a reinstall reported
+/// "installed, but it is NOT running" every time.
+///
+/// Redirection is at the OS handle level rather than through a logging
+/// framework because every message this binary emits goes through `eprintln!`;
+/// intercepting those individually would mean not missing one, forever.
+///
+/// # Errors
+/// If the file cannot be opened, or the handles cannot be replaced.
+pub fn redirect_stdio(path: &std::path::Path) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    redirect_to(&file)?;
+    // Deliberately leaked: the descriptors above now refer to this file, and
+    // dropping the handle while they do is how output starts vanishing partway
+    // through a run. It lives as long as the process, which is the intent.
+    std::mem::forget(file);
+    Ok(())
+}
+
+#[cfg(unix)]
+fn redirect_to(file: &std::fs::File) -> anyhow::Result<()> {
+    use std::os::unix::io::AsRawFd;
+    let fd = file.as_raw_fd();
+    for target in [libc::STDOUT_FILENO, libc::STDERR_FILENO] {
+        // SAFETY: `fd` is a live descriptor owned by `file`, and the targets
+        // are the two standard descriptors this process owns.
+        if unsafe { libc::dup2(fd, target) } == -1 {
+            return Err(std::io::Error::last_os_error()).context("redirecting output");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn redirect_to(file: &std::fs::File) -> anyhow::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::Console::{STD_ERROR_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle};
+    let h = file.as_raw_handle();
+    for target in [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: `h` is a live file handle owned by `file`, and the targets
+        // name this process's own standard handles.
+        if unsafe { SetStdHandle(target, h.cast()) } == 0 {
+            return Err(std::io::Error::last_os_error()).context("redirecting output");
+        }
+    }
+    Ok(())
+}
+
 /// Find an executable on `PATH`.
 ///
 /// On Windows a name without an extension is not a program: `docker` is

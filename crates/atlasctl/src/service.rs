@@ -176,6 +176,7 @@ fn teardown_plan(kind: ServiceKind, home: &std::path::Path, uid: u32) -> Service
             discovery: true,
             browser: true,
             config_dir: None,
+            log_file: None,
         },
         home,
         uid,

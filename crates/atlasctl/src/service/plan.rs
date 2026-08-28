@@ -89,6 +89,13 @@ pub struct AgentInvocation {
     /// identity, and rejoined the fleet as a stranger with zero pins. The
     /// operator sees a node that paired a moment ago and is now untrusted.
     pub config_dir: Option<PathBuf>,
+    /// Where the supervised agent's output is appended, when the supervisor
+    /// does not capture it itself.
+    ///
+    /// Recorded in the unit for the same reason the port is: a unit outlives
+    /// the binary that wrote it, and an agent whose log moved without its unit
+    /// knowing writes where nobody is looking.
+    pub log_file: Option<PathBuf>,
 }
 
 impl AgentInvocation {
@@ -120,6 +127,10 @@ impl AgentInvocation {
         }
         if !self.browser {
             v.push("--no-browser".to_owned());
+        }
+        if let Some(log) = &self.log_file {
+            v.push("--log-file".to_owned());
+            v.push(log.display().to_string());
         }
         v
     }

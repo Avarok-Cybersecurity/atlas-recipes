@@ -108,6 +108,15 @@ jobs:
           if (-not $back) { throw "the agent did not come back after an upgrade" }
           Write-Host "the upgrade left a listening agent behind"
 
+          # The log is the entire reason `--log-file` exists. An empty or
+          # missing one means the redirect silently did nothing, and the
+          # install's "see why with Get-Content" advice names a file that
+          # never appears.
+          $log = "$env:LOCALAPPDATA\atlasctl\atlasctl-agent.log"
+          if (-not (Test-Path $log)) { throw "no agent log at $log" }
+          if ((Get-Item $log).Length -eq 0) { throw "the agent log at $log is empty" }
+          Write-Host "--- agent log ---"; Get-Content $log -Tail 20
+
           & $exe agent uninstall
           if ($LASTEXITCODE -ne 0) { throw "agent uninstall failed" }
           if (Get-ScheduledTask -TaskName 'atlasctl-agent' -ErrorAction SilentlyContinue) {

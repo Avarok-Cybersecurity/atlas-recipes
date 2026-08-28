@@ -239,6 +239,15 @@ pub struct AgentRunArgs {
     /// starting at all.
     #[arg(long)]
     pub no_browser: bool,
+
+    /// Append this process's output to a file instead of the terminal.
+    ///
+    /// For a supervised agent whose supervisor captures nothing — which is
+    /// every Task Scheduler task. Not a default: a user running `agent run` by
+    /// hand wants their output in front of them, and silently diverting it is
+    /// how "it printed nothing" becomes a bug report.
+    #[arg(long, value_name = "PATH")]
+    pub log_file: Option<std::path::PathBuf>,
 }
 
 /// `agent status` arguments.
