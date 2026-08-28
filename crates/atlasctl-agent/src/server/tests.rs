@@ -10,6 +10,7 @@ const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789a
 
 fn state(port: u16) -> Arc<AgentState> {
     Arc::new(AgentState {
+        accelerator: String::new(),
         registry: RegistrySet::builtin_only(),
         launcher: Box::new(RecordingLauncher::new()),
         token: TOKEN.to_string(),

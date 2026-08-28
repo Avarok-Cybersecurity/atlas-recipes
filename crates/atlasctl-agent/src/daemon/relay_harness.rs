@@ -140,6 +140,7 @@ pub(super) async fn spawn_serving(
             launcher,
             None,
             Ok(()),
+            "NVIDIA GB10".to_owned(),
         )),
         peer_port: a.port,
         answer_budget,

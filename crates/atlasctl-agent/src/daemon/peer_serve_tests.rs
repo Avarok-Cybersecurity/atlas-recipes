@@ -135,6 +135,7 @@ fn rig(tag: &str) -> Rig {
             Box::new(SharedLauncher(Arc::clone(&launcher))),
             None,
             Ok(()),
+            "NVIDIA GB10".to_owned(),
         )),
         peer_port: 34334,
         // Tests never reach a real dial; the budget only has to exist.

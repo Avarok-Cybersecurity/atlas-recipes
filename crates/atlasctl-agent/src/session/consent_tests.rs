@@ -115,6 +115,7 @@ fn minting_with_allow_control_stamps_the_join_window() {
     let fleet = SelfAwareFleet;
     let joining = crate::joining::JoinWindow::default();
     let (mut s, _) = Session::new(SessionDeps {
+        accelerator: "",
         registry: &f.registry,
         launcher: &f.launcher,
         token: TOKEN,

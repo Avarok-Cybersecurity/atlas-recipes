@@ -147,6 +147,7 @@ fn routed_session<'a>(
     relay: Option<&'a dyn ControlRelay>,
 ) -> Session<'a> {
     let (mut s, _) = Session::new(SessionDeps {
+        accelerator: "",
         registry: &f.registry,
         launcher: &f.launcher,
         token: TOKEN,

@@ -17,6 +17,7 @@ use atlasctl_protocol::{ClientMsg, ServerMsg};
 
 fn session<'a>(f: &'a Fixture, fleet: &'a RecordingFleet) -> super::Session<'a> {
     let (mut s, _) = super::Session::new(super::SessionDeps {
+        accelerator: "",
         registry: &f.registry,
         launcher: &f.launcher,
         token: TOKEN,

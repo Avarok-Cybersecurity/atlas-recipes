@@ -113,6 +113,7 @@ use atlasctl_protocol::fleet::{NodeDescriptor, NodeId};
 /// A handshaken session wired to `fleet`.
 pub(super) fn ready_with_fleet<'a>(f: &'a Fixture, fleet: &'a dyn FleetView) -> super::Session<'a> {
     let (mut s, _) = super::Session::new(super::SessionDeps {
+        accelerator: "",
         registry: &f.registry,
         launcher: &f.launcher,
         token: TOKEN,
@@ -434,6 +435,7 @@ fn an_invitation_from_a_wireless_machine_still_carries_an_address() {
     let fleet = WirelessFleet::new();
     let window = crate::joining::JoinWindow::default();
     let (mut s, _) = super::Session::new(super::SessionDeps {
+        accelerator: "",
         registry: &f.registry,
         launcher: &f.launcher,
         token: TOKEN,

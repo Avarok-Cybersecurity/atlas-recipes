@@ -37,6 +37,9 @@ pub struct AgentState {
     pub token: String,
     /// Whether this machine can run a recipe, and why not if it cannot.
     pub can_launch: Result<(), String>,
+    /// What this machine's accelerator reports itself to be, for the launch
+    /// path's hardware-aware refusal. Empty when the probe found nothing.
+    pub accelerator: String,
     /// The window in which one new machine may join, when this agent has one.
     pub joining: Option<Arc<crate::joining::JoinWindow>>,
     /// Port we are listening on, for the Host check.
@@ -162,6 +165,7 @@ async fn run_session(mut socket: ws::WebSocket, state: Arc<AgentState>) {
         launcher: state.launcher.as_ref(),
         token: &state.token,
         can_launch: state.can_launch.clone(),
+        accelerator: &state.accelerator,
         fleet: state.fleet.as_deref(),
         cluster: state.cluster.as_deref(),
         telemetry: state.telemetry.as_deref(),
