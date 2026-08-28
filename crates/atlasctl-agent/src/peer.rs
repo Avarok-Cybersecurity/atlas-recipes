@@ -14,6 +14,7 @@
 //! "launch one of the recipes this machine already has, with in-range
 //! parameters", not remote code execution.
 
+pub mod bindfail;
 pub mod cluster;
 pub mod control;
 pub mod join;
