@@ -51,6 +51,9 @@ fn the_id_really_is_the_fingerprint_of_the_public_key() {
     assert_eq!(me.id(), fingerprint(&me.public()));
 }
 
+/// The unix half of the guarantee, stated as bits. The cross-platform half —
+/// that what `secretfile::write` produces `secretfile::verify` accepts — lives
+/// with the implementation.
 #[cfg(unix)]
 #[test]
 fn the_private_key_is_not_world_readable() {
@@ -62,7 +65,7 @@ fn the_private_key_is_not_world_readable() {
         .permissions()
         .mode()
         & 0o777;
-    assert_eq!(mode, PRIVATE_MODE, "a private key must be 0600");
+    assert_eq!(mode, 0o600, "a private key must be 0600");
 }
 
 #[test]
@@ -123,7 +126,7 @@ fn the_pin_store_is_not_world_readable_either() {
         .permissions()
         .mode()
         & 0o777;
-    assert_eq!(mode, PRIVATE_MODE);
+    assert_eq!(mode, 0o600);
 }
 
 #[test]

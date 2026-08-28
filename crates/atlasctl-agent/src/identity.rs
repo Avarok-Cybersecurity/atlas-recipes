@@ -32,10 +32,6 @@ const KEY_FILE: &str = "agent.key";
 /// Filename of the pin store.
 const PINS_FILE: &str = "peers.json";
 
-/// Permissions the key and pin files must carry.
-#[cfg(unix)]
-const PRIVATE_MODE: u32 = 0o600;
-
 /// The fingerprint of a public key.
 #[must_use]
 pub fn fingerprint(public: &VerifyingKey) -> NodeId {
@@ -104,7 +100,7 @@ impl Identity {
             return Ok(Self { signing, id });
         }
         let me = Self::generate();
-        write_private(&path, me.signing.as_bytes())?;
+        atlasctl_core::secretfile::write(&path, me.signing.as_bytes())?;
         Ok(me)
     }
 
@@ -131,32 +127,6 @@ impl Identity {
     pub const fn signing_key(&self) -> &SigningKey {
         &self.signing
     }
-}
-
-/// Write a file that only its owner may read.
-///
-/// The mode is set before the bytes are written, so there is no window in
-/// which a key exists at the default umask.
-fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(PRIVATE_MODE)
-            .open(path)
-            .with_context(|| format!("creating {}", path.display()))?;
-        f.write_all(bytes)
-            .with_context(|| format!("writing {}", path.display()))?;
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))?;
-    }
-    Ok(())
 }
 
 /// One peer this machine has paired with.
@@ -284,7 +254,7 @@ impl PinStore {
     fn save(&self, pins: &BTreeMap<NodeId, Pin>) -> Result<()> {
         let list: Vec<&Pin> = pins.values().collect();
         let json = serde_json::to_string_pretty(&list).context("serialising pins")?;
-        write_private(&self.path, json.as_bytes())
+        atlasctl_core::secretfile::write(&self.path, json.as_bytes())
     }
 }
 

@@ -186,10 +186,7 @@ impl DiscoveryBrowser for NoDiscovery {
 /// because a node is its key.
 #[must_use]
 pub fn local_display_name() -> DisplayName {
-    let raw = std::fs::read_to_string("/proc/sys/kernel/hostname")
-        .or_else(|_| std::env::var("HOSTNAME").map_err(std::io::Error::other))
-        .unwrap_or_else(|_| "atlas-node".to_owned());
-    DisplayName::new(&raw)
+    DisplayName::new(&atlasctl_core::platform::hostname())
 }
 
 /// This machine's operating system, coarsely, for display.

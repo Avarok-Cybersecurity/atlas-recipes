@@ -12,9 +12,11 @@ pub mod host;
 pub mod io;
 pub mod metrics;
 pub mod nearest;
+pub mod platform;
 pub mod recipe;
 pub mod registry;
 pub mod scalar;
+pub mod secretfile;
 pub mod settings;
 
 pub use docker::{DockerCommand, LaunchProfile};

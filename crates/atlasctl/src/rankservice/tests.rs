@@ -4,6 +4,7 @@
 
 use super::*;
 use atlasctl_core::docker::{NvidiaDevices, ROOTLESS_V1};
+use atlasctl_core::host::PosixUser;
 use atlasctl_core::io::RecordingRunner;
 use atlasctl_core::io::process::Output;
 use atlasctl_protocol::fleet::NodeId;
@@ -15,8 +16,10 @@ const RECIPE: &str = "qwen3.5-122b-a10b-nvfp4-ep2";
 
 fn host() -> atlasctl_core::host::HostSnapshot {
     atlasctl_core::host::HostSnapshot {
-        uid: 1000,
-        gid: 1000,
+        posix_user: Some(PosixUser {
+            uid: 1000,
+            gid: 1000,
+        }),
         home: "/home/spark".into(),
         hf_cache_dir: "/home/spark/.cache/huggingface".into(),
         env: BTreeMap::new(),

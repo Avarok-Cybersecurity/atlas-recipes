@@ -4,6 +4,15 @@
 
 use std::collections::BTreeMap;
 
+/// A host's POSIX identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PosixUser {
+    /// The uid the container should run as.
+    pub uid: u32,
+    /// The gid the container should run as.
+    pub gid: u32,
+}
+
 /// Everything `translate` needs to know about the machine, captured once.
 ///
 /// Taking a snapshot rather than querying the OS mid-translation is what keeps
@@ -11,10 +20,13 @@ use std::collections::BTreeMap;
 /// the same command, on any machine, with no GPU and no docker present.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostSnapshot {
-    /// The uid the container should run as.
-    pub uid: u32,
-    /// The gid the container should run as.
-    pub gid: u32,
+    /// The POSIX user the container should run as, when the host has one.
+    ///
+    /// `None` is an answer, not a gap: a Windows account has no uid, so there
+    /// is no correct number to put here. Rendering `--user 0:0` for it would
+    /// run the container as root, and the `/etc/passwd` mounts that accompany
+    /// `--user` name host paths that do not exist there.
+    pub posix_user: Option<PosixUser>,
     /// The user's home directory, used to render a portable command.
     pub home: String,
     /// Where HuggingFace caches models on this host.
@@ -74,8 +86,10 @@ mod tests {
 
     fn host() -> HostSnapshot {
         HostSnapshot {
-            uid: 1000,
-            gid: 1000,
+            posix_user: Some(PosixUser {
+                uid: 1000,
+                gid: 1000,
+            }),
             home: "/home/spark".into(),
             hf_cache_dir: "/home/spark/.cache/huggingface".into(),
             env: [("TOKEN".to_string(), "abc".to_string())].into(),
