@@ -71,7 +71,15 @@ verify_checksum() {
     #
     # The `*` form is accepted because `sha256sum -b` writes it, and a SHA256SUMS
     # produced that way is not malformed.
-    expected=$(awk -v n="$name" '$2 == n || $2 == "*" n { print $1 }' "$sums")
+    # Every match, so a SUMS naming the same file twice with DIFFERENT hashes is
+    # refused rather than resolved. Taking the first (or the last, as the
+    # PowerShell installer did) means a stale entry beside a current one decides
+    # silently which bytes are acceptable.
+    expected=$(awk -v n="$name" '$2 == n || $2 == "*" n { print $1 }' "$sums" | sort -u)
+    case "$expected" in
+        *"
+"*) die "SHA256SUMS lists $name more than once, with different hashes. Refusing to install." ;;
+    esac
     [ -n "$expected" ] || die "no checksum for $name in SHA256SUMS; refusing to install."
 
     if command -v sha256sum >/dev/null 2>&1; then

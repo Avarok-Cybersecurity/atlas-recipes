@@ -77,6 +77,30 @@ printf '%s  some-other-file.tar.xz\n' "$good" > "$WORK/SUMS.absent"
 contains "an archive with no entry refuses to install" \
     "$(verify "$WORK/atlasctl-x86_64-unknown-linux-musl.tar.xz" "$WORK/SUMS.absent")" "no checksum for"
 
+# A SUMS naming the same file twice with different hashes must be refused, not
+# resolved. Taking either end silently lets a stale entry beside a current one
+# decide which bytes are acceptable — and the two installers took DIFFERENT
+# ends, so a release with a duplicate would have verified differently per OS.
+printf '%s  atlasctl-x86_64-unknown-linux-musl.tar.xz\n%s  atlasctl-x86_64-unknown-linux-musl.tar.xz\n' \
+    "$good" "${good%??}00" > "$WORK/SUMS.dup"
+contains "a conflicting duplicate entry is refused" \
+    "$(verify "$WORK/atlasctl-x86_64-unknown-linux-musl.tar.xz" "$WORK/SUMS.dup")" "more than once"
+
+# An identical duplicate is harmless and must NOT be refused: the same fact
+# stated twice is still one fact, and failing there would break a release for a
+# cosmetic flaw in its sums file.
+printf '%s  atlasctl-x86_64-unknown-linux-musl.tar.xz\n%s  atlasctl-x86_64-unknown-linux-musl.tar.xz\n' \
+    "$good" "$good" > "$WORK/SUMS.dupsame"
+contains "an identical duplicate still verifies" \
+    "$(verify "$WORK/atlasctl-x86_64-unknown-linux-musl.tar.xz" "$WORK/SUMS.dupsame")" "checksum verified"
+
+# `sha256sum -b` writes `*name`. The shell installer accepted it and the
+# PowerShell one did not, so a flag added to the release pipeline would have
+# killed every Windows install while unix carried on.
+printf '%s *atlasctl-x86_64-unknown-linux-musl.tar.xz\n' "$good" > "$WORK/SUMS.binmode"
+contains "a binary-mode entry verifies" \
+    "$(verify "$WORK/atlasctl-x86_64-unknown-linux-musl.tar.xz" "$WORK/SUMS.binmode")" "checksum verified"
+
 # A refusal has to STOP the script, not merely say so. Every assertion above is
 # about output; if `die` lost its `exit 1` they would all still pass while the
 # installer went on to run an unverified binary.

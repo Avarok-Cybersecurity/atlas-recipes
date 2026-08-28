@@ -68,6 +68,38 @@ try {
         Assert-Checksum -Archive $archive -SumsFile $sums
     }
 
+    # The two installers must agree about a SUMS that names the same file twice.
+    # They did not: sh printed every match and failed closed, ps1 kept the LAST
+    # one and verified against it silently — so a release with a stale duplicate
+    # would have been accepted on Windows and refused on unix.
+    Set-Content -LiteralPath $sums -Value @(
+        "$good  atlasctl-x86_64-pc-windows-msvc.zip"
+        ("0" * 64 + "  atlasctl-x86_64-pc-windows-msvc.zip")
+    )
+    Should-Throw 'a conflicting duplicate entry is refused' 'more than once' {
+        Assert-Checksum -Archive $archive -SumsFile $sums
+    }
+
+    # The same fact stated twice is still one fact.
+    Set-Content -LiteralPath $sums -Value @(
+        "$good  atlasctl-x86_64-pc-windows-msvc.zip"
+        "$good  atlasctl-x86_64-pc-windows-msvc.zip"
+    )
+    try { Assert-Checksum -Archive $archive -SumsFile $sums; Ok 'an identical duplicate still verifies' }
+    catch { Bad 'an identical duplicate still verifies' $_.Exception.Message }
+
+    # `sha256sum -b` writes `*name`; sh accepted it and this did not, so a flag
+    # added to the release pipeline would have killed every Windows install.
+    Set-Content -LiteralPath $sums -Value "$good *atlasctl-x86_64-pc-windows-msvc.zip"
+    try { Assert-Checksum -Archive $archive -SumsFile $sums; Ok 'a binary-mode entry verifies' }
+    catch { Bad 'a binary-mode entry verifies' $_.Exception.Message }
+
+    # A leading-whitespace line used to split into ['', 'sha  name'] and be
+    # skipped, so an indented SUMS had no entry at all.
+    Set-Content -LiteralPath $sums -Value "   $good  atlasctl-x86_64-pc-windows-msvc.zip"
+    try { Assert-Checksum -Archive $archive -SumsFile $sums; Ok 'an indented entry still verifies' }
+    catch { Bad 'an indented entry still verifies' $_.Exception.Message }
+
     # --- Die actually exits ---------------------------------------------------
     # This file REPLACES `Die` with a throw so a refusal is observable, which
     # puts production's exit path outside the tested surface by construction:

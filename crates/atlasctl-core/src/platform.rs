@@ -338,8 +338,31 @@ pub fn which(name: &str) -> Option<std::path::PathBuf> {
         vec![name.to_owned()]
     };
     std::env::split_paths(&path)
+        // An empty PATH element means the CURRENT directory to the shell, which
+        // is not what a lookup for `docker` should ever consult — a file named
+        // `docker` in whatever directory the operator happens to be in is not
+        // an installed tool.
+        .filter(|d| !d.as_os_str().is_empty())
         .flat_map(|d| candidates.iter().map(move |c| d.join(c)))
-        .find(|p| p.is_file())
+        .find(|p| is_executable_file(p))
+}
+
+/// A file this process could actually run.
+///
+/// `is_file` alone was enough to make `doctor` print its sparkrun SECURITY
+/// NOTICE for a plain unreadable text file named `sparkrun` on PATH — a warning
+/// about a tool the machine cannot run. On Windows the extension IS the
+/// executability, and `PATHEXT` has already decided it.
+fn is_executable_file(p: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        p.is_file()
+    }
 }
 
 /// This machine's name, for display and for a peer's `Hello`.
@@ -454,6 +477,37 @@ mod tests {
         let real = if cfg!(windows) { "cmd" } else { "sh" };
         assert!(which(real).is_some(), "{real} must be on PATH");
         assert!(which("definitely-not-a-real-binary-xyz").is_none());
+    }
+
+    /// A file is not a program. `doctor` uses this to decide whether sparkrun
+    /// is installed, and printed a SECURITY NOTICE about a tool the machine
+    /// could not run — a plain text file of that name on PATH was enough.
+    #[cfg(unix)]
+    #[test]
+    fn a_readable_file_that_is_not_executable_is_not_found() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = std::env::temp_dir().join(format!("atlasctl-which-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).expect("dir");
+        let name = "atlasctl-not-a-program";
+        let p = d.join(name);
+        std::fs::write(&p, b"not a program").expect("write");
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+
+        // SAFETY: single-threaded test process; PATH is restored below.
+        let saved = std::env::var_os("PATH");
+        unsafe { std::env::set_var("PATH", &d) };
+        let found = which(name);
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let found_after = which(name);
+        match saved {
+            Some(v) => unsafe { std::env::set_var("PATH", v) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+
+        assert!(found.is_none(), "a 0644 file must not read as a program");
+        assert!(found_after.is_some(), "and 0755 must");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// Checked against the OS, not against the same `cfg!` the implementation

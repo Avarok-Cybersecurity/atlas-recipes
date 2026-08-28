@@ -54,8 +54,24 @@ function Assert-Checksum {
     # globs, and a directory named `[build]` is legal and would fail the
     # checksum lookup with "cannot find path" rather than a verdict.
     foreach ($line in Get-Content -LiteralPath $SumsFile) {
-        $parts = $line -split '\s+', 2
-        if ($parts.Count -eq 2 -and $parts[1].Trim() -eq $name) { $want = $parts[0].Trim().ToLower() }
+        # Trimmed first: a line with leading whitespace split into ['', 'sha  name']
+        # and was skipped, so an indented SUMS silently had no entry at all.
+        $parts = $line.Trim() -split '\s+', 2
+        if ($parts.Count -ne 2) { continue }
+        # `*name` is what `sha256sum -b` writes, and the shell installer accepts
+        # it. Rejecting it here would kill every Windows install the day the
+        # release pipeline adds a flag that unix does not notice.
+        $entry = $parts[1].Trim()
+        if ($entry -ne $name -and $entry -ne "*$name") { continue }
+        $hash = $parts[0].Trim().ToLower()
+        # A second, DIFFERENT hash for the same file is refused rather than
+        # resolved. This loop used to keep overwriting, so a stale entry beside
+        # a current one decided silently which bytes were acceptable — and the
+        # two installers disagreed about which one won.
+        if ($want -and $want -ne $hash) {
+            Die "SHA256SUMS lists $name more than once, with different hashes. Refusing to install."
+        }
+        $want = $hash
     }
     if (-not $want) { Die "SHA256SUMS has no entry for $name; refusing to install unverified binaries." }
     $have = Get-Sha256 $Archive
