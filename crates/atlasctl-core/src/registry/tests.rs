@@ -219,6 +219,38 @@ fn a_path_that_climbs_out_of_the_cache_is_refused() {
     assert!(RemoteStore::guard_cache_path(&cache, &cache.join("org").join("repo")).is_ok());
 }
 
+/// `guard_cache_path` proves the PATH is ours; it cannot prove the REPOSITORY
+/// is. `git -C dest` only sets the working directory — git then walks UP for a
+/// repository, so a `dest` that exists and is not one resolves to the nearest
+/// ANCESTOR. Demonstrated against real git: with the registry dir at
+/// `<victim>/.cache/atlasctl/registries/thirdparty` and no `.git` of its own,
+/// `git -C … rev-parse --show-toplevel` answers `<victim>` — and the next
+/// command is `reset --hard`.
+///
+/// `--git-dir=.git` is resolved relative to `-C` and turns that into
+/// "not a git repository", which is the correct refusal.
+#[test]
+fn updating_never_walks_up_into_a_repository_that_is_not_ours() {
+    let argv = git_update_argv(Path::new("/home/u/.cache/atlasctl/registries/third"));
+    assert!(!argv.is_empty());
+    for cmd in &argv {
+        assert!(
+            cmd.iter().any(|a| a == "--git-dir=.git"),
+            "discovery must be off for every command that can destroy a tree: {cmd:?}"
+        );
+        // And it must come before the subcommand, or git ignores it.
+        let gd = cmd
+            .iter()
+            .position(|a| a == "--git-dir=.git")
+            .expect("present");
+        let sub = cmd
+            .iter()
+            .position(|a| a == "fetch" || a == "reset")
+            .expect("a subcommand");
+        assert!(gd < sub, "the flag must precede the subcommand: {cmd:?}");
+    }
+}
+
 /// A symlink is the half no amount of component inspection can see, so the
 /// guard resolves as well as inspects.
 #[cfg(unix)]

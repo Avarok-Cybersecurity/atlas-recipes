@@ -71,7 +71,19 @@ verify_checksum() {
     #
     # The `*` form is accepted because `sha256sum -b` writes it, and a SHA256SUMS
     # produced that way is not malformed.
-    expected=$(awk -v n="$name" '$2 == n || $2 == "*" n { print $1 }' "$sums")
+    # Every match, so a SUMS naming the same file twice with DIFFERENT hashes is
+    # refused rather than resolved. Taking the first (or the last, as the
+    # PowerShell installer did) means a stale entry beside a current one decides
+    # silently which bytes are acceptable.
+    # Lowercased before de-duplicating. PowerShell's `-ne` is case-INsensitive,
+    # so a SUMS carrying the same hash twice in different letter case was an
+    # "identical duplicate, verifies" on Windows and a "different hashes,
+    # refuse" here — one release, two verdicts.
+    expected=$(awk -v n="$name" '$2 == n || $2 == "*" n { print tolower($1) }' "$sums" | sort -u)
+    case "$expected" in
+        *"
+"*) die "SHA256SUMS lists $name more than once, with different hashes. Refusing to install." ;;
+    esac
     [ -n "$expected" ] || die "no checksum for $name in SHA256SUMS; refusing to install."
 
     if command -v sha256sum >/dev/null 2>&1; then
@@ -106,19 +118,34 @@ verify_attestation() {
         info "The checksum above was verified; provenance is the extra step."
         return
     fi
-    if ! gh auth status >/dev/null 2>&1; then
-        info "\`gh\` is not signed in, so build provenance was not checked."
-        info "The checksum above was verified. To also check provenance:"
-        info "    gh auth login && gh attestation verify <file> --repo $REPO"
+    # The check is ATTEMPTED, then its failure is classified. Deciding in
+    # advance on `gh auth status` skipped it entirely for a gh that is installed
+    # and never logged in — which is the state every machine is in right after
+    # `apt install gh` — so a tampered archive served with a matching
+    # SHA256SUMS would have installed in silence. Attempting first also catches
+    # the case a pre-check cannot see at all: gh signed in, GitHub unreachable.
+    if err=$(gh attestation verify "$archive" --repo "$REPO" 2>&1); then
+        info "build provenance verified"
         return
     fi
-    if gh attestation verify "$archive" --repo "$REPO" >/dev/null 2>&1; then
-        info "build provenance verified"
-    else
-        # Now it means something: gh can check, is signed in, and said no.
-        warn "build provenance could NOT be verified for $(basename "$archive")."
-        warn "If you did not expect that, stop and check the release page."
-    fi
+    # It failed. Whether that is a fact about the ARTIFACT or about this machine
+    # decides whether anyone should be alarmed.
+    case "$err" in
+        *"not logged"*|*"authentication"*|*"gh auth login"*|*"HTTP 401"*|*"HTTP 403"*)
+            info "\`gh\` is not signed in, so provenance could not be checked."
+            info "The checksum above was verified; provenance is the extra step."
+            info "    gh auth login && gh attestation verify <file> --repo $REPO"
+            ;;
+        *"dial tcp"*|*"no such host"*|*"connection refused"*|*"i/o timeout"*|*"TLS handshake"*|*"context deadline"*)
+            info "could not reach GitHub, so provenance was not checked."
+            info "The checksum above was verified; provenance is the extra step."
+            ;;
+        *)
+            # gh could ask, reached GitHub, and the answer was no.
+            warn "build provenance could NOT be verified for $(basename "$archive")."
+            warn "If you did not expect that, stop and check the release page."
+            ;;
+    esac
 }
 
 # Put the agent behind this machine's own supervisor, so the website has

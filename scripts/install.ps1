@@ -13,9 +13,58 @@
 # This script deliberately embeds no version. It always resolves what the
 # release marked latest, so a stale copy of the script cannot pin an old
 # release.
+#
+# To join a fleet at install time — the Windows counterpart of
+# `curl … | sh -s -- --join <code>@<host>`:
+#
+#   & ([scriptblock]::Create((irm https://atlasinference.io/install.ps1))) -Join 12345678@10.0.0.1
+#
+# `irm | iex` cannot pass arguments; `[scriptblock]::Create` can, and is the
+# idiom every Windows installer that takes options uses.
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+# Deliberately NO `param()` block, and every option parsed by hand.
+#
+# `param([string]$Join, …)` makes `$Join` POSITIONAL, and PowerShell binds a
+# `--anything` token to a positional parameter rather than treating it as a
+# switch — so `--join CODE@HOST` bound `--join` itself to `$Join` and stranded
+# the value, `--grant-control` alone BECAME the join target, and
+# `--grant-control --join CODE@HOST` silently dropped the grant. The
+# compatibility loop that was supposed to accept those spellings never saw
+# them, because binding had already happened.
+#
+# With no param block, `$args` holds every token exactly as pasted and one
+# parser handles both spellings. That matters because the shell installer, the
+# docs and the site all say `--join`, and someone translating that line by hand
+# will type it.
+$Join = ''
+$GrantControl = $false
+$i = 0
+while ($i -lt $args.Count) {
+    $tok = [string]$args[$i]
+    switch -Regex ($tok) {
+        '^(--join|-Join)=(.+)$' { $Join = $Matches[2]; break }
+        '^(--join|-Join)$' {
+            if ($i + 1 -ge $args.Count) {
+                # install.sh dies here rather than installing without the step
+                # the operator came for. Silently skipping the join is how
+                # someone walks away believing a machine joined a fleet.
+                Write-Host "[atlas] error: --join needs a value, e.g. --join 12345678@10.10.10.1" -ForegroundColor Red
+                exit 1
+            }
+            $i++; $Join = [string]$args[$i]; break
+        }
+        '^(--grant-control|-GrantControl)$' { $GrantControl = $true; break }
+        default {
+            Write-Host "[atlas] error: unrecognized option $tok" -ForegroundColor Red
+            Write-Host "[atlas] usage: -Join <code>@<host> [-GrantControl]" -ForegroundColor Red
+            exit 1
+        }
+    }
+    $i++
+}
 
 $Repo    = 'Avarok-Cybersecurity/atlas-recipes'
 $BinName = 'atlasctl'
@@ -54,8 +103,24 @@ function Assert-Checksum {
     # globs, and a directory named `[build]` is legal and would fail the
     # checksum lookup with "cannot find path" rather than a verdict.
     foreach ($line in Get-Content -LiteralPath $SumsFile) {
-        $parts = $line -split '\s+', 2
-        if ($parts.Count -eq 2 -and $parts[1].Trim() -eq $name) { $want = $parts[0].Trim().ToLower() }
+        # Trimmed first: a line with leading whitespace split into ['', 'sha  name']
+        # and was skipped, so an indented SUMS silently had no entry at all.
+        $parts = $line.Trim() -split '\s+', 2
+        if ($parts.Count -ne 2) { continue }
+        # `*name` is what `sha256sum -b` writes, and the shell installer accepts
+        # it. Rejecting it here would kill every Windows install the day the
+        # release pipeline adds a flag that unix does not notice.
+        $entry = $parts[1].Trim()
+        if ($entry -ne $name -and $entry -ne "*$name") { continue }
+        $hash = $parts[0].Trim().ToLower()
+        # A second, DIFFERENT hash for the same file is refused rather than
+        # resolved. This loop used to keep overwriting, so a stale entry beside
+        # a current one decided silently which bytes were acceptable — and the
+        # two installers disagreed about which one won.
+        if ($want -and $want -ne $hash) {
+            Die "SHA256SUMS lists $name more than once, with different hashes. Refusing to install."
+        }
+        $want = $hash
     }
     if (-not $want) { Die "SHA256SUMS has no entry for $name; refusing to install unverified binaries." }
     $have = Get-Sha256 $Archive
@@ -74,7 +139,7 @@ function Get-Version {
 }
 
 function Install-Agent {
-    param($Exe, $SameVersion)
+    param($Exe, $SameVersion, $JoinTarget, [bool]$Grant)
 
     if ($env:ATLASCTL_NO_AGENT) {
         Write-Info "skipping the background agent (ATLASCTL_NO_AGENT is set)."
@@ -86,6 +151,26 @@ function Install-Agent {
     # is the commonest reason to run it at all: the binary is there, the task is
     # not running, and the website says "no agent". Nothing needs installing --
     # the machine needs starting.
+    # A join is the step the operator came for, so it runs regardless of what
+    # is already installed — the same rule the shell installer follows.
+    if ($JoinTarget) {
+        Write-Info "joining the fleet at $($JoinTarget -replace '^[^@]*@', '')"
+        if ($Grant) { Write-Info "and letting that fleet run models on this machine" }
+        $joinArgs = @('agent', 'install', '--join', $JoinTarget)
+        if ($Grant) { $joinArgs += '--grant-control' }
+        & $Exe @joinArgs
+        if ($LASTEXITCODE -eq 0) { return }
+        # One exit code covers two steps, so say plainly that either could have
+        # failed and give the check that tells them apart — rather than
+        # asserting the install worked and only the join did not, which sends
+        # operators to mint a fresh code for a task that was never created.
+        Write-Warn "the agent install, the fleet join, or both did not succeed."
+        Write-Warn "Check which with:  $BinName agent status"
+        Write-Warn "A join code is single-use and expires. To retry just the join:"
+        Write-Warn "    $BinName agent install --join <code>@<host>"
+        return
+    }
+
     if ($SameVersion) {
         & $Exe agent status *> $null
         $answering = $LASTEXITCODE -eq 0
@@ -225,7 +310,7 @@ try {
     }
 
     Test-Docker
-    Install-Agent -Exe $exe -SameVersion $sameVersion
+    Install-Agent -Exe $exe -SameVersion $sameVersion -JoinTarget $Join -Grant $GrantControl
 
     Write-Info "done. Try:"
     Write-Info "    $BinName list"

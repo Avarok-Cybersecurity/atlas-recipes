@@ -273,7 +273,15 @@ impl Launcher for SlowThenBusy {
 /// the relay's timeout has still HAPPENED, and the retry answers
 /// `AlreadyRunning` from the launcher's own state instead of starting a
 /// second copy.
-#[tokio::test(flavor = "multi_thread")]
+///
+/// `worker_threads` is pinned rather than left to the machine. `SlowThenBusy`
+/// blocks its worker with `thread::sleep`, and `multi_thread` sizes the pool
+/// from the CPU count — so on a two-core runner the blocked launch can starve
+/// the relay's own timeout timer, which then never fires and the relay returns
+/// `Started` for a launch it was supposed to give up on. Observed exactly that
+/// on Windows CI. Four workers is enough that a single blocking launch cannot
+/// take the runtime with it, and the test still measures what it says.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_retried_launch_after_a_lost_reply_is_already_running_not_doubled() {
     let origin = agent("retry-origin", "macbook", "127.0.0.1");
     let mut relay = agent("retry-relay", "dgx1", "127.0.0.2");

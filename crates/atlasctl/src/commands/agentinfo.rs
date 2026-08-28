@@ -54,23 +54,38 @@ pub fn status_advice(port: u16, installed: bool) -> Vec<String> {
     // surface, including the website's own guide, says `install`. Since #112 it
     // also STARTS a service that is merely stopped, which is the state this
     // branch is most often reached in.
-    if installed {
-        out.push(
-            "a service IS installed here but nothing is listening.\n  \
-             Start it with:  atlasctl agent install"
-                .to_owned(),
-        );
+    // The port is carried into the suggestion. `agent install` rewrites the
+    // unit from its arguments and `--port` defaults to 34333, so telling an
+    // operator who installed on 9000 to run the bare command MOVES their agent
+    // to the default and leaves 9000 dead — the same second-guessing of an
+    // explicitly named port that this function's other branch exists to avoid.
+    let install = if port == atlasctl_agent::DEFAULT_PORT {
+        "atlasctl agent install".to_owned()
     } else {
-        out.push(
+        format!("atlasctl agent install --port {port}")
+    };
+    if installed {
+        out.push(format!(
+            "a service IS installed here but nothing is listening.\n  \
+             Start it with:  {install}"
+        ));
+    } else {
+        out.push(format!(
             "no service is installed on this machine.\n  \
-             Install and start one with:  atlasctl agent install"
-                .to_owned(),
-        );
+             Install and start one with:  {install}"
+        ));
     }
-    out.push(
-        "or run it in this terminal, for as long as it stays open:\n  atlasctl agent run"
-            .to_owned(),
-    );
+    // The port travels here too. An operator probing 9000 who follows this
+    // starts an agent on 34333 — the same second-guessing of a named port the
+    // install suggestion above avoids, one line further down.
+    let run = if port == atlasctl_agent::DEFAULT_PORT {
+        "atlasctl agent run".to_owned()
+    } else {
+        format!("atlasctl agent run --port {port}")
+    };
+    out.push(format!(
+        "or run it in this terminal, for as long as it stays open:\n  {run}"
+    ));
     out
 }
 
@@ -129,13 +144,36 @@ mod status_tests {
     fn an_explicit_port_is_not_second_guessed() {
         let a = status_advice(9000, false);
         assert!(
-            !a.iter().any(|l| l.contains("--port")),
-            "must not re-suggest the flag: {a:?}"
+            !a.iter().any(|l| l.contains("agent status --port")),
+            "must not re-suggest looking on another port: {a:?}"
         );
         assert!(
             a.iter().any(|l| l.contains("agent run")),
             "still offers a start"
         );
+    }
+
+    /// An explicitly named port must survive the advice. `agent install`
+    /// rewrites the unit from its arguments, so the bare command moves an agent
+    /// installed on 9000 to the default and leaves 9000 dead — while the
+    /// operator believes they were told how to restart what they had.
+    #[test]
+    fn a_named_port_is_carried_into_the_suggestion() {
+        let a = status_advice(9000, true).join("\n");
+        assert!(a.contains("agent install --port 9000"), "{a}");
+        // Both suggestions, not just the first. Either one dropping the port
+        // moves the agent the operator was trying to restart.
+        assert!(a.contains("agent run --port 9000"), "{a}");
+        // On the default port the INSTALL line carries no flag: adding one
+        // would pin today's default into a command that outlives it. The
+        // separate "check another port" hint legitimately names the flag, so
+        // the assertion is about the install line specifically.
+        let d = status_advice(atlasctl_agent::DEFAULT_PORT, true);
+        let install_line = d
+            .iter()
+            .find(|l| l.contains("agent install"))
+            .expect("offers an install");
+        assert!(!install_line.contains("--port"), "{install_line}");
     }
 
     /// The two states an operator is actually in, and they need different

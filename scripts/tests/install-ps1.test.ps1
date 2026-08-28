@@ -68,6 +68,63 @@ try {
         Assert-Checksum -Archive $archive -SumsFile $sums
     }
 
+    # The two installers must agree about a SUMS that names the same file twice.
+    # They did not: sh printed every match and failed closed, ps1 kept the LAST
+    # one and verified against it silently — so a release with a stale duplicate
+    # would have been accepted on Windows and refused on unix.
+    Set-Content -LiteralPath $sums -Value @(
+        "$good  atlasctl-x86_64-pc-windows-msvc.zip"
+        ("0" * 64 + "  atlasctl-x86_64-pc-windows-msvc.zip")
+    )
+    Should-Throw 'a conflicting duplicate entry is refused' 'more than once' {
+        Assert-Checksum -Archive $archive -SumsFile $sums
+    }
+
+    # The same fact stated twice is still one fact.
+    Set-Content -LiteralPath $sums -Value @(
+        "$good  atlasctl-x86_64-pc-windows-msvc.zip"
+        "$good  atlasctl-x86_64-pc-windows-msvc.zip"
+    )
+    try { Assert-Checksum -Archive $archive -SumsFile $sums; Ok 'an identical duplicate still verifies' }
+    catch { Bad 'an identical duplicate still verifies' $_.Exception.Message }
+
+    # `sha256sum -b` writes `*name`; sh accepted it and this did not, so a flag
+    # added to the release pipeline would have killed every Windows install.
+    Set-Content -LiteralPath $sums -Value "$good *atlasctl-x86_64-pc-windows-msvc.zip"
+    try { Assert-Checksum -Archive $archive -SumsFile $sums; Ok 'a binary-mode entry verifies' }
+    catch { Bad 'a binary-mode entry verifies' $_.Exception.Message }
+
+    # A leading-whitespace line used to split into ['', 'sha  name'] and be
+    # skipped, so an indented SUMS had no entry at all.
+    Set-Content -LiteralPath $sums -Value "   $good  atlasctl-x86_64-pc-windows-msvc.zip"
+    try { Assert-Checksum -Archive $archive -SumsFile $sums; Ok 'an indented entry still verifies' }
+    catch { Bad 'an indented entry still verifies' $_.Exception.Message }
+
+    # --- Die actually exits ---------------------------------------------------
+    # This file REPLACES `Die` with a throw so a refusal is observable, which
+    # puts production's exit path outside the tested surface by construction:
+    # `Die` could stop exiting and nothing above would notice, while the
+    # installer printed "Refusing to install" and then ran the binary. So run
+    # the real one in a child pwsh and assert the status.
+    $child = @"
+`$ErrorActionPreference = 'Stop'
+`$src = Get-Content -Raw -Encoding UTF8 -LiteralPath '$(Join-Path $root 'scripts/install.ps1')'
+Invoke-Expression `$src.Substring(0, `$src.IndexOf('# --- main'))
+Assert-Checksum -Archive '$archive' -SumsFile '$sums'
+Write-Host 'REACHED-THE-LINE-AFTER'
+"@
+    Set-Content -LiteralPath $sums -Value ("0" * 64 + "  atlasctl-x86_64-pc-windows-msvc.zip")
+    $childOut = & pwsh -NoProfile -NonInteractive -Command $child 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 1) { Ok 'a refusal exits non-zero' }
+    else { Bad 'a refusal exits non-zero' "exit was $LASTEXITCODE" }
+    if ($childOut -notmatch 'REACHED-THE-LINE-AFTER') { Ok 'a refusal stops the script' }
+    else { Bad 'a refusal stops the script' 'execution continued past the refusal' }
+    # And prove the child got as far as the CHECK. Exit 1 with no sentinel is
+    # also what a harness that died on its own Get-Content looks like, so
+    # without this the pair would pass while testing nothing.
+    if ($childOut -match 'checksum mismatch') { Ok 'the child reached the checksum comparison' }
+    else { Bad 'the child reached the checksum comparison' $childOut }
+
     # --- Get-Version ----------------------------------------------------------
     # An unreadable or absent binary must compare UNEQUAL, which lands on the
     # upgrade path — the safe direction. Reporting a version for a binary that
@@ -91,4 +148,9 @@ Should-Contain 'this runner resolves to a real target' $t 'pc-windows-msvc'
 
 Write-Host ""
 Write-Host "  $script:pass passed, $script:fail failed"
+# Explicit BOTH ways. Falling off the end leaves the script's status as
+# whatever the last command set — and one of the cases above deliberately runs
+# a child pwsh that exits 1, so the suite reported "0 failed" and then failed
+# the job with it.
 if ($script:fail -gt 0) { exit 1 }
+exit 0

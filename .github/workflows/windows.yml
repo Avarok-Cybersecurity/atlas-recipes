@@ -65,8 +65,44 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          # Native stderr is not an error. Under `Stop`, pwsh 7 turns a native
+          # command's stderr into a terminating error when it is redirected —
+          # and `agent install` writes its notes there, so capturing its output
+          # would throw on a SUCCESSFUL install.
+          $PSNativeCommandUseErrorActionPreference = $false
           cargo build --release -p atlasctl
           $exe = "target/release/atlasctl.exe"
+
+          # Waits for the port, and says something useful when it does not
+          # arrive. A bare "never listened" leaves nobody able to tell a slow
+          # runner from an agent that died.
+          function Wait-ForAgent {
+            param([int]$Seconds = 60)
+            foreach ($i in 1..$Seconds) {
+              if (Get-NetTCPConnection -LocalPort 34333 -State Listen -ErrorAction SilentlyContinue) {
+                return $true
+              }
+              Start-Sleep -Seconds 1
+            }
+            $t = Get-ScheduledTask -TaskName 'atlasctl-agent' -ErrorAction SilentlyContinue
+            $i = Get-ScheduledTaskInfo -TaskName 'atlasctl-agent' -ErrorAction SilentlyContinue
+            Write-Host "task state: $($t.State)  lastResult: $($i.LastTaskResult)  lastRun: $($i.LastRunTime)"
+            Write-Host "atlasctl processes: $((Get-Process atlasctl -ErrorAction SilentlyContinue | Measure-Object).Count)"
+            $log = "$env:LOCALAPPDATA\atlasctl\atlasctl-agent.log"
+            if (Test-Path -LiteralPath $log) {
+              Write-Host "--- agent log ($((Get-Item $log).Length) bytes) ---"
+              # Piped to Write-Host, not left on the output stream. A bare
+              # `Get-Content` here made this function RETURN the log lines, so
+              # it answered `@(line1, …, $false)` — a truthy array — and
+              # `if (-not (Wait-ForAgent))` never threw. The masking triggered
+              # exactly when a non-empty log existed, which is the diagnosed
+              # death this helper was added to report.
+              Get-Content -LiteralPath $log | Write-Host
+            } else {
+              Write-Host "no log at $log"
+            }
+            return $false
+          }
 
           & $exe agent install --no-discovery
           if ($LASTEXITCODE -ne 0) { throw "agent install failed" }
@@ -77,19 +113,7 @@ jobs:
           # The install claims it started; prove the port is actually open
           # rather than trusting the claim. This is the exact failure the
           # `verify` step exists for.
-          $up = $false
-          foreach ($i in 1..30) {
-            if (Get-NetTCPConnection -LocalPort 34333 -State Listen -ErrorAction SilentlyContinue) {
-              $up = $true; break
-            }
-            Start-Sleep -Seconds 1
-          }
-          if (-not $up) {
-            $log = "$env:LOCALAPPDATA\atlasctl\atlasctl-agent.log"
-            if (Test-Path $log) { Write-Host "--- agent log ---"; Get-Content $log }
-            else { Write-Host "no log at $log" }
-            throw "the agent never listened on 34333"
-          }
+          if (-not (Wait-ForAgent)) { throw "the agent never listened on 34333" }
           Write-Host "the agent is listening"
 
           # Installing twice is the reported failure on macOS and the reason
@@ -105,14 +129,7 @@ jobs:
           if ($out -match 'NOT running') {
             throw "an upgrade reported the agent as down: $out"
           }
-          $back = $false
-          foreach ($i in 1..30) {
-            if (Get-NetTCPConnection -LocalPort 34333 -State Listen -ErrorAction SilentlyContinue) {
-              $back = $true; break
-            }
-            Start-Sleep -Seconds 1
-          }
-          if (-not $back) { throw "the agent did not come back after an upgrade" }
+          if (-not (Wait-ForAgent)) { throw "the agent did not come back after an upgrade" }
           Write-Host "the upgrade left a listening agent behind"
 
           # The log is the entire reason `--log-file` exists. An empty or
