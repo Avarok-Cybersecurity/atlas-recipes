@@ -62,7 +62,16 @@ verify_checksum() {
     sums="$2"
     name=$(basename "$archive")
 
-    expected=$(grep "  $name\$" "$sums" | awk '{print $1}' || true)
+    # An exact field comparison, not a regex match. `grep "  $name\$"` put the
+    # filename into a pattern, where `.` matches any character — so
+    # `atlasctl-x86_64-unknown-linux-musl.tar.xz` also matched a line naming
+    # `...-muslXtarXxz`. Nothing generates such a name today, which is the whole
+    # problem with leaving it: the check that decides whether to execute a
+    # downloaded binary should not depend on that staying true.
+    #
+    # The `*` form is accepted because `sha256sum -b` writes it, and a SHA256SUMS
+    # produced that way is not malformed.
+    expected=$(awk -v n="$name" '$2 == n || $2 == "*" n { print $1 }' "$sums")
     [ -n "$expected" ] || die "no checksum for $name in SHA256SUMS; refusing to install."
 
     if command -v sha256sum >/dev/null 2>&1; then
