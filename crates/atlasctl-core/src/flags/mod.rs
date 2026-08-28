@@ -39,6 +39,12 @@ pub fn lookup(key: &str) -> Option<&'static FlagSpec> {
 
 /// The recipe key for an engine flag spelled as if it were a key.
 ///
+/// Answers only for a key the table does NOT already know: `max_prefill_tokens`
+/// is a real key AND the flag spelling of `max_num_batched_tokens`, so without
+/// that guard a valid key would be told it is "the engine's flag name" for a
+/// different setting. The old `s.key != typed` guard did not cover it — it only
+/// skipped the spec whose own key matched.
+///
 /// Someone reading the rendered command sees `--max-seq-len` and writes
 /// `-o max_seq_len=...`; the key is `max_model_len`. That is not a typo, and no
 /// edit-distance ranking finds it — the two are five edits apart — so it is
@@ -47,7 +53,8 @@ pub fn lookup(key: &str) -> Option<&'static FlagSpec> {
 pub fn key_for_flag_spelling(typed: &str) -> Option<&'static str> {
     ATLAS_FLAGS
         .iter()
-        .find(|s| s.flag.trim_start_matches('-').replace('-', "_") == typed && s.key != typed)
+        .find(|s| s.flag.trim_start_matches('-').replace('-', "_") == typed)
+        .filter(|_| lookup(typed).is_none())
         .map(|s| s.key)
 }
 
@@ -155,3 +162,32 @@ pub fn render(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod spelling_tests {
+    use super::*;
+
+    /// The rename this exists for.
+    #[test]
+    fn an_engine_flag_spelling_maps_to_the_setting_key() {
+        assert_eq!(key_for_flag_spelling("max_seq_len"), Some("max_model_len"));
+    }
+
+    /// `max_prefill_tokens` is a REAL key and also the flag spelling of
+    /// `max_num_batched_tokens`. Without the lookup guard a valid key would be
+    /// told it is "the engine's flag name" for a different setting.
+    #[test]
+    fn a_key_that_is_also_another_flags_spelling_is_left_alone() {
+        assert!(
+            lookup("max_prefill_tokens").is_some(),
+            "premise: it is a key"
+        );
+        assert_eq!(key_for_flag_spelling("max_prefill_tokens"), None);
+    }
+
+    #[test]
+    fn a_name_that_is_neither_gets_nothing() {
+        assert_eq!(key_for_flag_spelling("zzzz"), None);
+        assert_eq!(key_for_flag_spelling(""), None);
+    }
+}

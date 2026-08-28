@@ -84,11 +84,22 @@ pub fn check_override(key: &str, value: &ScalarValue) -> Result<(), SettingError
     let Some(Disposition::Expose(spec)) = disposition(key) else {
         return Ok(());
     };
-    let sent = match value {
-        ScalarValue::Bool(b) => SettingValue::Bool(*b),
-        ScalarValue::Int(n) => SettingValue::Int(*n),
-        ScalarValue::Float(f) => SettingValue::Float(*f),
-        ScalarValue::Str(s) => SettingValue::Str(s.clone()),
+    // The wire bounds accept only what the WEB surface produces: `Str` for an
+    // Enum (a dropdown) and `Bool` for a toggle (a checkbox). The CLI types by
+    // YAML, so `-o block_size=16` arrives as Int and `-o enable_prefix_caching=1`
+    // as Int, and checking those verbatim refused values that are in the allowed
+    // set — `block_size` answered "must be one of: 8, 16, 32, 64" for 16.
+    //
+    // Coerced through the renderer's own `render` and `is_truthy`, so a bound
+    // can never refuse a value the command renderer would have accepted. That
+    // is the whole contract here: enforce the range, change nothing else.
+    let sent = match (&spec.bound, value) {
+        (BoundSpec::Enum(_), v) => SettingValue::Str(v.render()),
+        (BoundSpec::Toggle | BoundSpec::BoolValue, v) => SettingValue::Bool(v.is_truthy()),
+        (_, ScalarValue::Bool(b)) => SettingValue::Bool(*b),
+        (_, ScalarValue::Int(n)) => SettingValue::Int(*n),
+        (_, ScalarValue::Float(f)) => SettingValue::Float(*f),
+        (_, ScalarValue::Str(s)) => SettingValue::Str(s.clone()),
     };
     spec.bound.to_bound().check(key, &sent).map(|_| ())
 }

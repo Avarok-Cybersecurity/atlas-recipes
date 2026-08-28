@@ -4,7 +4,7 @@
 
 use crate::cli::{LogsArgs, StopArgs};
 use anyhow::{Result, bail};
-use atlasctl_core::docker::translate::LABEL_MANAGED;
+use atlasctl_core::docker::translate::{LABEL_MANAGED, LABEL_RECIPE};
 use atlasctl_core::io::{ProcessRunner, StdProcessRunner};
 use atlasctl_core::registry::RecipeRef;
 
@@ -15,10 +15,28 @@ fn container_of(recipe: &str) -> String {
 
 /// Stop one recipe, or everything atlasctl started.
 pub fn stop(args: &StopArgs) -> Result<()> {
-    if let Some(recipe) = &args.recipe {
-        known_recipe(recipe)?;
+    if args.all {
+        return stop_all_with(&StdProcessRunner);
     }
-    stop_with(&StdProcessRunner, args)
+    let Some(typed) = &args.recipe else {
+        bail!("name a recipe to stop, or pass --all");
+    };
+    match known_recipe(typed) {
+        Ok(resolved) => stop_recipe_with(&StdProcessRunner, typed, &resolved),
+        // The catalogue could not answer — an ambiguous bare name, a recipe
+        // whose YAML no longer parses, an unreadable registries.yaml. None of
+        // that should strand a container this fleet is running: the label was
+        // written at launch and does not depend on the catalogue still being
+        // readable. Only when nothing is running under that name does the
+        // resolve error stand, so a TYPO still gets its "Did you mean ...?".
+        Err(unresolved) => {
+            let found = containers_for_recipe(&StdProcessRunner, typed)?;
+            if found.is_empty() {
+                return Err(unresolved);
+            }
+            stop_each(&StdProcessRunner, found)
+        }
+    }
 }
 
 /// Refuse a name that is not a recipe at all.
@@ -32,29 +50,68 @@ pub fn stop(args: &StopArgs) -> Result<()> {
 /// `--all` skips this: its targets come from docker's own list of containers we
 /// label, so they need no catalogue entry. That is also the way out if a recipe
 /// is running from a registry that has since been removed.
-fn known_recipe(name: &str) -> Result<()> {
-    crate::commands::registry_set()?.resolve(&RecipeRef::parse(name))?;
-    Ok(())
+fn known_recipe(name: &str) -> Result<String> {
+    Ok(crate::commands::registry_set()?
+        .resolve(&RecipeRef::parse(name))?
+        .name)
 }
 
-/// `stop`, with the process runner injected so the failure paths are testable.
+/// The running containers this fleet launched FOR a recipe, by label.
 ///
-/// The interesting behaviour here is entirely about what happens when docker
-/// says no, and that cannot be reached through a real `docker` without one.
-fn stop_with(runner: &dyn ProcessRunner, args: &StopArgs) -> Result<()> {
-    let targets: Vec<String> = if args.all {
-        managed_containers(runner)?
-    } else {
-        let Some(recipe) = &args.recipe else {
-            bail!("name a recipe to stop, or pass --all");
-        };
-        vec![container_of(recipe)]
-    };
+/// Not `atlas-{typed}`: the container is named from the resolved recipe and a
+/// cluster launch appends `-rank{n}` (`docker::translate::container_name`), so
+/// guessing missed two everyday cases and — once "no such container" stopped
+/// being a failure — reported exit 0 while the model served:
+///
+///   * `run X --rank 0` makes `atlas-X-rank0`, and `run` prints
+///     `atlasctl stop X` as the way to stop it;
+///   * `stop @registry/X` guessed `atlas-@registry/X`.
+///
+/// The label is written by the launch itself, so it survives a registry being
+/// removed and needs no name arithmetic here.
+fn containers_for_recipe(runner: &dyn ProcessRunner, recipe: &str) -> Result<Vec<String>> {
+    let out = runner.run(&[
+        "docker".into(),
+        "ps".into(),
+        "--filter".into(),
+        format!("label={LABEL_RECIPE}={recipe}"),
+        "--format".into(),
+        "{{.Names}}".into(),
+    ])?;
+    Ok(out
+        .stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect())
+}
 
+/// `stop --all`, with the runner injected so the failure paths are testable.
+fn stop_all_with(runner: &dyn ProcessRunner) -> Result<()> {
+    let targets = managed_containers(runner)?;
     if targets.is_empty() {
         println!("nothing running");
         return Ok(());
     }
+    stop_each(runner, targets)
+}
+
+/// `stop <recipe>`, found by label rather than by guessing a container name.
+///
+/// `typed` is what the operator wrote (for the message); `resolved` is the
+/// recipe's own name, which is what the launch wrote into the label.
+fn stop_recipe_with(runner: &dyn ProcessRunner, typed: &str, resolved: &str) -> Result<()> {
+    let found = containers_for_recipe(runner, resolved)?;
+    if found.is_empty() {
+        println!("{typed} is not running");
+        return Ok(());
+    }
+    stop_each(runner, found)
+}
+
+/// Stop each container, collecting real failures.
+fn stop_each(runner: &dyn ProcessRunner, targets: Vec<String>) -> Result<()> {
     // Failures are collected rather than only printed. Reporting each one to
     // stderr and then returning Ok meant `atlasctl stop --all` exited 0 with
     // every container still running — so a script that checked the exit code,
@@ -203,6 +260,13 @@ fn managed_containers(runner: &dyn ProcessRunner) -> Result<Vec<String>> {
         "--format".into(),
         "{{.Names}}".into(),
     ])?;
+    // An empty list because docker did not ANSWER is not an idle fleet. Without
+    // this, `stop --all` against a stopped daemon printed "nothing running" and
+    // exited 0 — the exact lie the collected-failures logic above exists to
+    // prevent. `status()` ten lines down has always checked this.
+    if !out.success() {
+        bail!("`docker ps` failed: {}", out.stderr.trim());
+    }
     Ok(out
         .stdout
         .lines()
@@ -213,245 +277,4 @@ fn managed_containers(runner: &dyn ProcessRunner) -> Result<Vec<String>> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use atlasctl_core::docker::translate::LABEL_RECIPE;
-    use atlasctl_core::io::RecordingRunner;
-    use atlasctl_core::io::process::Output;
-
-    #[test]
-    fn managed_containers_are_found_by_label_not_by_name_guessing() {
-        let r = RecordingRunner::new();
-        r.push_result(Output {
-            status: 0,
-            stdout: "atlas-a\natlas-b\n".into(),
-            stderr: String::new(),
-        });
-        let names = managed_containers(&r).unwrap();
-        assert_eq!(names, ["atlas-a", "atlas-b"]);
-        let argv = &r.calls()[0];
-        assert!(
-            argv.contains(&format!("label={LABEL_MANAGED}=1")),
-            "must filter by our label so unrelated containers are never touched: {argv:?}"
-        );
-    }
-
-    #[test]
-    fn the_recipe_label_is_what_ties_a_container_back_to_its_recipe() {
-        assert_eq!(LABEL_RECIPE, "io.atlasctl.recipe");
-        assert_eq!(container_of("qwen3.6-27b-fp8"), "atlas-qwen3.6-27b-fp8");
-    }
-}
-
-#[cfg(test)]
-mod stop_tests {
-    use super::*;
-    use atlasctl_core::io::RecordingRunner;
-    use atlasctl_core::io::process::Output;
-
-    fn ok() -> Output {
-        Output {
-            status: 0,
-            stdout: String::new(),
-            stderr: String::new(),
-        }
-    }
-    fn fail(why: &str) -> Output {
-        Output {
-            status: 1,
-            stdout: String::new(),
-            stderr: why.into(),
-        }
-    }
-
-    /// The bug: every stop failed and the command exited 0, so a script that
-    /// checked the exit code — or an operator running this before a reboot —
-    /// was told the fleet was idle while every container was still up.
-    #[test]
-    fn a_failed_stop_is_a_failed_command() {
-        let r = RecordingRunner::new();
-        r.push_result(Output {
-            status: 0,
-            stdout: "atlas-a\natlas-b\n".into(),
-            stderr: String::new(),
-        });
-        r.push_result(fail("permission denied"));
-        // Was "no such container", which is now the one stderr that means the
-        // stop SUCCEEDED in effect. This test is about two real failures, so it
-        // needs two real failures.
-        r.push_result(fail("device or resource busy"));
-
-        let e = stop_with(
-            &r,
-            &StopArgs {
-                recipe: None,
-                all: true,
-            },
-        )
-        .expect_err("two failures must not report success");
-        let msg = e.to_string();
-        assert!(msg.contains("atlas-a") && msg.contains("atlas-b"), "{msg}");
-    }
-
-    /// A partial failure is still a failure, and the survivors are named —
-    /// "1 of 3 failed" sends the operator to check all three.
-    #[test]
-    fn a_partial_failure_names_only_what_did_not_stop() {
-        let r = RecordingRunner::new();
-        r.push_result(Output {
-            status: 0,
-            stdout: "atlas-a\natlas-b\n".into(),
-            stderr: String::new(),
-        });
-        r.push_result(ok());
-        r.push_result(fail("device busy"));
-
-        let e = stop_with(
-            &r,
-            &StopArgs {
-                recipe: None,
-                all: true,
-            },
-        )
-        .expect_err("one failure is a failure");
-        let msg = e.to_string();
-        assert!(msg.contains("atlas-b"), "{msg}");
-        assert!(
-            !msg.contains("atlas-a"),
-            "the one that stopped is not a problem: {msg}"
-        );
-    }
-
-    #[test]
-    fn stopping_everything_when_nothing_runs_is_success() {
-        let r = RecordingRunner::new();
-        r.push_result(Output {
-            status: 0,
-            stdout: String::new(),
-            stderr: String::new(),
-        });
-        stop_with(
-            &r,
-            &StopArgs {
-                recipe: None,
-                all: true,
-            },
-        )
-        .expect("nothing to do is fine");
-    }
-}
-
-#[cfg(test)]
-mod absent_tests {
-    use super::*;
-    use atlasctl_core::io::RecordingRunner;
-    use atlasctl_core::io::process::Output;
-
-    fn out(status: i32, stdout: &str, stderr: &str) -> Output {
-        Output {
-            status,
-            stdout: stdout.into(),
-            stderr: stderr.into(),
-        }
-    }
-
-    #[test]
-    fn the_daemons_two_spellings_of_gone_are_both_recognised() {
-        assert!(absent(
-            "Error response from daemon: No such container: atlas-x"
-        ));
-        assert!(absent("Error: no such object: atlas-x"));
-        // Real failures must not be swallowed by this.
-        assert!(!absent("permission denied"));
-        assert!(!absent("device or resource busy"));
-        assert!(!absent(""));
-    }
-
-    /// Stopping something that is not running is the state the operator asked
-    /// for. It used to print the daemon's own line and exit non-zero.
-    #[test]
-    fn stopping_a_recipe_that_is_not_running_is_not_a_failure() {
-        let r = RecordingRunner::new();
-        r.push_result(out(
-            1,
-            "",
-            "Error response from daemon: No such container: atlas-q",
-        ));
-        stop_with(
-            &r,
-            &StopArgs {
-                recipe: Some("q".into()),
-                all: false,
-            },
-        )
-        .expect("a recipe that is not running must not be an error");
-    }
-
-    /// Under --all this is a race: the container ended between the listing and
-    /// the stop. Equally not a failure, and it must not mask a real one.
-    #[test]
-    fn a_vanished_container_does_not_mask_a_real_failure() {
-        let r = RecordingRunner::new();
-        r.push_result(out(0, "atlas-a\natlas-b\n", ""));
-        r.push_result(out(
-            1,
-            "",
-            "Error response from daemon: No such container: atlas-a",
-        ));
-        r.push_result(out(1, "", "permission denied"));
-        let e = stop_with(
-            &r,
-            &StopArgs {
-                recipe: None,
-                all: true,
-            },
-        )
-        .expect_err("the real failure must still fail the command");
-        let msg = e.to_string();
-        assert!(msg.contains("atlas-b"), "names what actually failed: {msg}");
-        assert!(
-            !msg.contains("atlas-a"),
-            "must not blame the one that was already gone: {msg}"
-        );
-    }
-
-    #[test]
-    fn logs_for_a_recipe_never_started_here_says_so_and_never_streams() {
-        let r = RecordingRunner::new();
-        r.push_result(out(0, "\n", "")); // ps -a matched nothing
-        let e = logs_with(
-            &r,
-            &LogsArgs {
-                recipe: "q".into(),
-                tail: 100,
-                follow: false,
-            },
-        )
-        .expect_err("there is nothing to show");
-        let msg = e.to_string();
-        assert!(msg.contains("has not been started here"), "{msg}");
-        assert!(
-            msg.contains("atlasctl status"),
-            "points somewhere useful: {msg}"
-        );
-        assert_eq!(r.calls().len(), 1, "must not have run `docker logs` at all");
-    }
-
-    #[test]
-    fn logs_for_an_exited_container_still_stream() {
-        let r = RecordingRunner::new();
-        r.push_result(out(0, "atlas-q\n", "")); // ps -a found it, exited or not
-        r.push_result(out(0, "", ""));
-        logs_with(
-            &r,
-            &LogsArgs {
-                recipe: "q".into(),
-                tail: 100,
-                follow: false,
-            },
-        )
-        .expect("a stopped container still has logs worth reading");
-        let argv = &r.calls()[1];
-        assert!(argv.contains(&"logs".to_string()), "{argv:?}");
-    }
-}
+mod tests;
