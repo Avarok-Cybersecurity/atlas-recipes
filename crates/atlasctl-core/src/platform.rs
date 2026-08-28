@@ -123,6 +123,105 @@ pub fn posix_user() -> Option<crate::host::PosixUser> {
     }
 }
 
+/// Free bytes on the filesystem holding `path`, when it can be determined.
+///
+/// One implementation, because "how much room is left" was asked in two places
+/// with two different answers: the fleet vitals called `statvfs` and returned
+/// `None` everywhere else, and `doctor` shelled out to `df -Pk`, which does not
+/// exist on Windows at all. A machine whose disk column is blank is a machine
+/// nobody checks before a 100 GB pull.
+///
+/// A full model cache is a leading cause of launch failure, so this is worth a
+/// platform call.
+#[must_use]
+pub fn free_bytes(path: &std::path::Path) -> Option<u64> {
+    // The directory may not exist yet on a fresh install, and asking the OS
+    // about a missing path fails. What matters is the filesystem that WOULD
+    // hold it, so walk up to the nearest ancestor that does exist.
+    let mut probe = path;
+    while !probe.exists() {
+        probe = probe.parent()?;
+    }
+    free_bytes_of_existing(probe)
+}
+
+// `allow`, not `expect`: `f_bavail` and `f_frsize` are u64 on 64-bit targets,
+// where the conversion is a no-op clippy objects to, and narrower on others,
+// where dropping it would silently truncate a disk size. An `expect` would then
+// fail on exactly the targets that need the conversion.
+#[allow(clippy::useless_conversion, reason = "the widths are target-dependent")]
+#[cfg(unix)]
+fn free_bytes_of_existing(probe: &std::path::Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(probe.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `c` is a valid NUL-terminated path and `stat` is written only by
+    // the call, which reports success before we read it.
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &raw mut stat) } != 0 {
+        return None;
+    }
+    u64::try_from(stat.f_bavail)
+        .ok()?
+        .checked_mul(u64::try_from(stat.f_frsize).ok()?)
+}
+
+#[cfg(windows)]
+fn free_bytes_of_existing(probe: &std::path::Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let wide: Vec<u16> = probe
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut avail: u64 = 0;
+    // SAFETY: `wide` is NUL-terminated and outlives the call; `avail` is
+    // written only by it and read only after it reports success. The two
+    // total-size outputs are not wanted, and NULL is documented as the way to
+    // decline them.
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &raw mut avail,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    // Available to THIS user, not the volume total: a per-user quota is the
+    // number that decides whether a pull fits.
+    (ok != 0).then_some(avail)
+}
+
+/// Find an executable on `PATH`.
+///
+/// On Windows a name without an extension is not a program: `docker` is
+/// `docker.exe`, and a lookup that only tries the bare name reports every tool
+/// on the machine as missing. `PATHEXT` is the list the shell itself uses.
+#[must_use]
+pub fn which(name: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    let candidates: Vec<String> = if cfg!(windows) {
+        let has_ext = std::path::Path::new(name).extension().is_some();
+        let mut v = if has_ext {
+            vec![name.to_owned()]
+        } else {
+            Vec::new()
+        };
+        let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned());
+        v.extend(
+            exts.split(';')
+                .filter(|e| !e.trim().is_empty())
+                .map(|e| format!("{name}{}", e.trim())),
+        );
+        v
+    } else {
+        vec![name.to_owned()]
+    };
+    std::env::split_paths(&path)
+        .flat_map(|d| candidates.iter().map(move |c| d.join(c)))
+        .find(|p| p.is_file())
+}
+
 /// This machine's name, for display and for a peer's `Hello`.
 ///
 /// Never fatal: a node with an unreadable hostname is still a usable node, and
@@ -164,6 +263,39 @@ mod tests {
     #[test]
     fn a_hostname_is_never_empty() {
         assert!(!hostname().is_empty());
+    }
+
+    /// The question this answers is asked before a 100 GB pull, so an answer
+    /// of "cannot tell" on a working machine is the failure that matters.
+    #[test]
+    fn free_space_is_readable_for_a_directory_that_exists() {
+        let n = free_bytes(&std::env::temp_dir()).expect("a temp dir has a filesystem");
+        assert!(
+            n > 0,
+            "a writable temp dir with zero bytes free is not credible"
+        );
+    }
+
+    /// A fresh install asks about a cache directory that does not exist yet.
+    /// Answering `None` there would blank the disk column on every new machine.
+    #[test]
+    fn free_space_walks_up_to_a_parent_that_exists() {
+        let missing = std::env::temp_dir()
+            .join("atlasctl-does-not-exist")
+            .join("nor-this");
+        assert!(
+            free_bytes(&missing).is_some(),
+            "must fall back to the volume"
+        );
+    }
+
+    /// `which` is how docker is found. On Windows a bare name never matches,
+    /// which reported every tool on the machine as missing.
+    #[test]
+    fn which_finds_a_real_program_and_not_an_invented_one() {
+        let real = if cfg!(windows) { "cmd" } else { "sh" };
+        assert!(which(real).is_some(), "{real} must be on PATH");
+        assert!(which("definitely-not-a-real-binary-xyz").is_none());
     }
 
     /// The uid model is a property of the platform, not of the machine: a unix
