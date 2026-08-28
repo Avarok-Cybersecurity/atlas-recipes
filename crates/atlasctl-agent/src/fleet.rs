@@ -291,13 +291,13 @@ impl LocalFleet {
         // A node cannot advertise itself into your pin store, and it cannot
         // advertise away a pin you already hold: this only ever writes into the
         // sightings table.
+        //
+        // That was false until `remember_address` moved out of here: it writes
+        // the PIN store, so any LAN host could rewrite a trusted peer's address
+        // by announcing its (public) fingerprint. It now runs after an
+        // authenticated poll, which has proven the address.
         if beacon.id == self.identity.id() {
             return;
-        }
-        // A sighting of a peer we trust also refreshes where we think it is,
-        // so the address outlives this process.
-        if let Some(addr) = beacon.addresses.first().map(ToString::to_string) {
-            let _ = remember_address(&self.pins, beacon.id, &addr);
         }
         if let Ok(mut seen) = self.seen.lock() {
             // Refreshing something already here, or something we have pinned,

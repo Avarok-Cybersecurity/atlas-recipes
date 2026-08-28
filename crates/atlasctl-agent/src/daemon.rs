@@ -392,6 +392,14 @@ fn spawn_peer_poll(
                         if let Some(digest) = report.vouched.clone() {
                             fleet.record_vouches(id, digest);
                         }
+                        // Where the peer actually IS, persisted from the one
+                        // place that has proven it: this exchange completed
+                        // mutual TLS against the pinned key, so `sock` is an
+                        // address that machine really answers on. `observe`
+                        // used to do this from an unauthenticated beacon, which
+                        // let anything on the LAN rewrite a trusted peer's
+                        // address by announcing its (public) fingerprint.
+                        let _ = crate::fleet::remember_address(&pins, id, &sock.ip().to_string());
                         fleet.record_report(report);
                         if let Some(node) = fleet.nodes().into_iter().find(|n| n.id == id) {
                             let _ = events.send(ServerMsg::FleetEvent {

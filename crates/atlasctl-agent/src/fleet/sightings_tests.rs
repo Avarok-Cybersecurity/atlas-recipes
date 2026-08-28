@@ -7,6 +7,9 @@
 //! unauthenticated network can make it STORE.
 
 use super::tests::{Tmp, beacon, fleet_at};
+use crate::fleet::record_pairing;
+use crate::identity::{Identity, PinStore};
+use atlasctl_protocol::fleet::DisplayName;
 use atlasctl_protocol::fleet::NodeId;
 
 /// mDNS is unauthenticated: anything on the LAN can announce any id. Without a
@@ -107,5 +110,47 @@ fn an_unreadable_pin_store_does_not_evict_the_fleet_it_cannot_see() {
         f.lock_seen().expect("lock").contains_key(&mine),
         "a pinned peer was evicted because its pin file could not be parsed; \
          the operator would see their fleet vanish over an I/O error"
+    );
+}
+
+/// An mDNS beacon is unauthenticated and a `NodeId` is a public key
+/// fingerprint that rides in every one of them, so "claims to be a peer you
+/// trust" is not a thing an attacker has to guess.
+///
+/// `observe` used to call `remember_address`, which writes `last_address` into
+/// the PIN store — three lines under a comment promising it "only ever writes
+/// into the sightings table". Anything on the LAN could therefore rewrite where
+/// a trusted machine was believed to live, persistently: the agent dials the
+/// attacker, the real machine reads as unreachable, and a restart does not
+/// clear it. SPKI pinning refuses the impersonation, so this was redirection
+/// rather than key compromise — which is exactly the kind of bug that survives,
+/// because nothing visibly breaks.
+#[test]
+fn a_beacon_cannot_move_a_pinned_peer() {
+    let t = Tmp::new("beacon-move");
+    let peer = Identity::generate();
+    let pins = PinStore::new(&t.0);
+    record_pairing(
+        &pins,
+        peer.id(),
+        &hex::encode(peer.public().as_bytes()),
+        DisplayName::new("spark-43fa"),
+        0,
+        Some("10.10.10.10".to_owned()),
+        false,
+    )
+    .expect("pin");
+
+    // A hostile beacon claiming that peer's id, from somewhere else entirely.
+    let mut hostile = beacon(peer.id(), "spark-43fa", true);
+    hostile.addresses = vec!["10.10.10.99".parse().expect("addr")];
+    fleet_at(&t.0).observe(hostile);
+
+    assert_eq!(
+        pins.load().expect("read")[&peer.id()]
+            .last_address
+            .as_deref(),
+        Some("10.10.10.10"),
+        "an unauthenticated beacon must not rewrite a trusted peer's address"
     );
 }
