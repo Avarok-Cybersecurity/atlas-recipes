@@ -60,6 +60,13 @@ defaults:
   ssm_cache_slots: 128
   ssm_checkpoint_interval: 32
   speculative: true
+  # ★ DETERMINISM PIN. See qwen3.6-35b-a3b-fp8-bf16head for the full
+  # rationale. In `auto` the MTP gate switches MTP<->serial at runtime on
+  # wall-clock tok/s, and speculation is not output-neutral at temperature 0
+  # — so decode depends on box speed. This recipe backs Atlas's BFCL ACCURACY
+  # gates, which score at temp 0: an un-pinned arbiter moves the score itself,
+  # not merely the wall time.
+  mtp_gate: force
   num_drafts: 1
   mtp_quantization: bf16
   tool_call_parser: qwen3_coder
