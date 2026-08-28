@@ -412,3 +412,50 @@ fn dial_first_reachable(
     crate::peer::reach::walk(addrs, |addr| driver.pair(addr, code))
         .map_err(|e| anyhow::anyhow!("could not pair over any advertised address — {e:#}"))
 }
+
+/// Where to reach one paired peer: its address, and the port IT advertised.
+///
+/// Separate from a bare `(NodeId, String)` so the port cannot be silently
+/// dropped on the way to the dial, which is exactly what happened while this
+/// was a two-tuple.
+#[derive(Debug, Clone)]
+pub struct PeerDial {
+    /// The address to dial — a live sighting first, else the pin.
+    pub addr: String,
+    /// The peer's own peer-channel port, when it is currently announcing.
+    pub port: Option<u16>,
+}
+
+impl super::LocalFleet {
+    /// Peers this agent should try to reach, with the address to use.
+    ///
+    /// # Errors
+    /// If the pin store cannot be read.
+    pub fn dialable_peers(&self) -> Result<Vec<(NodeId, PeerDial)>> {
+        let pinned = self.pins.load()?;
+        let seen = self.lock_seen();
+        Ok(pinned
+            .iter()
+            .filter_map(|(id, pin)| {
+                let sighting = seen.as_ref().and_then(|s| s.get(id));
+                let addr = sighting
+                    .and_then(|s| s.beacon.addresses.first().map(ToString::to_string))
+                    .or_else(|| pin.last_address.clone())?;
+                // The port the PEER announced, not the one this agent happens
+                // to listen on. A beacon has carried `peer_port` all along and
+                // the poll discarded it, dialling every peer on our own port —
+                // correct only because every agent currently binds the same
+                // one. `None` when the peer is not currently announcing, and
+                // the caller falls back to the default rather than guessing
+                // from itself.
+                Some((
+                    *id,
+                    PeerDial {
+                        addr,
+                        port: sighting.map(|s| s.beacon.peer_port),
+                    },
+                ))
+            })
+            .collect())
+    }
+}

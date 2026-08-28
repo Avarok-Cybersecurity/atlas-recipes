@@ -353,7 +353,8 @@ fn spawn_peer_poll(
             let Ok(peers) = fleet.dialable_peers() else {
                 continue;
             };
-            for (id, addr) in peers {
+            for (id, dial) in peers {
+                let addr = dial.addr;
                 // Parse the IP and attach the port, rather than formatting
                 // "{addr}:{port}" and parsing that. A SocketAddr string needs
                 // an IPv6 literal in brackets — `[fe80::1]:34334` — so the
@@ -361,10 +362,13 @@ fn spawn_peer_poll(
                 // `continue` below turned that into silence: the node stayed in
                 // the fleet, was never polled, and simply aged into "stale"
                 // forever with no error anywhere.
+                // The peer's OWN advertised port when it is announcing;
+                // ours only as a fallback. Using ours was correct only while
+                // every agent bound the same one.
                 let Some(sock) = addr
                     .parse::<std::net::IpAddr>()
                     .ok()
-                    .map(|ip| std::net::SocketAddr::new(ip, port))
+                    .map(|ip| std::net::SocketAddr::new(ip, dial.port.unwrap_or(port)))
                 else {
                     continue;
                 };

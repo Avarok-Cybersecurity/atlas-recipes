@@ -154,3 +154,70 @@ fn a_beacon_cannot_move_a_pinned_peer() {
         "an unauthenticated beacon must not rewrite a trusted peer's address"
     );
 }
+
+/// A beacon has always carried the peer's own `peer_port`, and the poll threw
+/// it away — every peer was dialled on THIS agent's port instead. That is
+/// correct only while every agent binds the same one, which is true today and
+/// is exactly the assumption that makes a per-machine port impossible to add.
+///
+/// It is also why a pin can only remember an IP: storing a port would persist
+/// a number nothing consults.
+#[test]
+fn a_peer_is_dialled_on_the_port_it_advertised() {
+    let t = Tmp::new("dial-port");
+    let f = fleet_at(&t.0);
+    let mine = NodeId::from_bytes([3; 32]);
+    record_pairing(
+        &f.pins,
+        mine,
+        "ef".repeat(32).as_str(),
+        DisplayName::new("odd-port-peer"),
+        0,
+        Some("10.10.10.10".to_owned()),
+        false,
+    )
+    .expect("pin");
+
+    let mut b = beacon(mine, "odd-port-peer", true);
+    b.peer_port = 34999;
+    f.observe(b);
+
+    let dials = f.dialable_peers().expect("reads");
+    let (_, dial) = dials
+        .iter()
+        .find(|(id, _)| *id == mine)
+        .expect("a pinned, announcing peer is dialable");
+    assert_eq!(
+        dial.port,
+        Some(34999),
+        "the port the PEER announced must reach the dial, not this agent's own"
+    );
+}
+
+/// A peer that is not announcing has no port to offer, and the caller falls
+/// back to the default rather than inventing one — `None` is "it did not say",
+/// which is the same distinction the vitals carry.
+#[test]
+fn a_silent_peer_offers_no_port_rather_than_a_guess() {
+    let t = Tmp::new("dial-port-silent");
+    let f = fleet_at(&t.0);
+    let mine = NodeId::from_bytes([4; 32]);
+    record_pairing(
+        &f.pins,
+        mine,
+        "ab".repeat(32).as_str(),
+        DisplayName::new("switched-off"),
+        0,
+        Some("10.10.10.11".to_owned()),
+        false,
+    )
+    .expect("pin");
+
+    let dials = f.dialable_peers().expect("reads");
+    let (_, dial) = dials
+        .iter()
+        .find(|(id, _)| *id == mine)
+        .expect("still listed");
+    assert_eq!(dial.addr, "10.10.10.11", "the pin's address stands");
+    assert_eq!(dial.port, None, "no sighting means no advertised port");
+}
