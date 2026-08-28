@@ -13,25 +13,25 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// Records every argv, and can be told which ones fail.
-struct Recorder {
+pub(super) struct Recorder {
     calls: Mutex<Vec<String>>,
     fail: Vec<String>,
 }
 
 impl Recorder {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             calls: Mutex::new(Vec::new()),
             fail: Vec::new(),
         }
     }
-    fn failing(what: &str) -> Self {
+    pub(super) fn failing(what: &str) -> Self {
         Self {
             calls: Mutex::new(Vec::new()),
             fail: vec![what.to_owned()],
         }
     }
-    fn calls(&self) -> Vec<String> {
+    pub(super) fn calls(&self) -> Vec<String> {
         self.calls.lock().expect("lock").clone()
     }
 }
@@ -58,14 +58,14 @@ impl ProcessRunner for Recorder {
 
 /// A filesystem that records writes and removals.
 #[derive(Default)]
-struct Files {
-    written: Mutex<Vec<(PathBuf, String)>>,
-    removed: Mutex<Vec<PathBuf>>,
+pub(super) struct Files {
+    pub(super) written: Mutex<Vec<(PathBuf, String)>>,
+    pub(super) removed: Mutex<Vec<PathBuf>>,
     dirs: Mutex<Vec<PathBuf>>,
 }
 
 impl Files {
-    fn body(&self) -> String {
+    pub(super) fn body(&self) -> String {
         self.written
             .lock()
             .expect("lock")
@@ -113,7 +113,7 @@ pub(super) fn agent() -> AgentInvocation {
     }
 }
 
-fn home() -> PathBuf {
+pub(super) fn home() -> PathBuf {
     PathBuf::from("/home/o")
 }
 

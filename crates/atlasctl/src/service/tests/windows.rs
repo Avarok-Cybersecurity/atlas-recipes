@@ -118,3 +118,97 @@ fn a_path_ending_in_a_backslash_survives_quoting() {
         p.unit_body
     );
 }
+
+// ---- the I/O half, on Windows -----------------------------------------------
+//
+// `install` resolves the supervisor itself, so these can only run where that
+// resolution yields a Scheduled Task. Their absence is what made `Files::body`
+// read as dead code on Windows — the honest fix for which is the coverage, not
+// an allow.
+
+#[cfg(target_os = "windows")]
+use super::{Files, Recorder, home};
+#[cfg(target_os = "windows")]
+use crate::service::{install, uninstall};
+
+#[cfg(target_os = "windows")]
+#[test]
+fn a_successful_install_writes_the_task_then_registers_it() {
+    let fs = Files::default();
+    let r = Recorder::new();
+    let out = install(&fs, &r, &agent(), &home(), 0).expect("installs");
+
+    assert_eq!(
+        out.unit_path,
+        home().join("AppData\\Local\\atlasctl\\atlasctl-agent.xml")
+    );
+    assert!(fs.body().contains("<ExecutionTimeLimit>"), "{}", fs.body());
+    assert!(out.skipped.is_empty());
+    let calls = r.calls();
+    // Register before Start, and the stop attempt before either: starting a
+    // task that has not been registered fails, and registering over a live one
+    // leaves the old process holding the port.
+    let stop = calls.iter().position(|c| c.contains("Stop-ScheduledTask"));
+    let reg = calls
+        .iter()
+        .position(|c| c.contains("Register-ScheduledTask"))
+        .expect("must register");
+    let start = calls
+        .iter()
+        .position(|c| c.contains("Start-ScheduledTask"))
+        .expect("must start");
+    assert!(reg < start, "{calls:?}");
+    assert!(stop.is_none_or(|s| s < reg), "{calls:?}");
+}
+
+/// The first install on a machine has no task to stop, so `Stop-ScheduledTask`
+/// fails — and must not fail the install. This is the Windows form of the bug
+/// that made `launchctl bootstrap` refuse every second macOS install.
+#[cfg(target_os = "windows")]
+#[test]
+fn a_first_install_survives_having_nothing_to_stop() {
+    let fs = Files::default();
+    let r = Recorder::failing("Stop-ScheduledTask");
+    install(&fs, &r, &agent(), &home(), 0).expect("a first install must not need a running task");
+}
+
+/// Registration failing must fail the install and name the step, rather than
+/// reporting an installed agent that Task Scheduler never accepted.
+#[cfg(target_os = "windows")]
+#[test]
+fn a_failed_registration_fails_the_install_and_names_itself() {
+    let fs = Files::default();
+    let r = Recorder::failing("Register-ScheduledTask");
+    let e = install(&fs, &r, &agent(), &home(), 0).expect_err("must fail");
+    let msg = format!("{e:#}");
+    assert!(msg.contains("Register-ScheduledTask"), "{msg}");
+    // The XML stays on disk: it is the evidence for why registration failed.
+    assert_eq!(fs.written.lock().expect("lock").len(), 1);
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn uninstall_unregisters_the_task_before_deleting_its_definition() {
+    let fs = Files::default();
+    let r = Recorder::new();
+    let path = uninstall(&fs, &r, &home(), 0).expect("uninstalls");
+    assert_eq!(
+        path,
+        home().join("AppData\\Local\\atlasctl\\atlasctl-agent.xml")
+    );
+    assert!(
+        r.calls()[0].contains("Unregister-ScheduledTask"),
+        "{:?}",
+        r.calls()
+    );
+    assert_eq!(*fs.removed.lock().expect("lock"), vec![path]);
+}
+
+/// Uninstalling twice, or after a half-finished install, is the ordinary case.
+#[cfg(target_os = "windows")]
+#[test]
+fn uninstalling_something_that_was_never_installed_succeeds() {
+    let fs = Files::default();
+    let r = Recorder::failing("Unregister-ScheduledTask");
+    uninstall(&fs, &r, &home(), 0).expect("must not fail");
+}
