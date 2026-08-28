@@ -17,6 +17,11 @@
 
 set -u
 
+# Every `.` in this file sources $WORK/lib.sh, which is generated at run time
+# from install.sh a few lines below — there is no path shellcheck could follow,
+# and saying so once beats a directive above each of the eight helpers.
+# shellcheck disable=SC1091
+
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -48,7 +53,6 @@ contains() { # name haystack needle
 # --- detect_target ------------------------------------------------------------
 # Runs in a subshell per case so the stubbed `uname` cannot leak.
 target_for() { # os arch
-    # shellcheck source=/dev/null  # generated above, from install.sh
     ( . "$WORK/lib.sh"
       # shellcheck disable=SC2317  # called indirectly, by detect_target
       uname() { if [ "$1" = "-s" ]; then echo "$OS"; else echo "$ARCH"; fi; }
@@ -69,12 +73,10 @@ contains "an unknown arch is refused by name"      "$(target_for Linux mips64)" 
 printf 'payload\n' > "$WORK/atlasctl-x86_64-unknown-linux-musl.tar.xz"
 good=$(sha256sum "$WORK/atlasctl-x86_64-unknown-linux-musl.tar.xz" | awk '{print $1}')
 
-# shellcheck source=/dev/null  # generated above, from install.sh
 # Captures the STATUS as well as the output. Asserting only on the message
 # means `die` could lose its `exit 1` and every case here would still pass —
 # while production printed "Refusing to install" and then installed.
 verify() { ( . "$WORK/lib.sh"; verify_checksum "$1" "$2" ) 2>&1; }
-# shellcheck source=/dev/null  # generated above, from install.sh
 verify_rc() { ( . "$WORK/lib.sh"; verify_checksum "$1" "$2" ) >/dev/null 2>&1; echo $?; }
 
 printf '%s  atlasctl-x86_64-unknown-linux-musl.tar.xz\n' "$good" > "$WORK/SUMS.good"
@@ -142,7 +144,6 @@ contains "a name that only matches as a regex is not accepted" \
 # with a gh older than 2.49 saw a security warning on a healthy install — which
 # is how an operator learns to scroll past the real one.
 attest() { # gh_state
-    # shellcheck source=/dev/null  # generated above, from install.sh
     ( . "$WORK/lib.sh"
       # shellcheck disable=SC2317  # called indirectly, by verify_attestation
       case "$1" in
@@ -222,7 +223,6 @@ EOF
 chmod +x "$WORK/fake-atlasctl"
 
 agent_run() { # same_version join running supervised
-    # shellcheck source=/dev/null  # generated above, from install.sh
     ( . "$WORK/lib.sh"
       # shellcheck disable=SC2317  # both stubs are called by install_agent
       if [ "$4" = yes ]; then service_installed() { return 0; }; else service_installed() { return 1; }; fi
