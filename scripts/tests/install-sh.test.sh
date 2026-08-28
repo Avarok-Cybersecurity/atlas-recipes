@@ -21,7 +21,19 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
+# Refuse rather than proceed if that line is not exactly what we expect. `sed`
+# silently strips nothing when the pattern misses — say the line gains a
+# trailing comment — and the first `. "$WORK/lib.sh"` below would then run the
+# REAL installer: a download from GitHub and an install into ~/.local/bin, on
+# whatever machine happens to be running the tests.
+grep -qxF 'main "$@"' "$ROOT/scripts/install.sh" || {
+    echo "install.sh no longer ends with a bare \`main \"\$@\"\`; this loader would"
+    echo "source it and RUN the installer. Update the loader before the tests."
+    exit 1
+}
 sed 's/^main "\$@"$//' "$ROOT/scripts/install.sh" > "$WORK/lib.sh"
+# Belt and braces: prove the line is gone from what we are about to source.
+grep -qxF 'main "$@"' "$WORK/lib.sh" && { echo "the entrypoint survived the strip"; exit 1; }
 
 pass=0; fail=0
 ok()   { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
@@ -171,6 +183,31 @@ case "$out" in *"could NOT be verified"*) bad "an unreachable GitHub must not wa
 contains "a capable gh that refuses IS a warning" "$(attest broken)" "could NOT be verified"
 contains "a capable gh that verifies says so"     "$(attest good)"   "provenance verified"
 
+# --- check_docker -------------------------------------------------------------
+# Three distinct states, each with a different next action. Reporting any two of
+# them the same way is how "install docker" gets said to someone who has it.
+docker_state() { # absent | stopped | nogpu | fine
+    ( . "$WORK/lib.sh"
+      # shellcheck disable=SC2317  # called indirectly, by check_docker
+      case "$1" in
+        absent)  command() { if [ "$2" = docker ]; then return 1; fi; return 0; } ;;
+        stopped) docker() { return 1; } ;;
+        nogpu)   docker() { echo "Server Version: 29.1.3"; return 0; } ;;
+        fine)    docker() { echo "Runtimes: nvidia runc"; return 0; } ;;
+      esac
+      # shellcheck disable=SC2317
+      uname() { echo Linux; }
+      check_docker ) 2>&1
+}
+
+contains "docker absent: says install, and what still works" \
+    "$(docker_state absent)" "docker was not found"
+out=$(docker_state stopped)
+contains "docker installed but stopped: says START, not install" "$out" "did not answer"
+case "$out" in *"was not found"*) bad "a stopped docker must not be called missing" "$out" ;; *) ok "a stopped docker must not be called missing" ;; esac
+contains "no nvidia runtime: named separately" "$(docker_state nogpu)" "NVIDIA container runtime"
+check "a healthy docker says nothing" "" "$(docker_state fine)"
+
 # --- install_agent ------------------------------------------------------------
 cat > "$WORK/fake-atlasctl" <<'EOF'
 #!/bin/sh
@@ -209,6 +246,46 @@ contains "answering the port without a service still installs one" \
 
 contains "a join runs even when everything is already up" \
     "$(agent_run yes '12345678@10.0.0.1' 1 yes)" "[fake] agent install ran"
+
+# --- install_agent, when the service install FAILS ----------------------------
+# The branch an operator only ever sees on a bad day, and the one that used to
+# tell them to run the command that had just failed. It must name the likeliest
+# cause instead, and the platform's real log.
+agent_fail() { # port_held: yes|no
+    ( . "$WORK/lib.sh"
+      # shellcheck disable=SC2317  # all called indirectly, by install_agent
+      service_installed() { return 1; }
+      # shellcheck disable=SC2317
+      uname() { echo Linux; }
+      if [ "$1" = yes ]; then
+        # shellcheck disable=SC2317
+        command() { case "$2" in lsof) return 0 ;; *) return 0 ;; esac; }
+        # shellcheck disable=SC2317
+        lsof() { return 0; }
+      else
+        # shellcheck disable=SC2317
+        command() { case "$2" in lsof) return 1 ;; *) return 0 ;; esac; }
+      fi
+      install_agent "$WORK/failing-atlasctl" "" "" "" ) 2>&1
+}
+cat > "$WORK/failing-atlasctl" <<'EOF'
+#!/bin/sh
+case "$1 $2" in "agent install") exit 1 ;; esac
+EOF
+chmod +x "$WORK/failing-atlasctl"
+
+out=$(agent_fail yes)
+contains "a held port is named as the likely cause" "$out" "ALREADY listening"
+# It must NOT then tell them to re-run the command that just failed — the dead
+# end the macOS report opened with.
+case "$out" in
+    *"to see why the service install failed"*) bad "must not suggest re-running the failure" "$out" ;;
+    *) ok "must not suggest re-running the failure" ;;
+esac
+
+out=$(agent_fail no)
+contains "no held port: offers the foreground command" "$out" "agent run"
+contains "and names the platform's real log"          "$out" "journalctl"
 
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
