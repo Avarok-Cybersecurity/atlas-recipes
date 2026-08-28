@@ -76,6 +76,33 @@ where
     anyhow::bail!("{}", why.join("; "))
 }
 
+/// Where to dial one peer: its address, and the port IT advertised.
+///
+/// Two rules, both of which were learned the hard way and neither of which
+/// had a test while they lived inside the poll loop:
+///
+/// 1. Parse the IP and attach the port structurally. Formatting
+///    `"{addr}:{port}"` and parsing that back needs an IPv6 literal in
+///    brackets, so it failed for EVERY IPv6 peer — and the caller's `continue`
+///    turned that into silence: the node stayed in the fleet, was never
+///    polled, and aged into "stale" forever with no error anywhere.
+/// 2. Prefer the port the PEER announced. `None` means it is not currently
+///    announcing, and only then does this agent's own port stand in. Using
+///    ours unconditionally was correct only while every agent bound the same
+///    one — the assumption that makes a per-machine port unaddable.
+///
+/// `None` when the address does not parse as an IP, which the caller skips.
+#[must_use]
+pub fn dial_socket(
+    addr: &str,
+    advertised: Option<u16>,
+    fallback: u16,
+) -> Option<std::net::SocketAddr> {
+    addr.parse::<std::net::IpAddr>()
+        .ok()
+        .map(|ip| std::net::SocketAddr::new(ip, advertised.unwrap_or(fallback)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::never_reached;
@@ -177,5 +204,35 @@ mod tests {
             panic!("nothing to dial must not dial")
         });
         assert!(out.is_err());
+    }
+
+    #[test]
+    fn the_port_the_peer_announced_wins_over_this_agents_own() {
+        let s = super::dial_socket("10.10.10.9", Some(34999), 34334).expect("parses");
+        assert_eq!(s.port(), 34999);
+    }
+
+    #[test]
+    fn a_peer_that_is_not_announcing_falls_back_rather_than_being_skipped() {
+        // `None` is "it did not say", not "port zero" and not "unreachable".
+        let s = super::dial_socket("10.10.10.9", None, 34334).expect("parses");
+        assert_eq!(s.port(), 34334);
+    }
+
+    /// The regression this shape exists for: `format!("{addr}:{port}")` then
+    /// parsing back needs brackets, so every IPv6 peer produced `None` and the
+    /// caller silently skipped it forever.
+    #[test]
+    fn an_ipv6_peer_is_dialable_at_all() {
+        let s = super::dial_socket("fe80::1", Some(34999), 34334).expect("a v6 peer parses");
+        assert!(s.is_ipv6());
+        assert_eq!(s.port(), 34999);
+    }
+
+    #[test]
+    fn a_hostname_is_not_an_address_here() {
+        // This path takes addresses off a beacon or a pin, never a name; a
+        // name would have to be resolved, which is `resolve_manual`'s job.
+        assert!(super::dial_socket("spark-256a", None, 34334).is_none());
     }
 }

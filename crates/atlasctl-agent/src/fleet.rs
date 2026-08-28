@@ -353,26 +353,6 @@ impl LocalFleet {
         }
     }
 
-    /// Peers this agent should try to reach, with the address to use.
-    ///
-    /// # Errors
-    /// If the pin store cannot be read.
-    pub fn dialable_peers(&self) -> Result<Vec<(NodeId, String)>> {
-        let pinned = self.pins.load()?;
-        let seen = self.lock_seen();
-        Ok(pinned
-            .iter()
-            .filter_map(|(id, pin)| {
-                let addr = seen
-                    .as_ref()
-                    .and_then(|s| s.get(id))
-                    .and_then(|s| s.beacon.addresses.first().map(ToString::to_string))
-                    .or_else(|| pin.last_address.clone())?;
-                Some((*id, addr))
-            })
-            .collect())
-    }
-
     /// How this machine classifies the link an address sits on.
     ///
     /// Asked of our own fabric probe, never of the peer: a peer's opinion of
@@ -496,4 +476,5 @@ pub use vitals::{
     running_probe_argv, vitals_from_device,
 };
 
+pub use listing::PeerDial;
 pub use pinning::{no_vitals, record_pairing, remember_address};

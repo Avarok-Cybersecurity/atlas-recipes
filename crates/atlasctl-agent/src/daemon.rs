@@ -353,19 +353,14 @@ fn spawn_peer_poll(
             let Ok(peers) = fleet.dialable_peers() else {
                 continue;
             };
-            for (id, addr) in peers {
-                // Parse the IP and attach the port, rather than formatting
-                // "{addr}:{port}" and parsing that. A SocketAddr string needs
-                // an IPv6 literal in brackets — `[fe80::1]:34334` — so the
-                // formatted form failed to parse for EVERY IPv6 peer, and the
-                // `continue` below turned that into silence: the node stayed in
-                // the fleet, was never polled, and simply aged into "stale"
-                // forever with no error anywhere.
-                let Some(sock) = addr
-                    .parse::<std::net::IpAddr>()
-                    .ok()
-                    .map(|ip| std::net::SocketAddr::new(ip, port))
-                else {
+            for (id, dial) in peers {
+                let addr = dial.addr;
+                // Both rules — structural IPv6 handling and "the peer's port
+                // first" — live in `peer::reach::dial_socket`, where they are
+                // tested. They were inline here, inside a spawned loop with no
+                // unit seam, so a mutation that dropped the advertised port
+                // broke nothing.
+                let Some(sock) = crate::peer::reach::dial_socket(&addr, dial.port, port) else {
                     continue;
                 };
                 let link = fleet.classify_peer_address(&addr);
