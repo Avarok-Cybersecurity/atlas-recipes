@@ -6,6 +6,7 @@ use crate::cli::{LogsArgs, StopArgs};
 use anyhow::{Result, bail};
 use atlasctl_core::docker::translate::LABEL_MANAGED;
 use atlasctl_core::io::{ProcessRunner, StdProcessRunner};
+use atlasctl_core::registry::RecipeRef;
 
 /// Container name for a recipe's solo launch.
 fn container_of(recipe: &str) -> String {
@@ -14,7 +15,26 @@ fn container_of(recipe: &str) -> String {
 
 /// Stop one recipe, or everything atlasctl started.
 pub fn stop(args: &StopArgs) -> Result<()> {
+    if let Some(recipe) = &args.recipe {
+        known_recipe(recipe)?;
+    }
     stop_with(&StdProcessRunner, args)
+}
+
+/// Refuse a name that is not a recipe at all.
+///
+/// Without this, "not running" answers a TYPO as readily as a real recipe, and
+/// since that is no longer a failure, `atlasctl stop $RECIPE` with a misspelt
+/// variable would report success having stopped nothing. Resolving through the
+/// registry also means a near miss gets the same "Did you mean ...?" list the
+/// rest of the CLI gives.
+///
+/// `--all` skips this: its targets come from docker's own list of containers we
+/// label, so they need no catalogue entry. That is also the way out if a recipe
+/// is running from a registry that has since been removed.
+fn known_recipe(name: &str) -> Result<()> {
+    crate::commands::registry_set()?.resolve(&RecipeRef::parse(name))?;
+    Ok(())
 }
 
 /// `stop`, with the process runner injected so the failure paths are testable.
@@ -77,6 +97,7 @@ fn stop_with(runner: &dyn ProcessRunner, args: &StopArgs) -> Result<()> {
 /// replaces ran `sleep infinity` as PID 1, so its `docker logs` showed nothing
 /// and it had to tail a file inside the container instead.
 pub fn logs(args: &LogsArgs) -> Result<()> {
+    known_recipe(&args.recipe)?;
     logs_with(&StdProcessRunner, args)
 }
 
