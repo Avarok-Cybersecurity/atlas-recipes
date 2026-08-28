@@ -244,3 +244,36 @@ mod absent_tests {
         assert!(argv.contains(&"logs".to_string()), "{argv:?}");
     }
 }
+
+mod daemon_down {
+    use super::super::*;
+    use atlasctl_core::io::RecordingRunner;
+    use atlasctl_core::io::process::Output;
+
+    /// An empty list because docker did not ANSWER is not an idle fleet.
+    /// `stop --all` against a stopped daemon printed "nothing running" and
+    /// exited 0 — the exact lie the collected-failure logic exists to prevent.
+    #[test]
+    fn stop_all_against_a_dead_daemon_is_not_an_idle_fleet() {
+        let r = RecordingRunner::new();
+        r.push_result(Output {
+            status: 1,
+            stdout: String::new(),
+            stderr: "Cannot connect to the Docker daemon at unix:///var/run/docker.sock".into(),
+        });
+        let e = stop_all_with(&r).expect_err("a daemon that never answered is not an empty fleet");
+        assert!(e.to_string().contains("docker ps"), "{e}");
+    }
+
+    /// A real empty answer still reads as empty.
+    #[test]
+    fn a_daemon_that_answers_with_nothing_is_an_idle_fleet() {
+        let r = RecordingRunner::new();
+        r.push_result(Output {
+            status: 0,
+            stdout: "\n".into(),
+            stderr: String::new(),
+        });
+        stop_all_with(&r).expect("an answered-but-empty listing is genuinely idle");
+    }
+}

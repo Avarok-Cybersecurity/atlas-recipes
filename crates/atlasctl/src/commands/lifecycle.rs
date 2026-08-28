@@ -21,8 +21,22 @@ pub fn stop(args: &StopArgs) -> Result<()> {
     let Some(typed) = &args.recipe else {
         bail!("name a recipe to stop, or pass --all");
     };
-    let resolved = known_recipe(typed)?;
-    stop_recipe_with(&StdProcessRunner, typed, &resolved)
+    match known_recipe(typed) {
+        Ok(resolved) => stop_recipe_with(&StdProcessRunner, typed, &resolved),
+        // The catalogue could not answer — an ambiguous bare name, a recipe
+        // whose YAML no longer parses, an unreadable registries.yaml. None of
+        // that should strand a container this fleet is running: the label was
+        // written at launch and does not depend on the catalogue still being
+        // readable. Only when nothing is running under that name does the
+        // resolve error stand, so a TYPO still gets its "Did you mean ...?".
+        Err(unresolved) => {
+            let found = containers_for_recipe(&StdProcessRunner, typed)?;
+            if found.is_empty() {
+                return Err(unresolved);
+            }
+            stop_each(&StdProcessRunner, found)
+        }
+    }
 }
 
 /// Refuse a name that is not a recipe at all.
@@ -246,6 +260,13 @@ fn managed_containers(runner: &dyn ProcessRunner) -> Result<Vec<String>> {
         "--format".into(),
         "{{.Names}}".into(),
     ])?;
+    // An empty list because docker did not ANSWER is not an idle fleet. Without
+    // this, `stop --all` against a stopped daemon printed "nothing running" and
+    // exited 0 — the exact lie the collected-failures logic above exists to
+    // prevent. `status()` ten lines down has always checked this.
+    if !out.success() {
+        bail!("`docker ps` failed: {}", out.stderr.trim());
+    }
     Ok(out
         .stdout
         .lines()
