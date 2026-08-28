@@ -371,6 +371,10 @@ impl RankService for LocalRankService {
     }
 
     fn alive(&self, container: &str) -> Result<bool> {
+        // Not ours to ask about. See `is_ours`.
+        if !is_ours(container) {
+            return Ok(false);
+        }
         let out = self
             .runner
             .run(&[
@@ -391,6 +395,18 @@ impl RankService for LocalRankService {
     }
 
     fn stop(&self, container: &str) -> Result<()> {
+        // The name arrives from whichever node is acting as head, and this
+        // runs `docker rm -f` on it. Unbounded, that is a peer with the
+        // `controller` grant force-removing ANY container on this machine —
+        // well past "drive its own launch, one hop". The browser's own stop
+        // has always been scoped to `atlas-{recipe}`; this path had no
+        // equivalent.
+        if !is_ours(container) {
+            anyhow::bail!(
+                "refusing to stop `{container}`: a rank may only stop a \
+                 container this fleet launched, and that name is not one"
+            );
+        }
         let out = self
             .runner
             .run(&[
@@ -417,6 +433,25 @@ impl RankService for LocalRankService {
             *slot = None;
         }
     }
+}
+
+/// Whether a container name is one this fleet could have created.
+///
+/// `translate::container_name` only ever produces `atlas-{recipe}` or
+/// `atlas-{recipe}-rank{n}`, and `recipe` is a `RecipeId` — lowercase
+/// alphanumerics, `.` and `-`. Anything outside that shape was not launched by
+/// us, so a request to stop it is not a request we can honour.
+///
+/// A prefix test alone would already stop the escalation; matching the shape
+/// costs nothing more and keeps the rule readable next to the thing it mirrors.
+pub(crate) fn is_ours(container: &str) -> bool {
+    let Some(rest) = container.strip_prefix("atlas-") else {
+        return false;
+    };
+    !rest.is_empty()
+        && rest
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-')
 }
 
 #[cfg(test)]

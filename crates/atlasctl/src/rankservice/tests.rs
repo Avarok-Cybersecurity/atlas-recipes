@@ -460,3 +460,37 @@ mod collective_binding {
         assert!(!cmd.contains("NCCL_IB_HCA"), "{cmd}");
     }
 }
+
+/// `stop` runs `docker rm -f` on a name that arrives from whichever node is
+/// acting as head. Unbounded, that is a peer holding the `controller` grant
+/// force-removing ANY container on this machine — well past "drive its own
+/// launch, one hop". The browser's own stop has always been scoped to
+/// `atlas-{recipe}`; this path had no equivalent.
+#[test]
+fn a_rank_may_only_stop_a_container_this_fleet_launched() {
+    use crate::rankservice::is_ours;
+    for foreign in [
+        "postgres",
+        "someone-elses-db",
+        "ATLAS-shouty",
+        "atlas-",
+        "atlas-../evil",
+        "",
+    ] {
+        assert!(!is_ours(foreign), "{foreign:?} was not launched by us");
+    }
+}
+
+/// And the names this fleet really produces must still be stoppable, or a
+/// cluster launch could never be torn down.
+#[test]
+fn the_names_translate_actually_produces_are_still_ours() {
+    use crate::rankservice::is_ours;
+    for mine in [
+        "atlas-qwen3.6-27b-nvfp4-unsloth",
+        "atlas-qwen3.6-35b-a3b-fp8-bf16head-rank0",
+        "atlas-qwen3.6-35b-a3b-fp8-bf16head-rank11",
+    ] {
+        assert!(is_ours(mine), "{mine:?} is a name translate produces");
+    }
+}
