@@ -7,6 +7,7 @@
 pub mod chain;
 pub mod docker;
 pub mod flags;
+pub mod hfcache;
 pub mod host;
 pub mod io;
 pub mod metrics;
