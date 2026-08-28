@@ -76,7 +76,15 @@ const PENDING_PAIRING_TTL: std::time::Duration = std::time::Duration::from_secs(
 /// An exchange that completed and is waiting to be accepted or refused.
 struct PendingPairing {
     outcome: crate::fleet::PairOutcome,
-    at: std::time::Instant,
+    /// When this exchange stops being confirmable.
+    ///
+    /// The DEADLINE, not the start. Storing the start and comparing
+    /// `at.elapsed() > TTL` is the same predicate, but it can only be tested by
+    /// constructing an `Instant` a full TTL in the past — which does not exist
+    /// on a machine that booted more recently than that. Every CI runner is
+    /// such a machine, so the expiry test passed only where it happened to be
+    /// run on a long-lived host.
+    expires_at: std::time::Instant,
 }
 
 pub struct Session<'a> {

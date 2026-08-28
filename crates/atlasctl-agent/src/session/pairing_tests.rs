@@ -344,9 +344,10 @@ fn an_exchange_older_than_the_ttl_cannot_be_confirmed() {
         .pending_pairing
         .as_mut()
         .expect("the exchange should be pending");
-    pending.at = std::time::Instant::now()
-        .checked_sub(super::PENDING_PAIRING_TTL + std::time::Duration::from_secs(1))
-        .expect("clock underflow");
+    // Bringing the deadline forward, rather than pushing the start back: an
+    // `Instant` a full TTL in the past does not exist on a machine that booted
+    // more recently than that, which is every CI runner.
+    pending.expires_at = std::time::Instant::now();
 
     let out = s.handle(ClientMsg::ConfirmPairing {
         id: 2,

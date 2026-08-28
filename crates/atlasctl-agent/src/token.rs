@@ -31,14 +31,14 @@ fn hex(bytes: &[u8]) -> String {
 
 /// Generate a fresh token from the operating system's CSPRNG.
 ///
-/// Reads `/dev/urandom` directly rather than taking a dependency: this is the
-/// one place randomness matters, and the kernel interface is stable.
+/// Through `getrandom`, like the other three places this codebase draws
+/// entropy — including the identity key seed, which matters more than this
+/// does. Reading `/dev/urandom` by hand was the odd one out, and it failed on
+/// Windows with `The system cannot find the path specified`, which is to say
+/// no browser token could ever be minted there.
 pub fn generate() -> Result<String> {
     let mut buf = [0u8; TOKEN_BYTES];
-    let mut f = std::fs::File::open("/dev/urandom").context("opening the system CSPRNG")?;
-    use std::io::Read;
-    f.read_exact(&mut buf)
-        .context("reading from the system CSPRNG")?;
+    getrandom::fill(&mut buf).context("reading from the system CSPRNG")?;
     Ok(hex(&buf))
 }
 
