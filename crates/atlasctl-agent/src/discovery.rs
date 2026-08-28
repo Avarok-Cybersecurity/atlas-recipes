@@ -216,11 +216,30 @@ pub fn local_os() -> String {
 
 /// Resolve a `host` or `host:port` the user typed into addresses to try.
 ///
+/// "Does it already carry a port" cannot be answered by looking for a colon:
+/// an IPv6 literal is nothing but colons. `fe80::1` was read as host `fe80`
+/// with a port of `:1`, so it never resolved — and this is reached from the
+/// manual address box and from a hand-typed `peer add`, which is precisely
+/// where someone would enter one.
+///
 /// # Errors
 /// If the name does not resolve.
 pub fn resolve_manual(target: &str, default_port: u16) -> Result<Vec<std::net::SocketAddr>> {
     use std::net::ToSocketAddrs;
-    let with_port = if target.contains(':') {
+    let target = target.trim();
+    let with_port = if let Some(close) = target.strip_prefix('[').and_then(|_| target.rfind(']')) {
+        // Bracketed: a port follows the `]` or there is none.
+        if target[close + 1..].starts_with(':') {
+            target.to_owned()
+        } else {
+            format!("{target}:{default_port}")
+        }
+    } else if target.parse::<std::net::Ipv6Addr>().is_ok() {
+        // A bare IPv6 literal carries no port and must be bracketed to take
+        // one — `fe80::1:34334` is ambiguous, and the ambiguity resolves the
+        // wrong way.
+        format!("[{target}]:{default_port}")
+    } else if target.contains(':') {
         target.to_owned()
     } else {
         format!("{target}:{default_port}")
