@@ -1,7 +1,7 @@
 {
-  ".": "0.4.0",
-  "crates/atlasctl": "0.1.6",
-  "crates/atlasctl-agent": "0.1.6",
-  "crates/atlasctl-core": "0.1.6",
-  "crates/atlasctl-protocol": "0.4.0"
+  ".": "0.4.1",
+  "crates/atlasctl": "0.1.7",
+  "crates/atlasctl-agent": "0.1.7",
+  "crates/atlasctl-core": "0.1.7",
+  "crates/atlasctl-protocol": "0.4.1"
 }
