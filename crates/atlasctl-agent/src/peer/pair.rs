@@ -142,7 +142,7 @@ where
         PeerFrame::PairStart { message } | PeerFrame::PairAnswer { message } => {
             hex::decode(&message).context("peer sent a malformed pairing message")?
         }
-        PeerFrame::PairRefused { reason } => bail!("the other node refused: {reason}"),
+        PeerFrame::PairRefused { reason } => bail!("{}", refusal_message(&reason)),
         other => bail!("expected a pairing message, got {other:?}"),
     };
 
@@ -168,7 +168,7 @@ where
     };
     let their_mac = match their_frame {
         PeerFrame::PairConfirm { mac } => hex::decode(&mac).unwrap_or_default(),
-        PeerFrame::PairRefused { reason } => bail!("the other node refused: {reason}"),
+        PeerFrame::PairRefused { reason } => bail!("{}", refusal_message(&reason)),
         other => bail!("expected key confirmation, got {other:?}"),
     };
 
@@ -202,7 +202,7 @@ where
     };
     let public_key = match peer_accept {
         PeerFrame::PairAccepted { public_key } => public_key,
-        PeerFrame::PairRefused { reason } => bail!("the other node refused: {reason}"),
+        PeerFrame::PairRefused { reason } => bail!("{}", refusal_message(&reason)),
         other => bail!("expected an acceptance, got {other:?}"),
     };
 
@@ -218,4 +218,18 @@ where
         name: peer_name,
         verification: confirmation.verification_words(),
     })
+}
+
+/// What the operator reads when the other node says no.
+///
+/// `reason` is the far node's prose and lands in a terminal through the anyhow
+/// chain, so it is sanitised: an ANSI escape here repaints the lines around
+/// the failure, and a failure that can redraw itself as something else is
+/// worse than one that just says no. `logs::sanitize` already strips CSI, OSC,
+/// controls and bidi for exactly this reason.
+///
+/// Separate from the three `bail!` sites so the rule has one owner and a test
+/// can prove it rather than proving `sanitize` in isolation.
+pub(super) fn refusal_message(reason: &str) -> String {
+    format!("the other node refused: {}", crate::logs::sanitize(reason))
 }

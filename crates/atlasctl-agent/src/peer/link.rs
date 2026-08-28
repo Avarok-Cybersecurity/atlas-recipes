@@ -314,10 +314,19 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let hello = read_frame(stream).await?;
-    anyhow::ensure!(
-        matches!(hello, PeerFrame::Hello { .. }),
-        "a peer must introduce itself first, got {hello:?}"
-    );
+    // Both halves of the exact-match rule, on both sides. The outbound
+    // `exchange_hello` has always checked the version; this side only checked
+    // that the frame WAS a hello, so the invariant "exact match on the peer
+    // channel" held in one direction. Not exploitable — the caller is already
+    // through the pinned-SPKI TLS gate — but an invariant that is true only
+    // outbound is one nobody can rely on when the version next moves.
+    match &hello {
+        PeerFrame::Hello { version, .. } => anyhow::ensure!(
+            *version == PEER_PROTOCOL_VERSION,
+            "this node speaks peer protocol {PEER_PROTOCOL_VERSION}, the caller speaks {version}"
+        ),
+        other => anyhow::bail!("a peer must introduce itself first, got {other:?}"),
+    }
 
     write_frame(
         stream,

@@ -160,3 +160,21 @@ fn a_peer_cannot_ask_to_be_pinned_under_a_key_it_does_not_hold() {
             .expect_err("a substituted key must be refused");
     assert!(err.to_string().contains("does not match"));
 }
+
+/// The refusal reason is the other node's prose and reaches an operator's
+/// terminal through the anyhow chain. An escape there repaints the lines
+/// around the failure — and a failure that can redraw itself as something
+/// else is worse than one that just says no.
+#[test]
+fn a_refusal_reason_cannot_carry_a_terminal_escape() {
+    let hostile = "\u{1b}[2K\u{1b}[1Aall good, trust me\u{1b}[0m";
+    // The message the operator actually reads, not `sanitize` in isolation:
+    // a test of the helper would stay green if the call site dropped it.
+    let shown = super::pair::refusal_message(hostile);
+    assert!(
+        !shown.contains('\u{1b}'),
+        "an escape survived into the refusal: {shown:?}"
+    );
+    // Not redaction: the operator still reads what the peer said.
+    assert!(shown.contains("all good, trust me"));
+}
