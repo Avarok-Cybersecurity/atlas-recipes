@@ -132,10 +132,7 @@ fn the_portable_rendering_keeps_host_specifics_symbolic() {
         "uid must stay symbolic"
     );
     assert!(
-        portable.contains(&format!(
-            "{}/.cache/huggingface",
-            crate::platform::home_placeholder()
-        )),
+        portable.contains("$HOME/.cache/huggingface"),
         "home must stay symbolic"
     );
     assert!(
