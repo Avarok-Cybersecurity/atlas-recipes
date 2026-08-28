@@ -44,6 +44,50 @@ impl Finding {
     }
 }
 
+/// Is there room to pull an image and a model?
+///
+/// A launch pulls the runtime image and, when the weights are not already
+/// cached, the model itself. Measured on a GB10 box: `avarok/atlas-gb10` is
+/// 2.85 GB and the smallest model in the shipped catalogue is 21.8 GB, so
+/// below their sum a launch cannot succeed. What the operator sees instead is
+/// a docker pull error, or a download that stops partway and leaves a cache
+/// entry that looks present — neither of which mentions the disk.
+///
+/// An absolute floor, deliberately not a percentage. 5% of a 3.7 TB array is
+/// 185 GB, which would call a box with 172 GB free — comfortably enough for
+/// any launch here — a problem.
+pub fn disk_space(free_bytes: u64, path: &str) -> Finding {
+    const FLOOR: u64 = 25 * 1024 * 1024 * 1024;
+    let gb = free_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+    if free_bytes >= FLOOR {
+        return Finding::ok("disk", &format!("{gb:.0} GB free on {path}"));
+    }
+    Finding::bad(
+        "disk",
+        &format!(
+            "only {gb:.1} GB free on {path}. The runtime image is ~3 GB and the \
+             smallest model in the catalogue is ~22 GB, so a launch that has to \
+             pull either will fail — usually with a message about docker or a \
+             truncated download, not about space."
+        ),
+        &[
+            "atlasctl status            # stop anything you are not using",
+            "docker image prune -a      # reclaim images no container needs",
+            "du -sh ~/.cache/huggingface/hub/models--*   # then delete a model you can re-pull",
+        ],
+    )
+}
+
+/// When `df` could not be read at all.
+///
+/// Reported as ok, not as a problem. An unreadable `df` says nothing about
+/// whether there is room, and `doctor` exits non-zero on a problem — so
+/// guessing here would fail a perfectly healthy machine.
+#[must_use]
+pub fn disk_unknown() -> Finding {
+    Finding::ok("disk", "not measurable here")
+}
+
 /// Can this machine keep its identity and pins?
 ///
 /// The failure this catches: the config directory exists but is not writable by
@@ -220,5 +264,52 @@ mod tests {
         assert!(!f.problem);
         assert!(f.line.contains("10.10.10.9"), "{}", f.line);
         assert!(f.line.contains("1 more"), "{}", f.line);
+    }
+}
+
+#[cfg(test)]
+mod disk_tests {
+    use super::*;
+    const GB: u64 = 1024 * 1024 * 1024;
+
+    #[test]
+    fn a_box_with_room_for_an_image_and_a_model_is_fine() {
+        for free in [25 * GB, 172 * GB, 4000 * GB] {
+            let f = disk_space(free, "/");
+            assert!(!f.problem, "{} GB should be fine: {}", free / GB, f.line);
+        }
+    }
+
+    /// The floor is where it is because of measured sizes, not a round number:
+    /// a 2.85 GB image plus a 21.8 GB model is 24.65 GB.
+    #[test]
+    fn below_an_image_plus_the_smallest_model_is_a_problem() {
+        for free in [0, GB, 24 * GB] {
+            let f = disk_space(free, "/");
+            assert!(
+                f.problem,
+                "{} GB should be a problem: {}",
+                free / GB,
+                f.line
+            );
+        }
+    }
+
+    #[test]
+    fn the_message_says_what_to_do_and_names_the_path() {
+        let f = disk_space(2 * GB, "/mnt/data");
+        assert!(f.line.contains("/mnt/data"), "{}", f.line);
+        assert!(f.line.contains("2.0 GB"), "the actual figure: {}", f.line);
+        assert!(
+            f.line.contains("docker image prune"),
+            "a remedy: {}",
+            f.line
+        );
+    }
+
+    /// A percentage rule would call this box — 172 GB free, ample — a problem.
+    #[test]
+    fn a_large_but_full_looking_array_is_judged_on_free_space_not_percent() {
+        assert!(!disk_space(172 * GB, "/").problem);
     }
 }
