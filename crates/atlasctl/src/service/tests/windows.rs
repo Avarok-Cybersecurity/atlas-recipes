@@ -94,6 +94,14 @@ fn a_windows_verify_asks_whether_it_is_running_not_whether_it_exists() {
     let v = p.verify.join(" ");
     assert!(v.contains("-eq 'Running'"), "{v}");
     assert!(v.contains("exit 1"), "must fail when it is not: {v}");
+    // And it must WAIT. `Start-ScheduledTask` returns when the scheduler has
+    // accepted the request, not when the process is up, so a single read told
+    // an operator their freshly upgraded agent was down — observed on CI, on
+    // the reinstall, which is the path this whole branch exists to fix.
+    assert!(
+        v.contains("Start-Sleep") && v.contains("while"),
+        "a one-shot read races the scheduler: {v}"
+    );
 }
 
 /// `CommandLineToArgvW` treats a backslash as literal EXCEPT before a quote.

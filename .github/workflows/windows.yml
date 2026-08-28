@@ -86,9 +86,27 @@ jobs:
           Write-Host "the agent is listening"
 
           # Installing twice is the reported failure on macOS and the reason
-          # pre_activate exists. It must be an upgrade, not an error.
-          & $exe agent install --no-discovery
+          # pre_activate exists. It must be an upgrade, not an error -- and
+          # `agent install` returns 0 for "installed but not running" ON
+          # PURPOSE, so an exit-code check alone passes while the operator is
+          # told their agent is down. It was: the first run of this step
+          # printed "agent installed, but it is NOT running" and went green.
+          # The outcome, not the exit code, is what has to hold.
+          $out = & $exe agent install --no-discovery 2>&1 | Out-String
+          Write-Host $out
           if ($LASTEXITCODE -ne 0) { throw "re-install must upgrade in place, not fail" }
+          if ($out -match 'NOT running') {
+            throw "an upgrade reported the agent as down: $out"
+          }
+          $back = $false
+          foreach ($i in 1..30) {
+            if (Get-NetTCPConnection -LocalPort 34333 -State Listen -ErrorAction SilentlyContinue) {
+              $back = $true; break
+            }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $back) { throw "the agent did not come back after an upgrade" }
+          Write-Host "the upgrade left a listening agent behind"
 
           & $exe agent uninstall
           if ($LASTEXITCODE -ne 0) { throw "agent uninstall failed" }
