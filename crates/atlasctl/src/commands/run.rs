@@ -64,10 +64,15 @@ pub fn run(args: &RunArgs) -> Result<()> {
         } else {
             nearest::did_you_mean(&nearest::nearest(&u.key, atlasctl_core::flags::keys()))
         };
+        let shown = if setting_shaped(&u.rendered) {
+            u.rendered.as_str()
+        } else {
+            "withheld"
+        };
         eprintln!(
             "warning: `{}` is not a setting this version understands; \
-             it will NOT be applied (value: {}){hint}",
-            u.key, u.rendered
+             it will NOT be applied (value: {shown}){hint}",
+            u.key
         );
     }
     if !plan.unknown_keys.is_empty() {
@@ -178,6 +183,38 @@ pub fn run(args: &RunArgs) -> Result<()> {
     Ok(())
 }
 
+/// Whether a dropped value is safe to name in the warning.
+///
+/// Naming it is the useful half for `-o max_seq_lenn=8192` and the wrong half
+/// for `-o hf_tokn=<credential>`: mistyping the KEY does not stop the value
+/// being a secret, and a warning goes to stderr — into CI logs and into the
+/// output people paste into bug reports. The agent already answers this way,
+/// reporting `unapplied` as keys only (`launcher/docker.rs`).
+///
+/// Matched on the VALUE, not the key. The first attempt here matched the key
+/// against "token", "secret" and friends, and failed on the exact case that
+/// motivated it: `hf_tokn` does not contain "token", because a typo is what
+/// put it in this warning in the first place.
+///
+/// So the test is inverted — a value is shown only when it looks like a
+/// SETTING: a number, a bool, or a short lowercase word of the shape every
+/// enum and dtype in the table uses. Anything else is withheld. That errs
+/// toward saying less about a value nobody asked us to keep.
+///
+/// It does not catch everything, and should not claim to: a short all-lowercase
+/// password is indistinguishable from a dtype name by shape alone. What it does
+/// catch is the shape credentials actually have — long, or mixed case, or
+/// carrying characters no setting in the table uses. The remaining case is one
+/// the operator has already put in their own shell history.
+fn setting_shaped(value: &str) -> bool {
+    if value.len() > 16 || value.is_empty() {
+        return false;
+    }
+    value
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
+}
+
 /// Cautions for the values this launch will actually use.
 ///
 /// Read from the RENDERED command, not from the recipe or the overrides. That
@@ -201,4 +238,66 @@ fn cautions(argv: &[String]) -> Vec<String> {
             atlasctl_core::settings::caution(&key, value, &accelerator)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod value_shape_tests {
+    use super::setting_shaped;
+
+    /// Every value a real setting can take must survive, or the warning stops
+    /// being useful for the case it exists for.
+    #[test]
+    fn the_values_settings_actually_take_are_named() {
+        for v in [
+            "8192",
+            "16",
+            "0.85",
+            "true",
+            "false",
+            "auto",
+            "bf16",
+            "fp8",
+            "slai",
+            "fifo",
+            "nvfp4",
+            "1",
+            "0",
+            "262144",
+            "e4m3",
+            "flashinfer",
+        ] {
+            assert!(setting_shaped(v), "{v} is an ordinary setting value");
+        }
+    }
+
+    /// The shapes credentials actually have.
+    #[test]
+    fn credential_shaped_values_are_withheld() {
+        for v in [
+            "hf_SECRETVALUE123",
+            "sk-abc123XYZdef456",
+            "ghp_AbCdEf0123456789",
+            "AKIAIOSFODNN7EXAMPLE",
+            "eyJhbGciOiJIUzI1NiJ9",
+            "a-very-long-value-that-goes-on",
+        ] {
+            assert!(!setting_shaped(v), "{v} must not be echoed");
+        }
+    }
+
+    #[test]
+    fn the_boundaries_are_where_they_are_stated() {
+        assert!(
+            setting_shaped(&"a".repeat(16)),
+            "16 is the limit, inclusive"
+        );
+        assert!(!setting_shaped(&"a".repeat(17)), "17 is over it");
+        assert!(!setting_shaped(""), "nothing to name");
+        assert!(
+            !setting_shaped("HasUpper"),
+            "uppercase is not a setting shape"
+        );
+        assert!(!setting_shaped("has space"), "nor whitespace");
+        assert!(!setting_shaped("semi;colon"), "nor punctuation outside ._-");
+    }
 }
