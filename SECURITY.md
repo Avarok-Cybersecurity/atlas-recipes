@@ -25,6 +25,14 @@ no trust gate at all.
 sparkrun's config file does not fix the redirect: it is compiled into the tool
 and reapplied on the next run. Removing the tool is the fix.
 
+`doctor` exits **0** when it finds nothing and **1** when it finds something, so
+this check can be gated on rather than read by eye — in a cron job, a
+provisioning script, or CI:
+
+```sh
+atlasctl doctor || echo "this machine needs attention before it runs anything"
+```
+
 ## What `atlasctl` does differently
 
 - **Recipes are compiled in.** There is no fetch step to redirect. A fresh
