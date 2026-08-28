@@ -153,7 +153,12 @@ fn join_fleet(join: &crate::joinarg::Join, grant_control: bool) -> Result<()> {
         grant_control,
     )?;
 
-    println!("joined {} ({})", paired.name, paired.node.short());
+    // Sanitised: the name is the peer's, and the peer is not trusted yet.
+    println!(
+        "joined {} ({})",
+        atlasctl_protocol::fleet::DisplayName::new(&paired.name).as_str(),
+        paired.node.short()
+    );
     println!("  verification words: {}", paired.verification);
     println!("  the browser that invited this machine is showing the same words.");
     println!(

@@ -271,3 +271,29 @@ fn a_vouch_entry_round_trips_and_absent_vitals_carry_no_age() {
     let back: VouchedPeer = serde_json::from_str(&json).expect("round trips");
     assert_eq!(back, v);
 }
+
+/// The name in a peer's hello frame is attacker-controlled and is printed to a
+/// terminal DURING the pairing ceremony — between the verification words and
+/// the y/N prompt. An ANSI escape there can erase and repaint the words the
+/// operator is about to compare, which defeats the out-of-band check the whole
+/// SPAKE2 exchange exists to enable.
+#[test]
+fn an_ansi_escape_cannot_survive_into_a_rendered_name() {
+    let hostile = "\u{1b}[2K\u{1b}[1Aabcd-1234 \u{1b}[0m";
+    let shown = DisplayName::new(hostile);
+    assert!(
+        !shown.as_str().contains('\u{1b}'),
+        "an escape reached the terminal: {:?}",
+        shown.as_str()
+    );
+    // The printable remainder survives, so a legitimate name is not destroyed
+    // by the guard — this strips control characters, it does not redact.
+    assert!(shown.as_str().contains("abcd-1234"));
+}
+
+/// A carriage return alone is enough: it returns the cursor to column 0 and
+/// the next characters overwrite the line already drawn.
+#[test]
+fn a_bare_carriage_return_cannot_repaint_the_line() {
+    assert!(!DisplayName::new("ok\rSPOOFED").as_str().contains('\r'));
+}

@@ -329,7 +329,10 @@ async fn serve_join<S>(
         // someone who wants to check, check.
         eprintln!(
             "paired with {} ({}) — verification words: {}",
-            paired.name,
+            // Sanitised: the name is the joining peer's own claim, and this
+            // line goes into the journal, where a control sequence is just as
+            // effective at rewriting what a reader sees.
+            atlasctl_protocol::fleet::DisplayName::new(&paired.name).as_str(),
             paired.node.short(),
             paired.verification
         );

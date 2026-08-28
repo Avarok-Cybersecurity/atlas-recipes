@@ -141,10 +141,15 @@ pub fn pair(args: &crate::cli::AgentPairArgs) -> Result<()> {
     // like a box that is switched off. The remedies are unrelated, so say
     // which situation this could be while the operator is still standing at
     // the keyboard.
-    println!("Paired with {} ({}).", paired.name, paired.node.short());
+    // Sanitised: the name is the peer's, and the peer is not trusted yet.
+    println!(
+        "Paired with {} ({}).",
+        atlasctl_protocol::fleet::DisplayName::new(&paired.name).as_str(),
+        paired.node.short()
+    );
     println!(
         "  {} has to have accepted too. If it said \"Nothing was trusted\",",
-        paired.name
+        atlasctl_protocol::fleet::DisplayName::new(&paired.name).as_str()
     );
     println!("  pair again — otherwise it will look unreachable from here.");
     Ok(())
