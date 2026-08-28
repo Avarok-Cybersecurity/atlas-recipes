@@ -10,8 +10,16 @@ runs the `docker run` it implies.
 
 ## Install
 
+Linux and macOS:
+
 ```sh
 curl -fsSL https://atlasinference.io/install.sh | sh
+```
+
+Windows, in PowerShell:
+
+```powershell
+irm https://atlasinference.io/install.ps1 | iex
 ```
 
 Or, if you already have the toolchains:
@@ -22,8 +30,18 @@ uvx pyatlasctl list            # from PyPI, no install step
 ```
 
 The installer downloads a prebuilt binary, verifies its SHA-256 against the
-release, and puts it in `~/.local/bin`. It needs no Python and no Rust
-toolchain. `sh scripts/install.sh --uninstall` reverses it.
+release, and puts it in `~/.local/bin` (`%LOCALAPPDATA%\Programs\atlasctl` on
+Windows). It needs no Python and no Rust toolchain. Running it again on a
+machine that already has atlasctl is an upgrade, or — when the version is
+already current — a way to start an agent that is installed but stopped.
+`sh scripts/install.sh --uninstall` reverses it; on Windows,
+`atlasctl agent uninstall` removes the task and the binary can be deleted from
+the install directory above.
+
+The background agent is a `systemd --user` service on Linux, a launchd
+LaunchAgent on macOS, and a Task Scheduler task at logon on Windows — a task
+rather than a service because a service runs in session 0, which cannot reach
+Docker Desktop's per-user named pipe.
 
 ## Use
 

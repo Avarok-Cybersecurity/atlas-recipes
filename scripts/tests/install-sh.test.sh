@@ -79,6 +79,39 @@ printf '%s  atlasctl-x86_64-unknown-linux-muslXtarXxz\n' "$good" > "$WORK/SUMS.r
 contains "a name that only matches as a regex is not accepted" \
     "$(verify "$WORK/atlasctl-x86_64-unknown-linux-musl.tar.xz" "$WORK/SUMS.regex")" "no checksum for"
 
+# --- verify_attestation -------------------------------------------------------
+# "Cannot check" and "checked, and it does not verify" are different facts, and
+# only the second is alarming. Reporting them identically meant every machine
+# with a gh older than 2.49 saw a security warning on a healthy install — which
+# is how an operator learns to scroll past the real one.
+attest() { # gh_state
+    # shellcheck source=/dev/null  # generated above, from install.sh
+    ( . "$WORK/lib.sh"
+      # shellcheck disable=SC2317  # called indirectly, by verify_attestation
+      case "$1" in
+        absent)   command() { if [ "$2" = gh ]; then return 1; fi; /usr/bin/env command "$@"; } ;;
+        old)      gh() { case "$1" in attestation) return 1 ;; *) return 0 ;; esac; } ;;
+        # capable (attestation --help works) but not signed in
+        loggedout) gh() { case "$1" in attestation) [ "$2" = --help ] ;; auth) return 1 ;; *) return 1 ;; esac; } ;;
+        # capable, signed in, and the verification itself says no
+        broken)   gh() { case "$1" in attestation) [ "$2" = --help ] ;; auth) return 0 ;; *) return 1 ;; esac; } ;;
+        good)     gh() { return 0; } ;;
+      esac
+      verify_attestation "$WORK/atlasctl-x86_64-unknown-linux-musl.tar.xz" ) 2>&1
+}
+
+contains "no gh at all: an invitation, not a warning" "$(attest absent)" "install \`gh\`"
+out=$(attest old)
+contains "gh too old: says so, and names the version" "$out" "too old"
+case "$out" in *"could NOT be verified"*) bad "gh too old must not warn" "$out" ;; *) ok "gh too old must not warn" ;; esac
+
+out=$(attest loggedout)
+contains "gh signed out: says so" "$out" "not signed in"
+case "$out" in *"could NOT be verified"*) bad "gh signed out must not warn" "$out" ;; *) ok "gh signed out must not warn" ;; esac
+
+contains "a capable gh that refuses IS a warning" "$(attest broken)" "could NOT be verified"
+contains "a capable gh that verifies says so"     "$(attest good)"   "provenance verified"
+
 # --- install_agent ------------------------------------------------------------
 cat > "$WORK/fake-atlasctl" <<'EOF'
 #!/bin/sh

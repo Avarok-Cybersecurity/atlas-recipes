@@ -90,15 +90,34 @@ verify_checksum() {
 # the one-liner depend on GitHub's CLI would defeat the point of a one-liner.
 verify_attestation() {
     archive="$1"
-    if command -v gh >/dev/null 2>&1; then
-        if gh attestation verify "$archive" --repo "$REPO" >/dev/null 2>&1; then
-            info "build provenance verified"
-        else
-            warn "build provenance could NOT be verified for $(basename "$archive")."
-            warn "If you did not expect that, stop and check the release page."
-        fi
-    else
+    if ! command -v gh >/dev/null 2>&1; then
         info "install \`gh\` to also verify build provenance: gh attestation verify <file> --repo $REPO"
+        return
+    fi
+    # "Cannot check" and "checked, and it does not verify" are different facts
+    # and only the second is alarming. They were reported identically, so every
+    # machine with a gh older than 2.49 — which has no `attestation` subcommand
+    # at all — saw "build provenance could NOT be verified. If you did not
+    # expect that, stop and check the release page." on a perfectly good
+    # install. A security warning that fires on the healthy case is worse than
+    # none: it teaches the operator to scroll past the real one.
+    if ! gh attestation --help >/dev/null 2>&1; then
+        info "this \`gh\` is too old to check build provenance (needs 2.49+)."
+        info "The checksum above was verified; provenance is the extra step."
+        return
+    fi
+    if ! gh auth status >/dev/null 2>&1; then
+        info "\`gh\` is not signed in, so build provenance was not checked."
+        info "The checksum above was verified. To also check provenance:"
+        info "    gh auth login && gh attestation verify <file> --repo $REPO"
+        return
+    fi
+    if gh attestation verify "$archive" --repo "$REPO" >/dev/null 2>&1; then
+        info "build provenance verified"
+    else
+        # Now it means something: gh can check, is signed in, and said no.
+        warn "build provenance could NOT be verified for $(basename "$archive")."
+        warn "If you did not expect that, stop and check the release page."
     fi
 }
 
