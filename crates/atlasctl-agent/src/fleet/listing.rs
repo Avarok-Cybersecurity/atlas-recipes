@@ -406,7 +406,17 @@ fn dial_first_reachable(
     for addr in addrs {
         match driver.pair(*addr, code) {
             Ok(paired) => return Ok((*addr, paired)),
-            Err(e) => why.push(format!("{addr}: {e:#}")),
+            Err(e) => {
+                // Only a failure to REACH the peer earns another address.
+                // Every address here is the same machine, so a refusal has
+                // already spent one of the code's three attempts; walking the
+                // rest spends them all on one typo. See `peer::reach`.
+                let keep_going = crate::peer::reach::never_reached(&e);
+                why.push(format!("{addr}: {e:#}"));
+                if !keep_going {
+                    break;
+                }
+            }
         }
     }
     anyhow::bail!(

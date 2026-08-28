@@ -93,31 +93,70 @@ fn join_fleet(join: &crate::joinarg::Join, grant_control: bool) -> Result<()> {
     let identity = Identity::load_or_create(&dir)?;
     let pins = PinStore::new(&dir);
 
-    let addrs = atlasctl_agent::discovery::resolve_manual(
-        &join.host,
-        atlasctl_agent::peer::DEFAULT_PEER_PORT,
-    )?;
-    let addr = *addrs
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("{} resolved to no addresses", join.host))?;
+    // Every alternative the inviter offered, flattened in the order given. A
+    // host that will not resolve is recorded rather than fatal: the LAST entry
+    // is often the only one this machine's network can even name.
+    let mut addrs: Vec<std::net::SocketAddr> = Vec::new();
+    let mut unresolved: Vec<String> = Vec::new();
+    for host in &join.hosts {
+        match atlasctl_agent::discovery::resolve_manual(
+            host,
+            atlasctl_agent::peer::DEFAULT_PEER_PORT,
+        ) {
+            Ok(found) => addrs.extend(found),
+            Err(e) => unresolved.push(format!("{host}: {e:#}")),
+        }
+    }
+    if addrs.is_empty() {
+        anyhow::bail!(
+            "none of the addresses in --join could be resolved — {}",
+            unresolved.join("; ")
+        );
+    }
 
-    println!("\njoining the fleet at {addr}…");
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .context("starting a runtime")?;
-    let paired = rt
-        .block_on(atlasctl_agent::peer::join::dial_and_pair(
+
+    let mut tried: Vec<String> = Vec::new();
+    let mut paired = None;
+    for addr in &addrs {
+        println!("\njoining the fleet at {addr}…");
+        match rt.block_on(atlasctl_agent::peer::join::dial_and_pair(
             &identity,
             pins.clone(),
-            addr,
+            *addr,
             &join.code,
-        ))
-        .with_context(|| {
-            format!(
-                "could not join {addr}. The code expires, and is good for one machine only — mint a fresh one if this is not the first try."
-            )
-        })?;
+        )) {
+            Ok(p) => {
+                // Keep the address that WORKED: it is what gets pinned, and
+                // pinning the one we tried first would record a link this
+                // machine has just proved it cannot use.
+                paired = Some((p, *addr));
+                break;
+            }
+            Err(e) => {
+                // Same rule as `fleet::listing`: a machine that answered and
+                // refused has already spent an attempt, and the remaining
+                // addresses are the same machine. Stop, so one mistyped code
+                // costs one try rather than all three.
+                let keep_going = atlasctl_agent::peer::reach::never_reached(&e);
+                tried.push(format!("{addr}: {e:#}"));
+                if !keep_going {
+                    break;
+                }
+                println!("  no answer there; trying the next address…");
+            }
+        }
+    }
+    let (paired, addr) = paired.ok_or_else(|| {
+        anyhow::anyhow!(
+            "could not join over {}. The code expires, and is good for one machine only — mint a fresh one if this is not the first try.\n  {}",
+            if tried.len() == 1 { "that address".to_owned() } else { format!("any of {} addresses", tried.len()) },
+            tried.join("\n  ")
+        )
+    })?;
 
     atlasctl_agent::fleet::record_pairing(
         &pins,
