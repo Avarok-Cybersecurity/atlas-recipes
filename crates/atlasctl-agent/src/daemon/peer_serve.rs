@@ -196,7 +196,11 @@ async fn relay_control(
     let local = ctx.identity.id();
     let refused = |detail: String| ControlRep::Refused {
         by: local,
-        error: AgentError::RelayRefused { node, detail },
+        error: AgentError::RelayRefused {
+            node,
+            via: Some(local),
+            detail,
+        },
     };
 
     // R2 — the requester's grant, re-read NOW, checked here as well as at

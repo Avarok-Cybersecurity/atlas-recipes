@@ -175,10 +175,17 @@ async fn a_fabricated_vouch_writes_no_pin_and_is_refused_at_the_relay() {
     match rep {
         ControlRep::Refused {
             by,
-            error: AgentError::RelayRefused { node, detail },
+            error: AgentError::RelayRefused { node, via, detail },
         } => {
             assert_eq!(by, relay.id(), "the honest relay refuses under R3");
             assert_eq!(node, phantom);
+            assert_eq!(
+                via,
+                Some(relay.id()),
+                "the error itself must name the relay: `by` is dropped when \
+                 this becomes a browser frame, so attribution that lives only \
+                 there sends the operator to the target instead"
+            );
             assert!(detail.contains("not a peer"), "got {detail}");
         }
         other => panic!("expected the relay's R3 refusal, got {other:?}"),
@@ -358,5 +365,64 @@ async fn the_relay_emits_only_a_terminal_frame_at_the_target() {
             matches!(f, crate::peer::wire::PeerFrame::Control { .. }),
             "the ONLY control frame a relay may emit is the terminal one: {f:?}"
         );
+    }
+}
+
+/// The origin cannot reach the RELAY at all — a distinct failure from the
+/// relay's own leg failing (covered above), and the one the browser most
+/// often shows, because a laptop that has moved networks still holds the
+/// relay's stale address.
+///
+/// Both refusals say `RelayRefused` and both name the TARGET in `node`, so
+/// the only thing separating "go look at dgx1" from "go look at dgx2" is
+/// `via`. This path builds the error on the ORIGIN, where `ControlRep` never
+/// exists and `by` therefore cannot carry the blame.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_relay_the_origin_cannot_dial_is_named_in_the_refusal() {
+    let origin = agent("dead-origin", "macbook", "127.0.0.1");
+    let mut relay = agent("dead-relay", "dgx1", "127.0.0.2");
+    pin(&origin, &relay, false);
+    pin(&relay, &origin, true);
+    let port = {
+        let launcher = std::sync::Arc::clone(&relay.launcher);
+        spawn_serving(&mut relay, 0, Duration::from_secs(5), Box::new(launcher))
+    }
+    .await;
+    poll(&origin, &relay).await;
+
+    let ghost = agent("dead-ghost", "dgx2", "127.0.0.3");
+    origin
+        .fleet
+        .record_vouches(relay.id(), vec![claim(ghost.id(), Vec::new(), true)]);
+
+    // A port nothing is listening on: bound to learn a free number, then
+    // dropped. The route still resolves through the relay — it is only the
+    // dial that fails, which is exactly the operator's situation.
+    let dead = {
+        let l = tokio::net::TcpListener::bind("127.0.0.2:0")
+            .await
+            .expect("bind to learn a free port");
+        l.local_addr().expect("port").port()
+    };
+    assert_ne!(dead, port, "the dead port must not be the relay's live one");
+
+    let err = driver(&origin, dead)
+        .control(ghost.id(), status())
+        .expect_err("nothing is listening; the dial cannot succeed");
+    match err {
+        AgentError::RelayRefused { node, via, detail } => {
+            assert_eq!(node, ghost.id(), "`node` stays the target");
+            assert_eq!(
+                via,
+                Some(relay.id()),
+                "the unreachable RELAY must be named, or the operator is sent \
+                 to a target that never heard of the request"
+            );
+            assert!(
+                detail.contains("could not ask"),
+                "the prose must say which leg failed: {detail}"
+            );
+        }
+        other => panic!("expected the origin-side RelayRefused, got {other:?}"),
     }
 }

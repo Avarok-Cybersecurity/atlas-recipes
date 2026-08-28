@@ -322,6 +322,7 @@ pub(super) async fn spawn_fake_peer(
                                 by: local,
                                 error: atlasctl_protocol::msg::AgentError::RelayRefused {
                                     node,
+                                    via: Some(local),
                                     detail: "a terminal peer received a forward".to_owned(),
                                 },
                             },

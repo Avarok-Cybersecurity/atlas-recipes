@@ -237,6 +237,7 @@ impl crate::session::ControlRelay for ControlDriver {
                 .map(|rep| (rep, Some(relay)))
                 .map_err(|e| AgentError::RelayRefused {
                     node: target,
+                    via: Some(relay),
                     detail: format!("could not ask {} to forward: {e:#}", relay.short()),
                 }),
         }
