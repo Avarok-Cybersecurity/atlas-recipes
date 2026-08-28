@@ -112,21 +112,55 @@ pub fn answers(target: &str, port: u16) -> bool {
     let Ok(ip) = target.parse::<IpAddr>() else {
         return false;
     };
-    match TcpStream::connect_timeout(&SocketAddr::new(ip, port), PROBE_TIMEOUT) {
-        Ok(_) => true,
-        // A REFUSAL is an answer: something at that address processed the SYN
-        // and said no, which is exactly what a healthy peer does before rank 0
-        // binds the rendezvous port. A reset means the same thing and is what
-        // Windows returns down some paths for the same closed port.
-        //
-        // What does NOT count is silence — a timeout, or the stack telling us
-        // it has no route. Those are the link-going-nowhere cases this probe
-        // exists to separate out.
-        Err(e) => matches!(
-            e.kind(),
+    let addr = SocketAddr::new(ip, port);
+    connect_outcome(addr).is_some_and(is_an_answer)
+}
+
+/// A refusal is an ANSWER: something at that address processed the SYN and said
+/// no, which is exactly what a healthy peer does before rank 0 binds the
+/// rendezvous port. A reset means the same thing. Silence — a timeout, or the
+/// stack saying it has no route — is the link-going-nowhere case this probe
+/// exists to separate out.
+fn is_an_answer(outcome: Result<(), std::io::ErrorKind>) -> bool {
+    match outcome {
+        Ok(()) => true,
+        Err(k) => matches!(
+            k,
             std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::ConnectionReset
         ),
     }
+}
+
+/// Connect, giving up after [`PROBE_TIMEOUT`]. `None` means the window expired
+/// with no answer at all.
+#[cfg(not(windows))]
+fn connect_outcome(addr: SocketAddr) -> Option<Result<(), std::io::ErrorKind>> {
+    match TcpStream::connect_timeout(&addr, PROBE_TIMEOUT) {
+        Ok(_) => Some(Ok(())),
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => None,
+        Err(e) => Some(Err(e.kind())),
+    }
+}
+
+/// The same, on Windows, where `connect_timeout` cannot express the answer.
+///
+/// It reports a REFUSED connection as `TimedOut` — measured, not assumed: a
+/// port this process had just released came back `Some(TimedOut)` on CI. The
+/// cause is that a failed non-blocking connect is signalled through `select`'s
+/// exception set, which that path does not consult, so every refusal is
+/// indistinguishable from silence and every healthy peer reads as unreachable.
+///
+/// A blocking connect on its own thread does report the refusal. The thread is
+/// abandoned rather than joined when the window expires; it ends by itself when
+/// the OS connect gives up, and a probe must not block the caller for the two
+/// minutes that can take.
+#[cfg(windows)]
+fn connect_outcome(addr: SocketAddr) -> Option<Result<(), std::io::ErrorKind>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(TcpStream::connect(addr).map(|_| ()).map_err(|e| e.kind()));
+    });
+    rx.recv_timeout(PROBE_TIMEOUT).ok()
 }
 
 /// The best address among `candidates` that this machine can actually reach.
@@ -311,6 +345,23 @@ mod tests {
                 "a closed loopback port must read as reachable; \
                  connecting to {port} gave {observed:?}"
             );
+        }
+
+        /// The classification, without a socket. `answers` needs a real port
+        /// to exercise, so this pins the RULE on its own: which outcomes mean
+        /// "the host is there" and which mean "nothing is".
+        #[test]
+        fn silence_is_not_an_answer_but_a_refusal_is() {
+            use std::io::ErrorKind as E;
+            assert!(super::super::is_an_answer(Ok(())));
+            assert!(super::super::is_an_answer(Err(E::ConnectionRefused)));
+            assert!(super::super::is_an_answer(Err(E::ConnectionReset)));
+            // A host that is not there answers quickly and must still read as
+            // unreachable — the case a "did it come back fast?" rule would get
+            // exactly backwards.
+            assert!(!super::super::is_an_answer(Err(E::HostUnreachable)));
+            assert!(!super::super::is_an_answer(Err(E::NetworkUnreachable)));
+            assert!(!super::super::is_an_answer(Err(E::TimedOut)));
         }
 
         #[test]

@@ -132,7 +132,10 @@ fn the_portable_rendering_keeps_host_specifics_symbolic() {
         "uid must stay symbolic"
     );
     assert!(
-        portable.contains("$HOME/.cache/huggingface"),
+        portable.contains(&format!(
+            "{}/.cache/huggingface",
+            crate::platform::home_placeholder()
+        )),
         "home must stay symbolic"
     );
     assert!(
@@ -178,7 +181,10 @@ fn portable_substitutions_are_emitted_unquoted_so_the_shell_expands_them() {
         "got: {portable}"
     );
     assert!(
-        portable.contains("-v $HOME/.cache/huggingface:/cache/huggingface"),
+        portable.contains(&format!(
+            "-v {}/.cache/huggingface:/cache/huggingface",
+            crate::platform::home_placeholder()
+        )),
         "got: {portable}"
     );
     assert!(
@@ -186,7 +192,7 @@ fn portable_substitutions_are_emitted_unquoted_so_the_shell_expands_them() {
         "the substitution must not be quoted"
     );
     assert!(
-        !portable.contains("'$HOME"),
+        !portable.contains(&format!("'{}", crate::platform::home_placeholder())),
         "the home substitution must not be quoted"
     );
 }

@@ -234,9 +234,14 @@ impl DockerCommand {
             // may name a volume that already starts with `$HOME/`, and that is
             // data, not something to let the shell expand.
             let (host, rewritten) = match (user_render, home) {
-                (UserRender::Portable, Some(h)) if !h.is_empty() && host.starts_with(h) => {
-                    (format!("$HOME{}", &host[h.len()..]), true)
-                }
+                (UserRender::Portable, Some(h)) if !h.is_empty() && host.starts_with(h) => (
+                    format!(
+                        "{}{}",
+                        crate::platform::home_placeholder(),
+                        &host[h.len()..]
+                    ),
+                    true,
+                ),
                 _ => (host.clone(), false),
             };
             v.push("-v".into());
