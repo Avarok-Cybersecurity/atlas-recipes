@@ -109,7 +109,7 @@ impl Session<'_> {
                 // single dialog, and a superseded exchange's words are stale.
                 self.pending_pairing = Some(super::PendingPairing {
                     outcome,
-                    at: std::time::Instant::now(),
+                    expires_at: std::time::Instant::now() + super::PENDING_PAIRING_TTL,
                 });
                 vec![ServerMsg::PairResult {
                     id,
@@ -155,7 +155,7 @@ impl Session<'_> {
                 );
                 self.pending_pairing = Some(super::PendingPairing {
                     outcome,
-                    at: std::time::Instant::now(),
+                    expires_at: std::time::Instant::now() + super::PENDING_PAIRING_TTL,
                 });
                 vec![ServerMsg::PairAtResult {
                     id,
@@ -212,7 +212,7 @@ impl Session<'_> {
                 "that is not the machine this connection just paired with. Nothing was trusted.",
             )];
         }
-        if pending.at.elapsed() > super::PENDING_PAIRING_TTL {
+        if std::time::Instant::now() >= pending.expires_at {
             return vec![decision(
                 id,
                 node,

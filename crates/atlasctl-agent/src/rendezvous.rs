@@ -114,7 +114,18 @@ pub fn answers(target: &str, port: u16) -> bool {
     };
     match TcpStream::connect_timeout(&SocketAddr::new(ip, port), PROBE_TIMEOUT) {
         Ok(_) => true,
-        Err(e) => e.kind() == std::io::ErrorKind::ConnectionRefused,
+        // A REFUSAL is an answer: something at that address processed the SYN
+        // and said no, which is exactly what a healthy peer does before rank 0
+        // binds the rendezvous port. A reset means the same thing and is what
+        // Windows returns down some paths for the same closed port.
+        //
+        // What does NOT count is silence — a timeout, or the stack telling us
+        // it has no route. Those are the link-going-nowhere cases this probe
+        // exists to separate out.
+        Err(e) => matches!(
+            e.kind(),
+            std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::ConnectionReset
+        ),
     }
 }
 
@@ -278,8 +289,28 @@ mod tests {
         /// the one that separates it from a link going nowhere.
         #[test]
         fn a_refused_connection_counts_as_reachable() {
-            // Loopback with nothing bound refuses immediately.
-            assert!(answers("127.0.0.1", 1));
+            // A port this process just released, rather than a low fixed one:
+            // port 1 is not merely unbound on some hosts, it is filtered, and a
+            // filtered port answers with silence rather than a refusal — so the
+            // test would be asserting the opposite of what it reads.
+            let port = {
+                let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+                l.local_addr().expect("addr").port()
+            };
+            // Reported with the error the probe actually saw. "assertion failed:
+            // answers(...)" names neither the port nor why, which is the whole
+            // question when this fails on a platform nobody is sitting at.
+            let observed = std::net::TcpStream::connect_timeout(
+                &SocketAddr::new("127.0.0.1".parse().expect("ip"), port),
+                PROBE_TIMEOUT,
+            )
+            .err()
+            .map(|e| e.kind());
+            assert!(
+                answers("127.0.0.1", port),
+                "a closed loopback port must read as reachable; \
+                 connecting to {port} gave {observed:?}"
+            );
         }
 
         #[test]
