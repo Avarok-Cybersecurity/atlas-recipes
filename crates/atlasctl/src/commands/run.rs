@@ -99,7 +99,15 @@ pub fn run(args: &RunArgs) -> Result<()> {
     // multi-gigabyte pull to reach the Hub library's own cache-miss message,
     // inside a container that has already exited, reachable only via
     // `atlasctl logs`.
-    if let Some(dir) = hfcache::hub_dir(Path::new(&host.hf_cache_dir), &recipe.model)
+    //
+    // Unless the launch brings its own weights: `model_from_path` points the
+    // engine at a directory, and then the Hub cache is not consulted at all, so
+    // refusing on a cache miss would block a launch that was going to work.
+    // Read off the rendered argv rather than the override map, because a recipe
+    // can set it in `defaults:` and never mention it on the command line.
+    let brings_own_weights = plan.docker.command.iter().any(|a| a == "--model-from-path");
+    if !brings_own_weights
+        && let Some(dir) = hfcache::hub_dir(Path::new(&host.hf_cache_dir), &recipe.model)
         && !dir.exists()
     {
         bail!(
