@@ -417,3 +417,57 @@ fn a_crash_looping_agent_is_reported_rather_than_raised() {
         "the unit path is still reported so they can inspect it"
     );
 }
+
+// ---- installing over a running agent ----------------------------------------
+//
+// Reported from a real macOS run: `curl … | sh` on a machine that already had
+// an agent printed
+//
+//   error: `launchctl bootstrap gui/501 …plist` failed:
+//          Bootstrap failed: 5: Input/output error
+//
+// `bootstrap` refuses a label that is already loaded, and error 5 names neither
+// the cause nor the remedy. The installer then suggested `atlasctl agent
+// install` to see why, which reproduced the same line, and `agent run` by hand
+// hit the port the live agent still held. Three dead ends for "I ran the
+// installer twice".
+
+#[test]
+fn launchd_unloads_before_it_bootstraps() {
+    let p = plan(ServiceKind::Launchd, &agent(), Path::new("/Users/x"), 501);
+    let pre: Vec<String> = p.pre_activate.iter().map(|a| a.join(" ")).collect();
+    let act: Vec<String> = p.activate.iter().map(|a| a.join(" ")).collect();
+    assert!(
+        pre.iter().any(|c| c.contains("bootout")),
+        "an install over a live agent must unload it first: {pre:?}"
+    );
+    assert!(act.iter().any(|c| c.contains("bootstrap")), "{act:?}");
+    assert!(
+        pre.iter().all(|c| !c.contains("bootstrap")),
+        "the unload must not be the activation step: {pre:?}"
+    );
+}
+
+/// It has to be `pre_activate`, not `activate`: on a FIRST install there is
+/// nothing to unload and `bootout` exits non-zero, which would turn a clean
+/// install into a failure.
+#[test]
+fn the_unload_is_allowed_to_fail() {
+    let p = plan(ServiceKind::Launchd, &agent(), Path::new("/Users/x"), 501);
+    assert!(!p.pre_activate.is_empty());
+    for argv in &p.activate {
+        assert!(
+            !argv.join(" ").contains("bootout"),
+            "bootout in `activate` fails every first install: {argv:?}"
+        );
+    }
+}
+
+/// systemd needs none of this — `enable --now` is idempotent and restarts a
+/// live unit with the new binary. Adding a teardown there would stop an agent
+/// that did not need stopping.
+#[test]
+fn systemd_needs_no_pre_step() {
+    let p = plan(ServiceKind::Systemd, &agent(), Path::new("/home/x"), 1000);
+    assert!(p.pre_activate.is_empty(), "{:?}", p.pre_activate);
+}

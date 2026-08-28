@@ -73,6 +73,18 @@ pub fn install(
     fs.create_dir_all(parent)?;
     fs.write_atomic(&p.unit_path, &p.unit_body)?;
 
+    // Best-effort, and BEFORE activation: on macOS this unloads an agent that
+    // is already bootstrapped, so installing over one upgrades it instead of
+    // dying on `Bootstrap failed: 5: Input/output error`. It exits non-zero on
+    // a first install, when there is nothing to unload, which is why it cannot
+    // be an `activate` step.
+    let mut skipped = Vec::new();
+    for argv in &p.pre_activate {
+        if !matches!(runner.run(argv), Ok(out) if out.success()) {
+            // Nothing to say: on a first install this is the normal path.
+        }
+    }
+
     let mut running = true;
     for argv in &p.activate {
         let out = runner.run(argv)?;
@@ -88,7 +100,6 @@ pub fn install(
         }
     }
 
-    let mut skipped = Vec::new();
     for argv in &p.best_effort {
         match runner.run(argv) {
             Ok(out) if out.success() => {}

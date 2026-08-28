@@ -125,6 +125,19 @@ pub struct ServicePlan {
     pub unit_path: PathBuf,
     /// Its contents.
     pub unit_body: String,
+    /// Commands to run BEFORE activation, whose failure is expected and
+    /// ignored, in order.
+    ///
+    /// This exists for one shape: making activation idempotent. `launchctl
+    /// bootstrap` refuses a label that is already loaded, with
+    /// `Bootstrap failed: 5: Input/output error` — a message that names neither
+    /// the cause nor the remedy — so re-running the installer to UPGRADE an
+    /// agent failed at the last step, and `atlasctl agent install`, which the
+    /// installer suggests as the way to see why, reproduced the same line.
+    ///
+    /// Separate from `best_effort` because ORDER is the whole point: a teardown
+    /// that runs after the thing it was meant to make room for is useless.
+    pub pre_activate: Vec<Vec<String>>,
     /// Commands to run after writing it, in order.
     pub activate: Vec<Vec<String>>,
     /// The command that answers "is it actually running now?".
@@ -222,6 +235,9 @@ fn systemd(agent: &AgentInvocation, home: &Path) -> ServicePlan {
         // A headless box logs nobody in, so without lingering the service stops
         // the moment the installing session ends. It is also exactly the call
         // that is unavailable in a container, so it cannot be required.
+        // systemd needs none: `enable --now` is already idempotent, and
+        // re-running it over a live unit restarts it with the new binary.
+        pre_activate: Vec::new(),
         best_effort: vec![vec!["loginctl".to_owned(), "enable-linger".to_owned()]],
         deactivate: vec![sc(&["disable", "--now", &unit])],
     }
@@ -271,6 +287,15 @@ fn launchd(agent: &AgentInvocation, home: &Path, uid: u32) -> ServicePlan {
         kind: ServiceKind::Launchd,
         unit_path: unit_path.clone(),
         unit_body,
+        // Unload first, so installing over an existing agent UPGRADES it
+        // rather than failing. `bootout` exits non-zero when the label is not
+        // loaded, which is the ordinary first-install case, so it cannot be an
+        // `activate` step.
+        pre_activate: vec![vec![
+            "launchctl".to_owned(),
+            "bootout".to_owned(),
+            format!("{target}/{LAUNCHD_LABEL}"),
+        ]],
         activate: vec![vec![
             "launchctl".to_owned(),
             "bootstrap".to_owned(),

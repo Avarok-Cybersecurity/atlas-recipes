@@ -51,8 +51,20 @@ pub fn install(args: &crate::cli::AgentInstallArgs) -> Result<()> {
         // operator ends up pairing a browser against a five-second crash loop.
         println!("agent installed, but it is NOT running");
         println!("  the unit is enabled and the supervisor accepted it, so this is");
-        println!("  the agent exiting at startup. See why with:");
-        println!("    journalctl --user -u atlasctl-agent -n 50");
+        println!("  the agent exiting at startup. The usual cause is the port:");
+        println!("    an agent started by hand still holds {}.", args.port);
+        println!("  See why with:");
+        match done.kind {
+            // `journalctl` does not exist on macOS, and it was the only thing
+            // offered here — so the one diagnostic an operator was handed
+            // failed too, on the platform where this path is most likely.
+            crate::service::plan::ServiceKind::Launchd => {
+                println!("    tail -n 50 ~/Library/Logs/atlasctl-agent.log");
+            }
+            crate::service::plan::ServiceKind::Systemd => {
+                println!("    journalctl --user -u atlasctl-agent -n 50");
+            }
+        }
     }
     println!("  unit: {}", done.unit_path.display());
     println!("  port: {}", args.port);
