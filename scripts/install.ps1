@@ -13,9 +13,37 @@
 # This script deliberately embeds no version. It always resolves what the
 # release marked latest, so a stale copy of the script cannot pin an old
 # release.
+#
+# To join a fleet at install time — the Windows counterpart of
+# `curl … | sh -s -- --join <code>@<host>`:
+#
+#   & ([scriptblock]::Create((irm https://atlasinference.io/install.ps1))) -Join 12345678@10.0.0.1
+#
+# `irm | iex` cannot pass arguments; `[scriptblock]::Create` can, and is the
+# idiom every Windows installer that takes options uses.
+
+param(
+    # `code@host[,host…]`, forwarded verbatim to `agent install --join`, which
+    # is the only thing that understands it.
+    [string]$Join,
+    # "Let the fleet I am joining run models on this machine." A visible switch
+    # on the line the operator pastes, never an implication of joining.
+    [switch]$GrantControl
+)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+# `--join` as well as `-Join`. The shell installer, the docs and the site all
+# say `--join`, and someone translating that line by hand will type it — being
+# refused for a hyphen is not a lesson worth teaching.
+for ($i = 0; $i -lt $args.Count; $i++) {
+    switch -Regex ($args[$i]) {
+        '^--join=(.+)$'   { $Join = $Matches[1] }
+        '^--join$'        { if ($i + 1 -lt $args.Count) { $Join = $args[++$i] } }
+        '^--grant-control$' { $GrantControl = $true }
+    }
+}
 
 $Repo    = 'Avarok-Cybersecurity/atlas-recipes'
 $BinName = 'atlasctl'
@@ -90,7 +118,7 @@ function Get-Version {
 }
 
 function Install-Agent {
-    param($Exe, $SameVersion)
+    param($Exe, $SameVersion, $JoinTarget, [bool]$Grant)
 
     if ($env:ATLASCTL_NO_AGENT) {
         Write-Info "skipping the background agent (ATLASCTL_NO_AGENT is set)."
@@ -102,6 +130,26 @@ function Install-Agent {
     # is the commonest reason to run it at all: the binary is there, the task is
     # not running, and the website says "no agent". Nothing needs installing --
     # the machine needs starting.
+    # A join is the step the operator came for, so it runs regardless of what
+    # is already installed — the same rule the shell installer follows.
+    if ($JoinTarget) {
+        Write-Info "joining the fleet at $($JoinTarget -replace '^[^@]*@', '')"
+        if ($Grant) { Write-Info "and letting that fleet run models on this machine" }
+        $joinArgs = @('agent', 'install', '--join', $JoinTarget)
+        if ($Grant) { $joinArgs += '--grant-control' }
+        & $Exe @joinArgs
+        if ($LASTEXITCODE -eq 0) { return }
+        # One exit code covers two steps, so say plainly that either could have
+        # failed and give the check that tells them apart — rather than
+        # asserting the install worked and only the join did not, which sends
+        # operators to mint a fresh code for a task that was never created.
+        Write-Warn "the agent install, the fleet join, or both did not succeed."
+        Write-Warn "Check which with:  $BinName agent status"
+        Write-Warn "A join code is single-use and expires. To retry just the join:"
+        Write-Warn "    $BinName agent install --join <code>@<host>"
+        return
+    }
+
     if ($SameVersion) {
         & $Exe agent status *> $null
         $answering = $LASTEXITCODE -eq 0
@@ -241,7 +289,7 @@ try {
     }
 
     Test-Docker
-    Install-Agent -Exe $exe -SameVersion $sameVersion
+    Install-Agent -Exe $exe -SameVersion $sameVersion -JoinTarget $Join -Grant $GrantControl.IsPresent
 
     Write-Info "done. Try:"
     Write-Info "    $BinName list"
