@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.4.0](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.3.0...v0.4.0) (2026-08-28)
+
+
+### Features
+
+* **pairing:** trust is written after the words are compared, not before ([#63](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/63)) ([42ec9c9](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/42ec9c958b4d1d960ba8cc1804b731688c1603ac))
+* **run:** warn before a GPU utilisation that has frozen a machine ([#72](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/72)) ([68493e1](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/68493e1cfb1014b34975df4ac9c730271c49280b))
+* **telemetry:** measure ISL and OSL, so the control page stops promising them ([#65](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/65)) ([2a2c7f7](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/2a2c7f7d666d01533588afba16adb5ef8ddb9549))
+
+
+### Bug Fixes
+
+* **agent:** stop reporting "could not look" as "nothing there" ([#75](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/75)) ([c832f0a](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/c832f0a6400e61cb57f1ae03388d64599a48c225))
+* **doctor:** an unreadable interface list is not a machine with no addresses ([#69](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/69)) ([5881746](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/58817462a7e5fde606073efe0269fe4676dff259))
+* **errors:** a failure reply carries the cause, not only the attempt ([#71](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/71)) ([1335721](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/1335721c8b7ff88c096fb389e924002cb93c0407))
+* **fleet:** bound the sightings table against a beacon flood ([#73](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/73)) ([44057b9](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/44057b98feeda4ab2e631f1da91463b27fe52731))
+* **join:** try every address the inviter offered, without spending its attempts ([#76](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/76)) ([b6e2961](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/b6e2961cdb4864e410e8ad65acd35d7dc93b8038))
+* **messages:** strip source indentation baked into two operator-facing strings ([#67](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/67)) ([9eb8fe3](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/9eb8fe3ba065017413898429159109f62b1b4d4d))
+* **pair:** print a command the other machine can actually run ([#77](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/77)) ([74c7657](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/74c765705a012299e6829f94124b285de93fb859))
+* **protocol:** name the relay in its own refusal ([#74](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/74)) ([289fe8f](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/289fe8f8747916d7348ae3fec3a3133ae58d9213))
+* **registry add:** re-adding a registry you removed no longer fails on git ([#70](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/70)) ([af9f9dd](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/af9f9dd3dc1794f9fe9c5970a0a580c453b3e54c))
+* **resolve:** an IPv6 literal is not a host with a port ([#78](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/78)) ([53010c6](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/53010c646bb171179d6808ab7ac69e9c301f7307))
+* **run:** guard the endpoint port against the engine's own default ([#68](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/68)) ([9189d8c](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/9189d8c28eb9712f1aa91ae3db717764891c4f3a))
+* **stop:** a stop that did not stop anything is not a success ([#66](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/66)) ([c9bfe89](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/c9bfe89e657993f5dd726bd042a1088e538c3a51))
+
 ## [0.3.0](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.2.0...v0.3.0) (2026-08-26)
 
 
