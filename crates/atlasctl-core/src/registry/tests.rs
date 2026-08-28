@@ -195,6 +195,55 @@ fn updating_is_confined_to_the_cache_directory() {
     );
 }
 
+/// The escape the plain check could not see. `Path::starts_with` compares
+/// COMPONENTS, so `<cache>/../../../my-project` begins with `<cache>` by that
+/// measure — the guard returned ok and `git reset --hard` ran in the user's own
+/// work. `path` is deserialised straight out of `registries.yaml`, so nothing
+/// upstream had rejected the `..` either.
+#[test]
+fn a_path_that_climbs_out_of_the_cache_is_refused() {
+    let cache = PathBuf::from("/home/u/.cache/atlasctl/registries");
+    for escape in [
+        cache.join("..").join("..").join("..").join("my-project"),
+        cache.join("third").join("..").join("..").join(".ssh"),
+        cache.join(".."),
+    ] {
+        let err = RemoteStore::guard_cache_path(&cache, &escape)
+            .expect_err("a path containing .. must be refused");
+        assert!(
+            err.to_string().contains("outside the registry cache"),
+            "{err}"
+        );
+    }
+    // And a legitimate nested clone still passes, or the guard is just a ban.
+    assert!(RemoteStore::guard_cache_path(&cache, &cache.join("org").join("repo")).is_ok());
+}
+
+/// A symlink is the half no amount of component inspection can see, so the
+/// guard resolves as well as inspects.
+#[cfg(unix)]
+#[test]
+fn a_symlink_out_of_the_cache_is_refused() {
+    let base = std::env::temp_dir().join(format!("atlasctl-guard-{}", std::process::id()));
+    let cache = base.join("cache");
+    let outside = base.join("elsewhere");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&cache).expect("cache");
+    std::fs::create_dir_all(&outside).expect("outside");
+    let link = cache.join("sneaky");
+    std::os::unix::fs::symlink(&outside, &link).expect("symlink");
+
+    // Lexically impeccable: no `..`, and it begins with the cache root.
+    assert!(link.starts_with(&cache));
+    let err = RemoteStore::guard_cache_path(&cache, &link)
+        .expect_err("a symlink leaving the cache must be refused");
+    assert!(
+        err.to_string().contains("outside the registry cache"),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[test]
 fn listing_reports_provenance_for_every_entry() {
     let fs = Arc::new(MemFileSystem::new());

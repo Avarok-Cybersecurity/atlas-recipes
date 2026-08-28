@@ -3,13 +3,16 @@
 use super::*;
 use crate::docker::collective::NcclRoce;
 use crate::docker::profile::{AmdDevices, NvidiaDevices, ROOTLESS_V1};
+use crate::host::PosixUser;
 use crate::recipe::Provenance;
 use crate::scalar::ScalarValue;
 
 pub(super) fn host() -> HostSnapshot {
     HostSnapshot {
-        uid: 1000,
-        gid: 1000,
+        posix_user: Some(PosixUser {
+            uid: 1000,
+            gid: 1000,
+        }),
         home: "/home/spark".into(),
         hf_cache_dir: "/home/spark/.cache/huggingface".into(),
         // TOKEN stands for a credential the agent holds; the proxy is the

@@ -17,7 +17,7 @@ use atlasctl_core::chain::{Overrides, UserConfig};
 use atlasctl_core::docker::collective::NcclRoce;
 use atlasctl_core::docker::profile::{NvidiaDevices, ROOTLESS_V1};
 use atlasctl_core::docker::translate::{DEFAULT_MASTER_PORT, LaunchContext, Placement, translate};
-use atlasctl_core::host::HostSnapshot;
+use atlasctl_core::host::{HostSnapshot, PosixUser};
 use atlasctl_core::recipe::{Provenance, Recipe};
 use atlasctl_core::scalar::ScalarValue;
 use atlasctl_core::settings::{self, Disposition};
@@ -28,8 +28,10 @@ use std::path::PathBuf;
 /// A host that does not exist, so goldens are identical on every machine.
 fn fixed_host() -> HostSnapshot {
     HostSnapshot {
-        uid: 1000,
-        gid: 1000,
+        posix_user: Some(PosixUser {
+            uid: 1000,
+            gid: 1000,
+        }),
         home: "/home/spark".into(),
         hf_cache_dir: "/home/spark/.cache/huggingface".into(),
         env: BTreeMap::new(),
@@ -85,7 +87,11 @@ fn render(recipe: &Recipe) -> String {
         out.push_str(&format!("# {label} — shell\n{}\n\n", plan.docker));
         out.push_str(&format!(
             "# {label} — portable\n{}\n\n",
-            plan.docker.display_portable(Some("/home/spark"))
+            // The placeholder is pinned, not read from the platform: the
+            // corpus is generated on Linux and compared byte for byte, so a
+            // target-dependent one would make every golden fail everywhere
+            // else while nothing had actually changed.
+            plan.docker.display_portable(Some("/home/spark"), "$HOME")
         ));
         out.push_str(&format!(
             "# {label} — argv\n{}\n\n",

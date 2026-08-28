@@ -31,14 +31,14 @@ fn hex(bytes: &[u8]) -> String {
 
 /// Generate a fresh token from the operating system's CSPRNG.
 ///
-/// Reads `/dev/urandom` directly rather than taking a dependency: this is the
-/// one place randomness matters, and the kernel interface is stable.
+/// Through `getrandom`, like the other three places this codebase draws
+/// entropy — including the identity key seed, which matters more than this
+/// does. Reading `/dev/urandom` by hand was the odd one out, and it failed on
+/// Windows with `The system cannot find the path specified`, which is to say
+/// no browser token could ever be minted there.
 pub fn generate() -> Result<String> {
     let mut buf = [0u8; TOKEN_BYTES];
-    let mut f = std::fs::File::open("/dev/urandom").context("opening the system CSPRNG")?;
-    use std::io::Read;
-    f.read_exact(&mut buf)
-        .context("reading from the system CSPRNG")?;
+    getrandom::fill(&mut buf).context("reading from the system CSPRNG")?;
     Ok(hex(&buf))
 }
 
@@ -59,7 +59,7 @@ pub fn load_or_create(config_dir: &Path) -> Result<String> {
             .with_context(|| format!("reading {}", p.display()))?
             .trim()
             .to_string();
-        check_permissions(&p)?;
+        atlasctl_core::secretfile::verify(&p)?;
         if token.len() != TOKEN_BYTES * 2 {
             bail!(
                 "{} does not contain a well-formed token; delete it and run \
@@ -73,7 +73,7 @@ pub fn load_or_create(config_dir: &Path) -> Result<String> {
     std::fs::create_dir_all(config_dir)
         .with_context(|| format!("creating {}", config_dir.display()))?;
     let token = generate()?;
-    write_private(&p, &token)?;
+    atlasctl_core::secretfile::write(&p, token.as_bytes())?;
     Ok(token)
 }
 
@@ -81,51 +81,8 @@ pub fn load_or_create(config_dir: &Path) -> Result<String> {
 pub fn rotate(config_dir: &Path) -> Result<String> {
     let token = generate()?;
     std::fs::create_dir_all(config_dir)?;
-    write_private(&path(config_dir), &token)?;
+    atlasctl_core::secretfile::write(&path(config_dir), token.as_bytes())?;
     Ok(token)
-}
-
-#[cfg(unix)]
-fn write_private(p: &Path, token: &str) -> Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    // Create with the right mode rather than chmod-ing after: otherwise the
-    // token exists world-readable for a moment, however short.
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(p)
-        .with_context(|| format!("creating {}", p.display()))?;
-    f.write_all(token.as_bytes())?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn write_private(p: &Path, token: &str) -> Result<()> {
-    std::fs::write(p, token).with_context(|| format!("creating {}", p.display()))
-}
-
-#[cfg(unix)]
-fn check_permissions(p: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let mode = std::fs::metadata(p)?.permissions().mode() & 0o077;
-    if mode != 0 {
-        bail!(
-            "{} is readable by other accounts (mode {:o}). Another user on this \
-             machine may already have your pairing token; rotate it with \
-             `atlasctl agent token --rotate`.",
-            p.display(),
-            std::fs::metadata(p)?.permissions().mode() & 0o777
-        );
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn check_permissions(_p: &Path) -> Result<()> {
-    Ok(())
 }
 
 /// Compare a presented token against the real one, in constant time.

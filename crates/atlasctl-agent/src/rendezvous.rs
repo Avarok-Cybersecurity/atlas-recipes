@@ -112,9 +112,47 @@ pub fn answers(target: &str, port: u16) -> bool {
     let Ok(ip) = target.parse::<IpAddr>() else {
         return false;
     };
-    match TcpStream::connect_timeout(&SocketAddr::new(ip, port), PROBE_TIMEOUT) {
-        Ok(_) => true,
-        Err(e) => e.kind() == std::io::ErrorKind::ConnectionRefused,
+    let addr = SocketAddr::new(ip, port);
+    connect_outcome(addr).is_some_and(is_an_answer)
+}
+
+/// A refusal is an ANSWER: something at that address processed the SYN and said
+/// no, which is exactly what a healthy peer does before rank 0 binds the
+/// rendezvous port. A reset means the same thing. Silence — a timeout, or the
+/// stack saying it has no route — is the link-going-nowhere case this probe
+/// exists to separate out.
+fn is_an_answer(outcome: Result<(), std::io::ErrorKind>) -> bool {
+    match outcome {
+        Ok(()) => true,
+        Err(k) => matches!(
+            k,
+            std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::ConnectionReset
+        ),
+    }
+}
+
+/// Connect, giving up after [`PROBE_TIMEOUT`]. `None` means the window expired
+/// with no answer at all.
+///
+/// # Windows
+///
+/// On Windows this returns `None` for a closed port as well, and there is no
+/// way around it from here. Defender Firewall drops an inbound SYN to a port
+/// with no listener instead of letting the stack reset it, so a closed port is
+/// FILTERED, not refused — measured on CI against a port reserved with a UDP
+/// socket, which nothing has ever listened on: `connect_timeout` and a blocking
+/// connect on its own thread both reported silence.
+///
+/// The consequence is real and worth stating: on Windows this probe can only
+/// confirm reachability when something ACCEPTS, so a Windows node cannot be
+/// probed-reachable for a rendezvous address that subnet arithmetic does not
+/// already cover. `can_reach` checks the directly-attached case first, which is
+/// exact and free, so a Windows node on a shared subnet is unaffected.
+fn connect_outcome(addr: SocketAddr) -> Option<Result<(), std::io::ErrorKind>> {
+    match TcpStream::connect_timeout(&addr, PROBE_TIMEOUT) {
+        Ok(_) => Some(Ok(())),
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => None,
+        Err(e) => Some(Err(e.kind())),
     }
 }
 
@@ -276,10 +314,54 @@ mod tests {
         /// Nothing listens on the rendezvous port until rank 0 starts, so a
         /// refused connection is the expected answer from a healthy peer — and
         /// the one that separates it from a link going nowhere.
+        // Not on Windows: Defender Firewall drops the SYN to a closed port
+        // rather than resetting it, so there is no refusal to observe. That is
+        // a property of the platform, not of this code, and asserting it there
+        // would be asserting the firewall's configuration. The rule this probe
+        // applies is covered on every platform by the test below.
+        #[cfg(not(windows))]
         #[test]
         fn a_refused_connection_counts_as_reachable() {
-            // Loopback with nothing bound refuses immediately.
-            assert!(answers("127.0.0.1", 1));
+            // The port number is reserved with a UDP socket, and TCP is probed
+            // on it. Two wrong ways to pick this port were tried first: a low
+            // fixed one (port 1 is filtered on some hosts, and a filtered port
+            // answers with silence, not a refusal), and a TCP port this process
+            // had just released — which leaves TCP TIME_WAIT behind, and a
+            // socket in TIME_WAIT drops the SYN instead of resetting it. A UDP
+            // reservation has neither problem: nothing has ever listened on
+            // that TCP port, so the stack refuses immediately.
+            let udp = std::net::UdpSocket::bind("127.0.0.1:0").expect("reserve a port");
+            let port = udp.local_addr().expect("addr").port();
+            let ip = "127.0.0.1".parse().expect("ip");
+            // Reported with what the probe actually saw. "assertion failed:
+            // answers(...)" names neither the port nor the reason, which is the
+            // whole question when this fails on a platform nobody is sitting at.
+            let via_timeout =
+                std::net::TcpStream::connect_timeout(&SocketAddr::new(ip, port), PROBE_TIMEOUT)
+                    .err()
+                    .map(|e| e.kind());
+            assert!(
+                answers("127.0.0.1", port),
+                "a closed loopback port must read as reachable; \
+                 port {port} gave {via_timeout:?}"
+            );
+        }
+
+        /// The classification, without a socket. `answers` needs a real port
+        /// to exercise, so this pins the RULE on its own: which outcomes mean
+        /// "the host is there" and which mean "nothing is".
+        #[test]
+        fn silence_is_not_an_answer_but_a_refusal_is() {
+            use std::io::ErrorKind as E;
+            assert!(super::super::is_an_answer(Ok(())));
+            assert!(super::super::is_an_answer(Err(E::ConnectionRefused)));
+            assert!(super::super::is_an_answer(Err(E::ConnectionReset)));
+            // A host that is not there answers quickly and must still read as
+            // unreachable — the case a "did it come back fast?" rule would get
+            // exactly backwards.
+            assert!(!super::super::is_an_answer(Err(E::HostUnreachable)));
+            assert!(!super::super::is_an_answer(Err(E::NetworkUnreachable)));
+            assert!(!super::super::is_an_answer(Err(E::TimedOut)));
         }
 
         #[test]

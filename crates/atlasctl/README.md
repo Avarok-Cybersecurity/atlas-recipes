@@ -28,6 +28,8 @@ registry can supply recipe data but can never cause a command to run. See
 for why that matters and what it replaces.
 
 Requires Docker to launch anything; `list`, `show`, and `run --print` work
-without it. Linux and macOS; Windows is not supported.
+without it. Linux, macOS and Windows — on Windows the agent is supervised by
+a Task Scheduler task at logon rather than a service, because a service runs
+in session 0 and cannot reach Docker Desktop's per-user named pipe.
 
 AGPL-3.0-only.

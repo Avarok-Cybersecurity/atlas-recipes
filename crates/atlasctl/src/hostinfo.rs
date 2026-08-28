@@ -6,16 +6,15 @@
 //! Everything downstream takes the resulting snapshot, which is what keeps
 //! translation pure and reproducible.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use atlasctl_core::host::HostSnapshot;
 use std::collections::BTreeMap;
 
 /// Capture the current host.
 pub fn snapshot() -> Result<HostSnapshot> {
-    let home = std::env::var("HOME").context("HOME is not set")?;
+    let home = atlasctl_core::platform::home_string()?;
     Ok(HostSnapshot {
-        uid: rustix::process::getuid().as_raw(),
-        gid: rustix::process::getgid().as_raw(),
+        posix_user: atlasctl_core::platform::posix_user(),
         hf_cache_dir: hf_cache_dir(&home),
         home,
         env: std::env::vars().collect::<BTreeMap<_, _>>(),
@@ -28,7 +27,13 @@ pub fn snapshot() -> Result<HostSnapshot> {
 /// convention every HuggingFace tool follows; otherwise the documented default
 /// under the user's home directory.
 fn hf_cache_dir(home: &str) -> String {
-    std::env::var("HF_HOME").unwrap_or_else(|_| format!("{home}/.cache/huggingface"))
+    std::env::var("HF_HOME").unwrap_or_else(|_| {
+        std::path::Path::new(home)
+            .join(".cache")
+            .join("huggingface")
+            .display()
+            .to_string()
+    })
 }
 
 /// Where atlasctl keeps its configuration.
@@ -73,17 +78,12 @@ pub fn usable_config_dir() -> Result<std::path::PathBuf> {
 /// # Errors
 /// If `HOME` is not set.
 pub fn home_dir() -> Result<std::path::PathBuf> {
-    std::env::var("HOME")
-        .map(std::path::PathBuf::from)
-        .context("HOME is not set, so there is nowhere to install a user service")
+    atlasctl_core::platform::home_dir()
 }
 
 /// Where atlasctl caches registry clones.
 pub fn cache_dir() -> Result<std::path::PathBuf> {
-    let base = std::env::var("XDG_CACHE_HOME")
-        .or_else(|_| std::env::var("HOME").map(|h| format!("{h}/.cache")))
-        .context("neither XDG_CACHE_HOME nor HOME is set")?;
-    Ok(std::path::PathBuf::from(base).join("atlasctl"))
+    Ok(atlasctl_core::platform::cache_base()?.join("atlasctl"))
 }
 
 #[cfg(test)]
@@ -92,8 +92,17 @@ mod tests {
 
     #[test]
     fn the_snapshot_reflects_the_running_process() {
-        let s = snapshot().expect("HOME is set in any sane environment");
-        assert_eq!(s.uid, rustix::process::getuid().as_raw());
+        let s = snapshot().expect("a home directory is set in any sane environment");
+        // Against the OS, not against the expression `snapshot` assigns.
+        // Comparing to `platform::posix_user()` made both sides the same call,
+        // so the assertion could only catch non-determinism.
+        #[cfg(unix)]
+        {
+            let u = s.posix_user.expect("unix always has one");
+            assert_eq!(u.uid, rustix::process::getuid().as_raw());
+        }
+        #[cfg(windows)]
+        assert!(s.posix_user.is_none());
         assert!(!s.home.is_empty());
         assert!(s.hf_cache_dir.contains("huggingface"));
     }

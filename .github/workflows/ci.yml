@@ -128,4 +128,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - run: shellcheck scripts/*.sh
+      - run: shellcheck scripts/*.sh scripts/tests/*.sh
+      # install.sh is the most-executed thing this project ships and the only
+      # one that runs on a machine before any of our code is trusted. shellcheck
+      # says it parses; this says it DECIDES correctly — which target, whether a
+      # downloaded binary may be executed, and what to do about an agent that
+      # may or may not already be there.
+      - name: install.sh behaviour
+        run: bash scripts/tests/install-sh.test.sh

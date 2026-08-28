@@ -11,6 +11,12 @@
 //! install that writes a unit naming the wrong binary, or one that enables a
 //! service before reloading the daemon that would notice it exists.
 
+mod windows;
+
+pub use windows::windows_log_path;
+#[cfg(test)]
+pub(crate) use windows::windows_quote_for_test;
+
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
@@ -27,14 +33,17 @@ pub enum ServiceKind {
     Systemd,
     /// A launchd LaunchAgent, on macOS.
     Launchd,
+    /// A Task Scheduler task at logon, on Windows.
+    ///
+    /// A task and not a Windows service, and at logon rather than at boot: a
+    /// service runs in session 0, which cannot reach Docker Desktop's per-user
+    /// named pipe, so the agent would come up healthy and be unable to launch
+    /// anything.
+    ScheduledTask,
 }
 
 impl ServiceKind {
     /// What this build targets.
-    ///
-    /// Windows is deliberately absent rather than guessed at: it needs a
-    /// Scheduled Task at logon, not a service, because session 0 cannot reach
-    /// Docker Desktop's per-user named pipe.
     ///
     /// # Errors
     /// On a platform with no supported supervisor.
@@ -43,6 +52,8 @@ impl ServiceKind {
             Ok(Self::Systemd)
         } else if cfg!(target_os = "macos") {
             Ok(Self::Launchd)
+        } else if cfg!(target_os = "windows") {
+            Ok(Self::ScheduledTask)
         } else {
             bail!(
                 "installing a background service is not supported on this platform yet.\n\
@@ -80,6 +91,13 @@ pub struct AgentInvocation {
     /// identity, and rejoined the fleet as a stranger with zero pins. The
     /// operator sees a node that paired a moment ago and is now untrusted.
     pub config_dir: Option<PathBuf>,
+    /// Where the supervised agent's output is appended, when the supervisor
+    /// does not capture it itself.
+    ///
+    /// Recorded in the unit for the same reason the port is: a unit outlives
+    /// the binary that wrote it, and an agent whose log moved without its unit
+    /// knowing writes where nobody is looking.
+    pub log_file: Option<PathBuf>,
 }
 
 impl AgentInvocation {
@@ -111,6 +129,10 @@ impl AgentInvocation {
         }
         if !self.browser {
             v.push("--no-browser".to_owned());
+        }
+        if let Some(log) = &self.log_file {
+            v.push("--log-file".to_owned());
+            v.push(log.display().to_string());
         }
         v
     }
@@ -170,6 +192,7 @@ pub fn plan(kind: ServiceKind, agent: &AgentInvocation, home: &Path, uid: u32) -
     match kind {
         ServiceKind::Systemd => systemd(agent, home),
         ServiceKind::Launchd => launchd(agent, home, uid),
+        ServiceKind::ScheduledTask => windows::scheduled_task(agent, home),
     }
 }
 
@@ -336,7 +359,7 @@ fn shell_words(argv: &[String]) -> String {
 }
 
 /// Escape a value for the plist, which is XML.
-fn xml_escape(s: &str) -> String {
+pub(super) fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

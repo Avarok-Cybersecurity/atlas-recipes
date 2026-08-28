@@ -13,25 +13,25 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// Records every argv, and can be told which ones fail.
-struct Recorder {
+pub(super) struct Recorder {
     calls: Mutex<Vec<String>>,
     fail: Vec<String>,
 }
 
 impl Recorder {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             calls: Mutex::new(Vec::new()),
             fail: Vec::new(),
         }
     }
-    fn failing(what: &str) -> Self {
+    pub(super) fn failing(what: &str) -> Self {
         Self {
             calls: Mutex::new(Vec::new()),
             fail: vec![what.to_owned()],
         }
     }
-    fn calls(&self) -> Vec<String> {
+    pub(super) fn calls(&self) -> Vec<String> {
         self.calls.lock().expect("lock").clone()
     }
 }
@@ -58,14 +58,14 @@ impl ProcessRunner for Recorder {
 
 /// A filesystem that records writes and removals.
 #[derive(Default)]
-struct Files {
-    written: Mutex<Vec<(PathBuf, String)>>,
-    removed: Mutex<Vec<PathBuf>>,
+pub(super) struct Files {
+    pub(super) written: Mutex<Vec<(PathBuf, String)>>,
+    pub(super) removed: Mutex<Vec<PathBuf>>,
     dirs: Mutex<Vec<PathBuf>>,
 }
 
 impl Files {
-    fn body(&self) -> String {
+    pub(super) fn body(&self) -> String {
         self.written
             .lock()
             .expect("lock")
@@ -102,7 +102,7 @@ impl FileSystem for Files {
     }
 }
 
-fn agent() -> AgentInvocation {
+pub(super) fn agent() -> AgentInvocation {
     AgentInvocation {
         exe: PathBuf::from("/home/o/.local/bin/atlasctl"),
         port: 34333,
@@ -110,10 +110,11 @@ fn agent() -> AgentInvocation {
         discovery: true,
         browser: true,
         config_dir: None,
+        log_file: None,
     }
 }
 
-fn home() -> PathBuf {
+pub(super) fn home() -> PathBuf {
     PathBuf::from("/home/o")
 }
 
@@ -396,10 +397,25 @@ fn an_install_asks_whether_the_agent_is_actually_up() {
     let done = install(&fs, &runner, &agent(), &home(), 1000).expect("installs");
     let calls = runner.calls();
     assert!(
-        calls.iter().any(|c| c.contains("is-active")),
+        calls.iter().any(|c| *c == probe()),
         "the install must ask the supervisor, not infer from activation: {calls:?}"
     );
     assert!(done.running, "a healthy install reports running");
+}
+
+/// The verify command this platform's plan uses, taken FROM the plan rather
+/// than spelled out. The property — that an install asks rather than infers —
+/// is the same on every supervisor; only the question differs, and a test that
+/// hardcodes `is-active` asserts it on Linux and nothing anywhere else.
+fn probe() -> String {
+    plan(
+        ServiceKind::detect().expect("a supported supervisor"),
+        &agent(),
+        &home(),
+        1000,
+    )
+    .verify
+    .join(" ")
 }
 
 /// And a crash-looping agent must be reported as installed-but-not-running,
@@ -408,7 +424,7 @@ fn an_install_asks_whether_the_agent_is_actually_up() {
 #[test]
 fn a_crash_looping_agent_is_reported_rather_than_raised() {
     let fs = Files::default();
-    let runner = Recorder::failing("is-active");
+    let runner = Recorder::failing(&probe());
     let done = install(&fs, &runner, &agent(), &home(), 1000)
         .expect("a unit that will not stay up is still an install, not an error");
     assert!(!done.running, "the operator must be told it is not running");
@@ -471,3 +487,5 @@ fn systemd_needs_no_pre_step() {
     let p = plan(ServiceKind::Systemd, &agent(), Path::new("/home/x"), 1000);
     assert!(p.pre_activate.is_empty(), "{:?}", p.pre_activate);
 }
+
+mod windows;

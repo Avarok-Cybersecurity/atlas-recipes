@@ -34,8 +34,16 @@ detect_target() {
     case "$os" in
         Linux)  os_part="unknown-linux-musl" ;;
         Darwin) os_part="apple-darwin" ;;
+        # Git Bash and MSYS reach here on Windows. They are not the way in:
+        # the Windows build is native, and the installer for it is a different
+        # script. Naming that beats "not supported", which was true when it was
+        # written and would now send someone away from a working install.
+        MINGW*|MSYS*|CYGWIN*|Windows_NT)
+            die "this is the unix installer. On Windows, run in PowerShell:
+    irm https://atlasinference.io/install.ps1 | iex"
+            ;;
         *)
-            die "unsupported operating system: $os. atlasctl supports Linux and macOS; Windows is not supported."
+            die "unsupported operating system: $os. atlasctl supports Linux, macOS and Windows."
             ;;
     esac
     case "$arch" in
@@ -54,7 +62,16 @@ verify_checksum() {
     sums="$2"
     name=$(basename "$archive")
 
-    expected=$(grep "  $name\$" "$sums" | awk '{print $1}' || true)
+    # An exact field comparison, not a regex match. `grep "  $name\$"` put the
+    # filename into a pattern, where `.` matches any character — so
+    # `atlasctl-x86_64-unknown-linux-musl.tar.xz` also matched a line naming
+    # `...-muslXtarXxz`. Nothing generates such a name today, which is the whole
+    # problem with leaving it: the check that decides whether to execute a
+    # downloaded binary should not depend on that staying true.
+    #
+    # The `*` form is accepted because `sha256sum -b` writes it, and a SHA256SUMS
+    # produced that way is not malformed.
+    expected=$(awk -v n="$name" '$2 == n || $2 == "*" n { print $1 }' "$sums")
     [ -n "$expected" ] || die "no checksum for $name in SHA256SUMS; refusing to install."
 
     if command -v sha256sum >/dev/null 2>&1; then
@@ -92,6 +109,16 @@ verify_attestation() {
 # atlasctl, and the CLI works fully without an agent — so a failure here is a
 # note, not an error. ATLASCTL_NO_AGENT=1 skips it for anyone who would rather
 # decide when a background process with docker access starts running.
+# Whether a SUPERVISOR knows about the agent, as opposed to a process happening
+# to hold the port. The two are different machines to come back to tomorrow.
+service_installed() {
+    case "$(uname -s)" in
+        Darwin) launchctl print "gui/$(id -u)/io.atlasinference.atlasctl-agent" >/dev/null 2>&1 ;;
+        Linux)  systemctl --user is-enabled atlasctl-agent.service >/dev/null 2>&1 ;;
+        *)      return 1 ;;
+    esac
+}
+
 install_agent() {
     # The binary's path is passed rather than read from a variable another
     # function happened to set: install.sh runs under `set -eu` piped from the
@@ -108,8 +135,13 @@ install_agent() {
     # the machine needs STARTING. A join is the exception: it is the step the
     # operator came for, so it runs regardless.
     if [ -n "${4:-}" ] && [ -z "${2:-}" ]; then
-        if "$exe" agent status >/dev/null 2>&1; then
-            info "the agent is already running — this machine is ready."
+        # BOTH conditions, not just the port. An operator who ran `atlasctl
+        # agent run` by hand has an agent answering on 34333 and NO service, and
+        # skipping on the port alone left it that way: the terminal closes, the
+        # box reboots, and "the website says no agent" is back — the very
+        # symptom this script was changed to fix, reached through another door.
+        if "$exe" agent status >/dev/null 2>&1 && service_installed; then
+            info "the agent is already running as a service — this machine is ready."
             info "if a browser does not see it, pair it: $BIN_NAME agent token"
             return
         fi

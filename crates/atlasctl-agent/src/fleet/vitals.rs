@@ -111,7 +111,12 @@ impl VitalsSource for SystemVitals {
         // than the client's: an idle part at a low clock is normal, the same
         // clock under load is the failure that hides for weeks.
         let device = crate::telemetry::sample_device(self.runner.as_ref(), &self.caps, false);
-        let disk = free_bytes(&self.disk_path);
+        // f64 because it crosses the wire as JSON, where there is no u64.
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "free space is displayed in gigabytes"
+        )]
+        let disk = atlasctl_core::platform::free_bytes(&self.disk_path).map(|b| b as f64);
         let docker_ok = self
             .runner
             .run(&docker_probe_argv())
@@ -141,44 +146,6 @@ pub fn docker_probe_argv() -> Vec<String> {
         "--format".to_owned(),
         "{{.ServerVersion}}".to_owned(),
     ]
-}
-
-/// Free bytes on the filesystem holding `path`, when it can be determined.
-///
-/// A full model cache is a leading cause of launch failure, so this is worth
-/// reporting even though it needs a platform call.
-fn free_bytes(path: &std::path::Path) -> Option<f64> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        // The cache directory may not exist yet on a fresh install, and statvfs
-        // on a missing path fails. What matters is the filesystem that WOULD
-        // hold it, so walk up to the nearest ancestor that does exist.
-        let mut probe = path;
-        while !probe.exists() {
-            match probe.parent() {
-                Some(parent) => probe = parent,
-                None => return None,
-            }
-        }
-        let c = std::ffi::CString::new(probe.as_os_str().as_bytes()).ok()?;
-        // SAFETY: `c` is a valid NUL-terminated path and `stat` is written only
-        // by the call, which reports success before we read it.
-        let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
-        if unsafe { libc::statvfs(c.as_ptr(), &raw mut stat) } != 0 {
-            return None;
-        }
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "free space is displayed in gigabytes"
-        )]
-        Some(stat.f_bavail as f64 * stat.f_frsize as f64)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        None
-    }
 }
 
 /// What this machine is currently serving.

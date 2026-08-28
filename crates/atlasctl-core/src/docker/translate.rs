@@ -221,9 +221,9 @@ pub fn translate(
         ipc: profile.ipc.to_string(),
         shm_size: profile.shm_size.to_string(),
         network: profile.network.to_string(),
-        user: Some(UserSpec {
-            uid: host.uid,
-            gid: host.gid,
+        user: host.posix_user.map(|u| UserSpec {
+            uid: u.uid,
+            gid: u.gid,
         }),
         security_opts: profile
             .security_opts

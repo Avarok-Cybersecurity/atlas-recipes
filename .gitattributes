@@ -1,0 +1,19 @@
+# Line endings are content here, not formatting.
+#
+# The golden files are compared BYTE FOR BYTE against a freshly rendered
+# command. A Windows checkout with the default `core.autocrlf=true` rewrites
+# every LF to CRLF on the way out, so every golden reads one byte per line
+# longer than the string it is compared with — 210 lines, 210 bytes, and a
+# whole-suite failure that says "rendering changed" when nothing did.
+#
+# `text eol=lf` rather than `-text`: these are text and should still be
+# diffable and mergeable, they simply must land on disk the way they were
+# committed.
+* text=auto eol=lf
+
+# Genuinely binary; never touch these.
+*.png binary
+*.webp binary
+*.ico binary
+*.tar.xz binary
+*.zip binary

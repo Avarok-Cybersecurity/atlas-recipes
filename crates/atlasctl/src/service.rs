@@ -133,6 +133,26 @@ pub fn install(
 ///
 /// # Errors
 /// If the platform is unsupported or the unit cannot be deleted.
+/// Whether a supervisor on this machine knows about the agent.
+///
+/// The unit file's presence, not a process probe. The two answer different
+/// questions and an operator needs both: something holding the port is a
+/// machine that works *today*, and a unit on disk is a machine that will still
+/// work tomorrow. Reporting only the first is how "I installed it" and "I ran
+/// it in a terminal" became indistinguishable.
+///
+/// # Errors
+/// If this platform has no supported supervisor.
+pub fn installed_unit(
+    fs: &dyn FileSystem,
+    home: &std::path::Path,
+    uid: u32,
+) -> Result<Option<PathBuf>> {
+    let kind = ServiceKind::detect()?;
+    let p = teardown_plan(kind, home, uid);
+    Ok(fs.exists(&p.unit_path).then_some(p.unit_path))
+}
+
 pub fn uninstall(
     fs: &dyn FileSystem,
     runner: &dyn ProcessRunner,
@@ -176,6 +196,7 @@ fn teardown_plan(kind: ServiceKind, home: &std::path::Path, uid: u32) -> Service
             discovery: true,
             browser: true,
             config_dir: None,
+            log_file: None,
         },
         home,
         uid,
