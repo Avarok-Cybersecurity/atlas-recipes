@@ -6,17 +6,23 @@ use crate::docker::profile::{AmdDevices, NvidiaDevices, ROOTLESS_V1};
 use crate::recipe::Provenance;
 use crate::scalar::ScalarValue;
 
-fn host() -> HostSnapshot {
+pub(super) fn host() -> HostSnapshot {
     HostSnapshot {
         uid: 1000,
         gid: 1000,
         home: "/home/spark".into(),
         hf_cache_dir: "/home/spark/.cache/huggingface".into(),
-        env: [("TOKEN".to_string(), "abc".to_string())].into(),
+        // TOKEN stands for a credential the agent holds; the proxy is the
+        // one class a recipe may legitimately read.
+        env: [
+            ("TOKEN".to_string(), "abc".to_string()),
+            ("HTTPS_PROXY".to_string(), "http://proxy:8080".to_string()),
+        ]
+        .into(),
     }
 }
 
-fn recipe(extra: &str) -> Recipe {
+pub(super) fn recipe(extra: &str) -> Recipe {
     let yaml = format!(
         "model: org/m\ncontainer: img:tag\nruntime: atlas\n\
          defaults:\n  port: 8888\n  gpu_memory_utilization: 0.88\n{extra}"
@@ -31,7 +37,7 @@ fn recipe(extra: &str) -> Recipe {
     .expect("parses")
 }
 
-fn ctx(devices: &dyn super::DeviceProfile) -> LaunchContext<'_> {
+pub(super) fn ctx(devices: &dyn super::DeviceProfile) -> LaunchContext<'_> {
     LaunchContext {
         profile: &ROOTLESS_V1,
         devices,
@@ -39,7 +45,7 @@ fn ctx(devices: &dyn super::DeviceProfile) -> LaunchContext<'_> {
     }
 }
 
-fn plan(r: &Recipe, p: &Placement) -> LaunchPlan {
+pub(super) fn plan(r: &Recipe, p: &Placement) -> LaunchPlan {
     translate(
         r,
         &Overrides::new(),
@@ -86,19 +92,6 @@ fn the_standard_environment_is_offline_by_default() {
     assert_eq!(p.docker.env["HF_HUB_OFFLINE"], "1");
     assert_eq!(p.docker.env["TRANSFORMERS_OFFLINE"], "1");
     assert_eq!(p.docker.env["HF_HOME"], "/cache/huggingface");
-}
-
-#[test]
-fn recipe_env_overrides_the_standard_block_and_expands_variables() {
-    let p = plan(
-        &recipe("env:\n  HF_HOME: /custom\n  KEY: \"pre-$TOKEN\"\n"),
-        &Placement::Solo,
-    );
-    assert_eq!(
-        p.docker.env["HF_HOME"], "/custom",
-        "the recipe is the more specific intent"
-    );
-    assert_eq!(p.docker.env["KEY"], "pre-abc");
 }
 
 #[test]
