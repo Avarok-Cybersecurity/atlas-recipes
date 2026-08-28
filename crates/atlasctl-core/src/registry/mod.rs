@@ -235,19 +235,70 @@ impl RegistrySet {
         })
     }
 
-    /// Names sharing a prefix, to turn a typo into a useful message.
+    /// The names nearest `name`, to turn a typo into a useful message.
+    ///
+    /// Ranked by edit distance rather than by a shared prefix. The prefix rule
+    /// this replaces took the first six characters and then sorted the matches
+    /// ALPHABETICALLY before truncating to three, which fails in the two ways
+    /// a catalogue like this one guarantees:
+    ///
+    /// * `qwen3.8-27b-nvfp4-unsloh` shares `qwen3.` with every qwen3.x recipe,
+    ///   so the three printed were all `qwen3.5-*` while the recipe ONE
+    ///   character away never appeared. Three confident wrong answers is worse
+    ///   than none.
+    /// * `gemma4-31b-nvfp4` — one missing hyphen — shares no six-character
+    ///   prefix with `gemma-4-31b-nvfp4`, so it got no suggestion at all.
     fn close_names(&self, name: &str) -> Vec<String> {
-        let prefix: String = name.chars().take(6).collect();
-        let mut out: Vec<String> = self
+        let typed = name.chars().count();
+        let mut scored: Vec<(usize, String)> = self
             .list()
             .into_iter()
-            .map(|e| e.name)
-            .filter(|n| n.starts_with(&prefix))
+            .map(|e| (edit_distance(name, &e.name), e.name))
+            .filter(|(d, n)| *d <= max_edits(typed.max(n.chars().count())))
             .collect();
-        out.sort();
-        out.truncate(3);
-        out
+        // Distance first, then the name, so the list is stable run to run.
+        scored.sort_by(|x, y| x.0.cmp(&y.0).then_with(|| x.1.cmp(&y.1)));
+        scored.into_iter().take(3).map(|(_, n)| n).collect()
     }
+}
+
+/// How far a name may be from what was typed and still be worth printing.
+///
+/// A quarter of the longer of the two names: floored at 2 so a short name
+/// still catches a near miss, and capped at 5 so an unrelated string prints
+/// nothing rather than three wrong guesses.
+const fn max_edits(len: usize) -> usize {
+    match len / 4 {
+        0 | 1 => 2,
+        n if n > 5 => 5,
+        n => n,
+    }
+}
+
+/// Levenshtein distance over chars, two rows.
+///
+/// Recipe names are short and the catalogue is small, so the allocation per
+/// call is not worth avoiding.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    if a.is_empty() {
+        return b.len();
+    }
+    if b.is_empty() {
+        return a.len();
+    }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur: Vec<usize> = vec![0; b.len() + 1];
+    for (i, ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
 }
 
 fn r#ref_display(r: &RecipeRef) -> String {

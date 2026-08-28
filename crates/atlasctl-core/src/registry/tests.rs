@@ -246,3 +246,77 @@ fn a_real_remote_recipe_name_is_still_accepted() {
         );
     }
 }
+
+// ---- typo suggestions ------------------------------------------------------
+//
+// The prefix rule these replace printed three wrong recipes for a typo one
+// character from a real one, and nothing at all for a missing hyphen. Both are
+// pinned below against the real builtin catalogue, so a future change to the
+// ranking has to keep answering them.
+
+#[test]
+fn edit_distance_is_symmetric_and_counts_single_edits() {
+    assert_eq!(super::edit_distance("", ""), 0);
+    assert_eq!(super::edit_distance("abc", ""), 3);
+    assert_eq!(super::edit_distance("", "abc"), 3);
+    assert_eq!(super::edit_distance("abc", "abc"), 0);
+    // one deletion, one insertion, one substitution
+    assert_eq!(super::edit_distance("unsloh", "unsloth"), 1);
+    assert_eq!(super::edit_distance("gemma4", "gemma-4"), 1);
+    assert_eq!(super::edit_distance("abc", "abd"), 1);
+    assert_eq!(super::edit_distance("unsloth", "unsloh"), 1);
+    // multi-byte input must not panic or count bytes
+    assert_eq!(super::edit_distance("héllo", "hello"), 1);
+}
+
+#[test]
+fn the_edit_ceiling_stays_inside_its_stated_bounds() {
+    assert_eq!(super::max_edits(0), 2, "floor");
+    assert_eq!(super::max_edits(7), 2, "floor still applies to short names");
+    assert_eq!(super::max_edits(12), 3);
+    assert_eq!(super::max_edits(20), 5);
+    assert_eq!(super::max_edits(200), 5, "cap");
+}
+
+#[test]
+fn a_one_character_typo_suggests_the_recipe_it_meant() {
+    let reg = RegistrySet::builtin_only();
+    let close = reg.close_names("qwen3.8-27b-nvfp4-unsloh");
+    assert!(
+        close.contains(&"qwen3.8-27b-nvfp4-unsloth".to_string()),
+        "the recipe one character away must be offered, got {close:?}"
+    );
+    assert_eq!(
+        close.first().map(String::as_str),
+        Some("qwen3.8-27b-nvfp4-unsloth"),
+        "and it must be FIRST, not merely present: {close:?}"
+    );
+}
+
+#[test]
+fn a_missing_hyphen_still_finds_the_name() {
+    let reg = RegistrySet::builtin_only();
+    let close = reg.close_names("gemma4-31b-nvfp4");
+    assert!(
+        close.contains(&"gemma-4-31b-nvfp4".to_string()),
+        "a single missing hyphen produced no suggestion under the prefix rule, got {close:?}"
+    );
+}
+
+#[test]
+fn an_unrelated_name_suggests_nothing_rather_than_guessing() {
+    let reg = RegistrySet::builtin_only();
+    assert!(
+        reg.close_names("nope/nothere").is_empty(),
+        "an unrelated string must not draw three confident wrong answers"
+    );
+    assert!(reg.close_names("zzzzzzzzzzzzzzzzzzzz").is_empty());
+}
+
+#[test]
+fn at_most_three_names_are_offered() {
+    let reg = RegistrySet::builtin_only();
+    for probe in ["qwen3.6-27b-nvfp4", "gemma-4-31b-nvfp4", "qwen"] {
+        assert!(reg.close_names(probe).len() <= 3, "{probe}");
+    }
+}
