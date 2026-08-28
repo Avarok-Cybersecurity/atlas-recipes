@@ -91,7 +91,13 @@ jobs:
             $log = "$env:LOCALAPPDATA\atlasctl\atlasctl-agent.log"
             if (Test-Path -LiteralPath $log) {
               Write-Host "--- agent log ($((Get-Item $log).Length) bytes) ---"
-              Get-Content -LiteralPath $log
+              # Piped to Write-Host, not left on the output stream. A bare
+              # `Get-Content` here made this function RETURN the log lines, so
+              # it answered `@(line1, …, $false)` — a truthy array — and
+              # `if (-not (Wait-ForAgent))` never threw. The masking triggered
+              # exactly when a non-empty log existed, which is the diagnosed
+              # death this helper was added to report.
+              Get-Content -LiteralPath $log | Write-Host
             } else {
               Write-Host "no log at $log"
             }

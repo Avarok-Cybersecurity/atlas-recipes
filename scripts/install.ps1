@@ -22,27 +22,48 @@
 # `irm | iex` cannot pass arguments; `[scriptblock]::Create` can, and is the
 # idiom every Windows installer that takes options uses.
 
-param(
-    # `code@host[,host…]`, forwarded verbatim to `agent install --join`, which
-    # is the only thing that understands it.
-    [string]$Join,
-    # "Let the fleet I am joining run models on this machine." A visible switch
-    # on the line the operator pastes, never an implication of joining.
-    [switch]$GrantControl
-)
-
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-# `--join` as well as `-Join`. The shell installer, the docs and the site all
-# say `--join`, and someone translating that line by hand will type it — being
-# refused for a hyphen is not a lesson worth teaching.
-for ($i = 0; $i -lt $args.Count; $i++) {
-    switch -Regex ($args[$i]) {
-        '^--join=(.+)$'   { $Join = $Matches[1] }
-        '^--join$'        { if ($i + 1 -lt $args.Count) { $Join = $args[++$i] } }
-        '^--grant-control$' { $GrantControl = $true }
+# Deliberately NO `param()` block, and every option parsed by hand.
+#
+# `param([string]$Join, …)` makes `$Join` POSITIONAL, and PowerShell binds a
+# `--anything` token to a positional parameter rather than treating it as a
+# switch — so `--join CODE@HOST` bound `--join` itself to `$Join` and stranded
+# the value, `--grant-control` alone BECAME the join target, and
+# `--grant-control --join CODE@HOST` silently dropped the grant. The
+# compatibility loop that was supposed to accept those spellings never saw
+# them, because binding had already happened.
+#
+# With no param block, `$args` holds every token exactly as pasted and one
+# parser handles both spellings. That matters because the shell installer, the
+# docs and the site all say `--join`, and someone translating that line by hand
+# will type it.
+$Join = ''
+$GrantControl = $false
+$i = 0
+while ($i -lt $args.Count) {
+    $tok = [string]$args[$i]
+    switch -Regex ($tok) {
+        '^(--join|-Join)=(.+)$' { $Join = $Matches[2]; break }
+        '^(--join|-Join)$' {
+            if ($i + 1 -ge $args.Count) {
+                # install.sh dies here rather than installing without the step
+                # the operator came for. Silently skipping the join is how
+                # someone walks away believing a machine joined a fleet.
+                Write-Host "[atlas] error: --join needs a value, e.g. --join 12345678@10.10.10.1" -ForegroundColor Red
+                exit 1
+            }
+            $i++; $Join = [string]$args[$i]; break
+        }
+        '^(--grant-control|-GrantControl)$' { $GrantControl = $true; break }
+        default {
+            Write-Host "[atlas] error: unrecognized option $tok" -ForegroundColor Red
+            Write-Host "[atlas] usage: -Join <code>@<host> [-GrantControl]" -ForegroundColor Red
+            exit 1
+        }
     }
+    $i++
 }
 
 $Repo    = 'Avarok-Cybersecurity/atlas-recipes'
@@ -289,7 +310,7 @@ try {
     }
 
     Test-Docker
-    Install-Agent -Exe $exe -SameVersion $sameVersion -JoinTarget $Join -Grant $GrantControl.IsPresent
+    Install-Agent -Exe $exe -SameVersion $sameVersion -JoinTarget $Join -Grant $GrantControl
 
     Write-Info "done. Try:"
     Write-Info "    $BinName list"

@@ -75,10 +75,17 @@ pub fn status_advice(port: u16, installed: bool) -> Vec<String> {
              Install and start one with:  {install}"
         ));
     }
-    out.push(
-        "or run it in this terminal, for as long as it stays open:\n  atlasctl agent run"
-            .to_owned(),
-    );
+    // The port travels here too. An operator probing 9000 who follows this
+    // starts an agent on 34333 — the same second-guessing of a named port the
+    // install suggestion above avoids, one line further down.
+    let run = if port == atlasctl_agent::DEFAULT_PORT {
+        "atlasctl agent run".to_owned()
+    } else {
+        format!("atlasctl agent run --port {port}")
+    };
+    out.push(format!(
+        "or run it in this terminal, for as long as it stays open:\n  {run}"
+    ));
     out
 }
 
@@ -154,6 +161,9 @@ mod status_tests {
     fn a_named_port_is_carried_into_the_suggestion() {
         let a = status_advice(9000, true).join("\n");
         assert!(a.contains("agent install --port 9000"), "{a}");
+        // Both suggestions, not just the first. Either one dropping the port
+        // moves the agent the operator was trying to restart.
+        assert!(a.contains("agent run --port 9000"), "{a}");
         // On the default port the INSTALL line carries no flag: adding one
         // would pin today's default into a command that outlives it. The
         // separate "check another port" hint legitimately names the flag, so

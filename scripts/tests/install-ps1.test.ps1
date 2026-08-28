@@ -119,6 +119,11 @@ Write-Host 'REACHED-THE-LINE-AFTER'
     else { Bad 'a refusal exits non-zero' "exit was $LASTEXITCODE" }
     if ($childOut -notmatch 'REACHED-THE-LINE-AFTER') { Ok 'a refusal stops the script' }
     else { Bad 'a refusal stops the script' 'execution continued past the refusal' }
+    # And prove the child got as far as the CHECK. Exit 1 with no sentinel is
+    # also what a harness that died on its own Get-Content looks like, so
+    # without this the pair would pass while testing nothing.
+    if ($childOut -match 'checksum mismatch') { Ok 'the child reached the checksum comparison' }
+    else { Bad 'the child reached the checksum comparison' $childOut }
 
     # --- Get-Version ----------------------------------------------------------
     # An unreadable or absent binary must compare UNEQUAL, which lands on the

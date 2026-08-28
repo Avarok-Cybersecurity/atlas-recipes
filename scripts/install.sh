@@ -75,7 +75,11 @@ verify_checksum() {
     # refused rather than resolved. Taking the first (or the last, as the
     # PowerShell installer did) means a stale entry beside a current one decides
     # silently which bytes are acceptable.
-    expected=$(awk -v n="$name" '$2 == n || $2 == "*" n { print $1 }' "$sums" | sort -u)
+    # Lowercased before de-duplicating. PowerShell's `-ne` is case-INsensitive,
+    # so a SUMS carrying the same hash twice in different letter case was an
+    # "identical duplicate, verifies" on Windows and a "different hashes,
+    # refuse" here — one release, two verdicts.
+    expected=$(awk -v n="$name" '$2 == n || $2 == "*" n { print tolower($1) }' "$sums" | sort -u)
     case "$expected" in
         *"
 "*) die "SHA256SUMS lists $name more than once, with different hashes. Refusing to install." ;;

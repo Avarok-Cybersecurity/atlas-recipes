@@ -5,6 +5,16 @@
 
 use super::*;
 
+/// Serialises the two tests that read or write `PATH`.
+///
+/// `cargo test` runs a binary's tests in PARALLEL threads, so clobbering the
+/// process-wide `PATH` raced the `which` test in the same binary — and
+/// concurrent `setenv`/`getenv` is undefined behaviour on glibc, which is why
+/// `set_var` is `unsafe` at all. The SAFETY comment claiming a single-threaded
+/// test process was simply wrong.
+#[cfg(unix)]
+static PATH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// The bases must be BELOW the home directory, not merely different from
 /// it. Asserting only inequality passed on the one configuration where
 /// "below" is false — a redirected `%LOCALAPPDATA%` — which is the case
@@ -86,6 +96,11 @@ fn free_space_walks_up_to_a_parent_that_exists() {
 /// which reported every tool on the machine as missing.
 #[test]
 fn which_finds_a_real_program_and_not_an_invented_one() {
+    // Reads PATH, so it must not run while the test below has replaced it.
+    #[cfg(unix)]
+    let _guard = PATH_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let real = if cfg!(windows) { "cmd" } else { "sh" };
     assert!(which(real).is_some(), "{real} must be on PATH");
     assert!(which("definitely-not-a-real-binary-xyz").is_none());
@@ -97,6 +112,10 @@ fn which_finds_a_real_program_and_not_an_invented_one() {
 #[cfg(unix)]
 #[test]
 fn a_readable_file_that_is_not_executable_is_not_found() {
+    // Held for the whole test: the mutation below is process-wide.
+    let _guard = PATH_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     use std::os::unix::fs::PermissionsExt;
     let d = std::env::temp_dir().join(format!("atlasctl-which-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
@@ -106,7 +125,8 @@ fn a_readable_file_that_is_not_executable_is_not_found() {
     std::fs::write(&p, b"not a program").expect("write");
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).expect("chmod");
 
-    // SAFETY: single-threaded test process; PATH is restored below.
+    // SAFETY: PATH_LOCK is held, so no other test in this binary reads or
+    // writes the environment concurrently; PATH is restored below.
     let saved = std::env::var_os("PATH");
     unsafe { std::env::set_var("PATH", &d) };
     let found = which(name);
