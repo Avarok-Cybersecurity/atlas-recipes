@@ -82,6 +82,15 @@ impl RemoteRegistry {
     /// Load one recipe by name.
     pub fn load(&self, name: &str) -> Option<Result<Recipe, RecipeError>> {
         let fs = self.fs.as_ref()?;
+        // The name is joined onto a directory, so it decides which file is
+        // read. `RecipeRef::parse` accepts anything after the `@registry/`,
+        // including `../../..`, and one caller — `RankAssignment.recipe` — is
+        // an unvalidated string from whichever node is acting as head. Without
+        // this, a scoped ref could walk out of the cache and have any `*.yaml`
+        // on the box read and parsed as a recipe.
+        if !is_safe_recipe_name(name) {
+            return None;
+        }
         let path = self.recipe_dir().join(format!("{name}.yaml"));
         let yaml = fs.read_to_string(&path).ok()?;
         Some(Recipe::parse(
@@ -191,4 +200,18 @@ impl RemoteStore {
         }
         Ok(())
     }
+}
+
+/// Whether a scoped name may be joined onto the cache directory.
+///
+/// A remote name is `family/leaf`, so slashes are legitimate and cannot simply
+/// be banned. Each SEGMENT must be a valid `RecipeId` instead — the alphabet
+/// that already exists for exactly this reason, whose own doc says "`..` and
+/// `/` would let it escape a directory". `..` fails it because an id must
+/// start with a letter or digit.
+pub(crate) fn is_safe_recipe_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .split('/')
+            .all(|seg| atlasctl_protocol::RecipeId::parse(seg).is_ok())
 }

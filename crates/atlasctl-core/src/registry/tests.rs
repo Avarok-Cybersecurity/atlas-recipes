@@ -207,3 +207,42 @@ fn listing_reports_provenance_for_every_entry() {
             .any(|e| e.name == "extra" && e.registry == "third")
     );
 }
+
+/// `RecipeRef::parse` takes everything after `@registry/` verbatim, and one
+/// caller — a `RankAssignment` from whichever node is acting as head — is an
+/// unvalidated string. The name is then joined onto the cache directory, so it
+/// decides which file is read.
+#[test]
+fn a_scoped_name_cannot_walk_out_of_the_cache() {
+    use crate::registry::remote::is_safe_recipe_name;
+    for hostile in [
+        "../../../etc/hosts",
+        "..",
+        "a/../../b",
+        "/etc/passwd",
+        "",
+        "a//b",
+    ] {
+        assert!(
+            !is_safe_recipe_name(hostile),
+            "{hostile:?} must not be joined onto the recipe directory"
+        );
+    }
+}
+
+/// And the shape a real remote recipe has must still resolve — the guard is
+/// per-segment precisely so `family/leaf` keeps working.
+#[test]
+fn a_real_remote_recipe_name_is_still_accepted() {
+    use crate::registry::remote::is_safe_recipe_name;
+    for ok in [
+        "qwen3.6/qwen3.6-27b-nvfp4-unsloth",
+        "gemma4/gemma-4-26b-a4b",
+        "solo",
+    ] {
+        assert!(
+            is_safe_recipe_name(ok),
+            "{ok:?} is a legitimate remote name"
+        );
+    }
+}
