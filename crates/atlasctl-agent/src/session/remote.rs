@@ -239,6 +239,14 @@ fn rep_to_msg(
             on,
             via,
         },
+        // `by` is dropped: the browser's `Error` frame has no field for it,
+        // and giving it one would change a frame every call site builds. The
+        // attribution it carried is not lost — a relay's own failure names
+        // itself inside `RelayRefused.via`, and a target's refusal already
+        // names itself in `ControlRefused.node`. What `by` alone could still
+        // tell us is a relay refusing with some THIRD error kind, which no
+        // path emits today; if one appears, that is the moment to widen the
+        // frame rather than now.
         (_, ControlRep::Refused { by: _, error }) => err(Some(id), error),
         (_, other) => err(
             Some(id),

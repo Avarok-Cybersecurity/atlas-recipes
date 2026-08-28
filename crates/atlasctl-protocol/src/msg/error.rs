@@ -100,12 +100,21 @@ pub enum AgentError {
 
     /// A relay declined or failed to forward: requester not granted control,
     /// target not in the relay's own pin store, dial failed, or the answer
-    /// budget elapsed. `node` is the TARGET; the refusing relay is named in
-    /// `ControlRep::Refused.by` / the reply's `via`.
+    /// budget elapsed. `node` is the TARGET, `via` the relay that refused.
     #[error("the relay did not forward to `{node}`: {detail}")]
     RelayRefused {
         /// The target the relay was asked to reach.
         node: crate::fleet::NodeId,
+        /// The RELAY that refused — the machine to go look at.
+        ///
+        /// Carried structurally because `node` is the *target*: without this
+        /// a relay's own failure reads as the target's and sends the operator
+        /// to the wrong box. `None` is not "anonymous relay" — it is nobody
+        /// having said, which is what an agent built before this field
+        /// reports. Optional so the peer wire stays readable in both
+        /// directions and this needs no `PROTOCOL_VERSION` bump.
+        #[serde(default)]
+        via: Option<crate::fleet::NodeId>,
         /// The relay's stated reason.
         detail: String,
     },

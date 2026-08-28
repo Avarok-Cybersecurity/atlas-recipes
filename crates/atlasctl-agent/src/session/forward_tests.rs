@@ -389,6 +389,7 @@ fn a_chain_refusal_surfaces_typed_under_the_request_id() {
                 by: relay_id(),
                 error: AgentError::RelayRefused {
                     node: target(),
+                    via: Some(relay_id()),
                     detail: "dial failed".into(),
                 },
             },
@@ -407,8 +408,8 @@ fn a_chain_refusal_surfaces_typed_under_the_request_id() {
             &out[0],
             ServerMsg::Error {
                 id: Some(4),
-                error: AgentError::RelayRefused { node, .. },
-            } if *node == target()
+                error: AgentError::RelayRefused { node, via, .. },
+            } if *node == target() && *via == Some(relay_id())
         ),
         "got {:?}",
         out[0]

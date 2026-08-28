@@ -362,9 +362,17 @@ fn a_protocol_3_reply_decodes_with_no_provenance() {
 }
 
 const FP: &str = "3f2a1b0c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8";
+const RELAY_FP: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
 
 fn peer() -> crate::fleet::NodeId {
     crate::fleet::NodeId::parse(FP).expect("fixture is a valid fingerprint")
+}
+
+/// A DIFFERENT machine from [`peer`] — a relay's refusal names two nodes, and
+/// a round trip that used one id for both would pass even if the wire glued
+/// the fields together.
+fn relay_peer() -> crate::fleet::NodeId {
+    crate::fleet::NodeId::parse(RELAY_FP).expect("fixture is a valid fingerprint")
 }
 
 #[test]
@@ -454,6 +462,7 @@ fn the_routing_errors_carry_machine_readable_codes_and_round_trip() {
         },
         AgentError::RelayRefused {
             node: peer(),
+            via: Some(relay_peer()),
             detail: "requester lacks the controller grant on this machine".into(),
         },
         AgentError::ControlRefused {
