@@ -417,28 +417,22 @@ fn a_paired_peers_address_survives_this_agent_restarting() {
     let t = Tmp::new("addrmem");
     let peer = Identity::generate();
     let pins = PinStore::new(&t.0);
+    // The address is recorded by the PAIRING — `peer add` pins the address the
+    // ceremony actually completed over — and refreshed by an authenticated
+    // poll. It used to be written here by `observe`, from an unauthenticated
+    // beacon; see `a_beacon_cannot_move_a_pinned_peer` for why it is not.
     record_pairing(
         &pins,
         peer.id(),
         &hex::encode(peer.public().as_bytes()),
         DisplayName::new("spark-43fa"),
         0,
-        None,
+        Some("10.10.10.10".to_owned()),
         false,
     )
     .expect("pin");
 
-    // First run: a beacon arrives, and the address is remembered.
-    let first = fleet_at(&t.0);
-    first.observe(beacon(peer.id(), "spark-43fa", true));
-    assert_eq!(
-        pins.load().expect("read")[&peer.id()]
-            .last_address
-            .as_deref(),
-        Some("10.10.10.10")
-    );
-
-    // Second run: fresh process, no sightings at all.
+    // A fresh process, no sightings at all.
     let restarted = fleet_at(&t.0);
     let listed = restarted
         .nodes()
