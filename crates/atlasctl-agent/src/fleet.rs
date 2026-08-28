@@ -25,6 +25,9 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
+#[path = "fleet/sightings_tests.rs"]
+mod sightings_tests;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
@@ -178,6 +181,21 @@ impl std::fmt::Debug for LocalFleet {
     }
 }
 
+/// Most unpinned machines the sightings table will hold.
+///
+/// mDNS is unauthenticated: anything on the LAN can announce any id it likes,
+/// and `prune` only drops a sighting after `UNREACHABLE_AFTER`. Without a cap,
+/// a burst of beacons with random ids grows this table for two minutes at
+/// whatever rate the network allows — memory spent on machines that do not
+/// exist.
+///
+/// 256 is far above any real fleet (the design target is 1-8 machines) and far
+/// below a number that costs anything, so a legitimate network never meets it.
+/// PINNED peers are exempt: a machine you have paired is never evicted to make
+/// room for a stranger, which is the property that makes this safe to bound at
+/// all.
+const MAX_SIGHTINGS: usize = 256;
+
 impl LocalFleet {
     /// Build a view of the fleet from this machine's facts.
     #[must_use]
@@ -282,6 +300,24 @@ impl LocalFleet {
             let _ = remember_address(&self.pins, beacon.id, &addr);
         }
         if let Ok(mut seen) = self.seen.lock() {
+            // Refreshing something already here, or something we have pinned,
+            // is always allowed — the cap exists to stop strangers accumulating,
+            // not to evict the fleet.
+            let known = seen.contains_key(&beacon.id);
+            if !known && seen.len() >= MAX_SIGHTINGS {
+                let pinned = self
+                    .pins
+                    .load()
+                    .map(|p| p.contains_key(&beacon.id))
+                    .unwrap_or(false);
+                if !pinned {
+                    // Dropped rather than evicting an existing entry: choosing a
+                    // victim would let a flood of beacons push the real fleet out
+                    // one machine at a time, which is the attack this bound is
+                    // for. The table drains on its own within UNREACHABLE_AFTER.
+                    return;
+                }
+            }
             seen.insert(
                 beacon.id,
                 Seen {
