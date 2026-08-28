@@ -243,3 +243,51 @@ fn uninstalling_something_that_was_never_installed_succeeds() {
     let r = Recorder::failing("Unregister-ScheduledTask");
     uninstall(&fs, &r, &home(), 0).expect("must not fail");
 }
+
+/// The case that let a quoting bug survive: a backslash immediately BEFORE a
+/// quote, where `CommandLineToArgvW` treats it as an escape. The run was being
+/// emitted `3n + 1` times instead of `2n + 1`, so `a\"b` parsed back as `a\\b`
+/// — the quote silently gone. Not reachable through today's argv, since `"` is
+/// illegal in a Windows path, but the quoter claims to be the general rule.
+#[test]
+fn a_backslash_before_a_quote_doubles_rather_than_triples() {
+    // Re-parsed the way Windows would, so the assertion is about the ROUND
+    // TRIP rather than about a spelling of the escaped form.
+    let round_trip = |arg: &str| -> String {
+        let quoted = crate::service::plan::windows_quote_for_test(arg);
+        let mut out = String::new();
+        let mut in_quotes = false;
+        let mut slashes = 0usize;
+        for c in quoted.chars() {
+            match c {
+                '\\' => slashes += 1,
+                '"' => {
+                    out.extend(std::iter::repeat_n('\\', slashes / 2));
+                    if slashes % 2 == 1 {
+                        out.push('"');
+                    } else {
+                        in_quotes = !in_quotes;
+                    }
+                    slashes = 0;
+                }
+                _ => {
+                    out.extend(std::iter::repeat_n('\\', slashes));
+                    slashes = 0;
+                    out.push(c);
+                }
+            }
+        }
+        out.extend(std::iter::repeat_n('\\', slashes));
+        out
+    };
+    for arg in [
+        r#"a\"b"#,
+        r#"x\\"y"#,
+        r#""quoted""#,
+        r"C:\Users\o\state dir\",
+        r"plain",
+        r"with space",
+    ] {
+        assert_eq!(round_trip(arg), arg, "quoting {arg:?} did not survive");
+    }
+}

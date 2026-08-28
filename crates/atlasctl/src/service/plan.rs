@@ -14,6 +14,8 @@
 mod windows;
 
 pub use windows::windows_log_path;
+#[cfg(test)]
+pub(crate) use windows::windows_quote_for_test;
 
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};

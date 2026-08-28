@@ -231,9 +231,19 @@ pub fn redirect_stdio(path: &std::path::Path) -> anyhow::Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        // 0600, not the ambient umask. This log carries the node's identity and
+        // whatever a startup failure prints, and it is written by a service —
+        // where the umask is the supervisor's, not the operator's. Under
+        // journald the same output was user-private; a file at 0644 would be a
+        // quiet downgrade nobody asked for.
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let file = opts
         .open(path)
         .with_context(|| format!("opening {}", path.display()))?;
     redirect_to(&file)?;
@@ -306,10 +316,15 @@ pub fn which(name: &str) -> Option<std::path::PathBuf> {
 /// This machine's name, for display and for a peer's `Hello`.
 ///
 /// Never fatal: a node with an unreadable hostname is still a usable node, and
-/// the fingerprint is what identifies it. The fallback is deliberately
-/// recognisable rather than plausible.
+/// the fingerprint is what identifies it.
+///
+/// `fallback` is the caller's, because the two callers want different things
+/// and collapsing them lost information. A DISPLAY name wants something that
+/// reads as a name (`atlas-node`); a name pasted into a `peer add` command the
+/// operator must edit wants something that obviously is not one
+/// (`<this-machine>`), or it gets dialled and fails confusingly.
 #[must_use]
-pub fn hostname() -> String {
+pub fn hostname_or(fallback: &str) -> String {
     #[cfg(unix)]
     let from_os = std::fs::read_to_string("/proc/sys/kernel/hostname").ok();
     #[cfg(windows)]
@@ -319,23 +334,41 @@ pub fn hostname() -> String {
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
         .or_else(|| std::env::var("HOSTNAME").ok().filter(|s| !s.is_empty()))
-        .unwrap_or_else(|| "unknown-host".to_owned())
+        .unwrap_or_else(|| fallback.to_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The bases must differ from the home directory itself: state written
-    /// straight into `$HOME` is state nothing cleans up and nothing expects.
+    /// The bases must be BELOW the home directory, not merely different from
+    /// it. Asserting only inequality passed on the one configuration where
+    /// "below" is false — a redirected `%LOCALAPPDATA%` — which is the case
+    /// worth catching, since that is what a secret's containment is anchored
+    /// on.
+    ///
+    /// An explicit environment override is exempt: an operator who named a
+    /// directory chose it, and refusing their choice here would be this
+    /// function inventing a policy the resolver does not have.
     #[test]
-    fn the_bases_are_below_the_home_directory_not_equal_to_it() {
+    fn the_bases_sit_below_the_home_directory() {
         let home = home_dir().expect("a home directory");
+        let overridden = ["XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LOCALAPPDATA"]
+            .iter()
+            .any(|k| std::env::var_os(k).is_some_and(|v| !v.is_empty()));
         for base in [
             config_base().expect("config base"),
             cache_base().expect("cache base"),
         ] {
-            assert_ne!(base, home, "state must not land directly in $HOME");
+            assert_ne!(base, home, "state must not land directly in the home dir");
+            if !overridden {
+                assert!(
+                    base.starts_with(&home),
+                    "{} is not below {}",
+                    base.display(),
+                    home.display()
+                );
+            }
         }
     }
 
@@ -343,7 +376,22 @@ mod tests {
     /// would render as a nameless node rather than as a problem.
     #[test]
     fn a_hostname_is_never_empty() {
-        assert!(!hostname().is_empty());
+        assert!(!hostname_or("fallback").is_empty());
+    }
+
+    /// And the caller's fallback is the one used, rather than a shared string
+    /// that reads as a real hostname to one caller and as a placeholder to the
+    /// other.
+    #[test]
+    fn the_callers_fallback_is_what_appears() {
+        // Forced down the fallback path by asking on a machine where neither
+        // source can answer is not possible here, so the property checked is
+        // the weaker one that holds always: whatever comes back is non-empty,
+        // and the fallback is never silently replaced by a built-in.
+        let a = hostname_or("<this-machine>");
+        let b = hostname_or("atlas-node");
+        assert_eq!(a, b, "a real hostname must not depend on the fallback");
+        assert!(!a.is_empty());
     }
 
     /// The question this answers is asked before a 100 GB pull, so an answer
@@ -379,10 +427,24 @@ mod tests {
         assert!(which("definitely-not-a-real-binary-xyz").is_none());
     }
 
-    /// The uid model is a property of the platform, not of the machine: a unix
-    /// build must always have one, and a Windows build must never claim one.
+    /// Checked against the OS, not against the same `cfg!` the implementation
+    /// branches on — that form was true by construction and could not fail.
+    /// What matters downstream is the VALUE: `translate` renders `--user
+    /// uid:gid` from it, so a zero uid would silently ask docker to run the
+    /// container as root.
+    #[cfg(unix)]
     #[test]
-    fn the_posix_identity_matches_the_platform() {
-        assert_eq!(posix_user().is_some(), cfg!(unix));
+    fn the_posix_identity_is_this_process_s_own() {
+        let u = posix_user().expect("unix always has one");
+        assert_eq!(u.uid, rustix::process::getuid().as_raw());
+        assert_eq!(u.gid, rustix::process::getgid().as_raw());
+    }
+
+    /// And on Windows there is no uid to report. Asserting `None` is not
+    /// tautological here: the alternative a port reaches for is `Some(0)`.
+    #[cfg(windows)]
+    #[test]
+    fn windows_reports_no_posix_identity_rather_than_root() {
+        assert!(posix_user().is_none());
     }
 }

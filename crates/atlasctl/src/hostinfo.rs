@@ -93,7 +93,16 @@ mod tests {
     #[test]
     fn the_snapshot_reflects_the_running_process() {
         let s = snapshot().expect("a home directory is set in any sane environment");
-        assert_eq!(s.posix_user, atlasctl_core::platform::posix_user());
+        // Against the OS, not against the expression `snapshot` assigns.
+        // Comparing to `platform::posix_user()` made both sides the same call,
+        // so the assertion could only catch non-determinism.
+        #[cfg(unix)]
+        {
+            let u = s.posix_user.expect("unix always has one");
+            assert_eq!(u.uid, rustix::process::getuid().as_raw());
+        }
+        #[cfg(windows)]
+        assert!(s.posix_user.is_none());
         assert!(!s.home.is_empty());
         assert!(s.hf_cache_dir.contains("huggingface"));
     }

@@ -65,11 +65,13 @@ pub fn install(args: &crate::cli::AgentInstallArgs) -> Result<()> {
             crate::service::plan::ServiceKind::Systemd => {
                 println!("    journalctl --user -u atlasctl-agent -n 50");
             }
-            // Task Scheduler captures nothing, which is why the task runs
-            // through `cmd` with a redirect; this is that file.
+            // Task Scheduler captures nothing, which is why the agent is
+            // started with `--log-file`; this is that file. Quoted, because a
+            // profile path with a space in it is the common case and an
+            // unquoted one fails when pasted.
             crate::service::plan::ServiceKind::ScheduledTask => {
                 println!(
-                    "    Get-Content -Tail 50 {}",
+                    "    Get-Content -Tail 50 '{}'",
                     crate::service::plan::windows_log_path(&home).display()
                 );
             }

@@ -94,35 +94,60 @@ pub fn verify(path: &Path) -> Result<()> {
 /// the inherited ACL is the protection.
 #[cfg(windows)]
 fn verify_location(path: &Path) -> Result<()> {
-    let Ok(profile) = std::env::var("USERPROFILE") else {
-        // Not a silent pass. Without a profile there is no directory whose ACL
-        // can be relied on, and saying so beats writing a secret anyway.
+    // Anchored on the directory this program WRITES under, not on the profile.
+    // Those differ when `%LOCALAPPDATA%` is redirected — a supported Windows
+    // configuration — and anchoring on the profile made atlasctl refuse its own
+    // default config directory. It failed the other way too: a roaming
+    // `%USERPROFILE%` on a UNC share would have PASSED containment while
+    // sitting on exactly the network share this check exists to refuse.
+    let anchor = crate::platform::config_base()
+        .context("there is no directory whose permissions could protect a secret")?;
+    if is_unc(&anchor) {
         bail!(
-            "USERPROFILE is not set, so there is no directory whose permissions \
-             protect {}. Set it, or run atlasctl as a normal desktop user.",
-            path.display()
+            "{} is a network path, so Windows does not restrict who can read \
+             secrets kept there. Point %LOCALAPPDATA% or --config-dir at a \
+             local directory.",
+            anchor.display()
         );
+    }
+
+    // Canonicalise the FILE when it exists, falling back to its parent only
+    // when it does not. Resolving the parent alone left the last component
+    // unchecked, so `…\atlasctl\agent.key` could be a symlink to
+    // `C:\ProgramData\…`: parent inside the profile, bytes outside it, and
+    // `verify` passing forever after.
+    let (resolved, described) = match std::fs::canonicalize(path) {
+        Ok(p) => (p, path.to_path_buf()),
+        Err(_) => {
+            let parent = path.parent().unwrap_or(path);
+            (
+                std::fs::canonicalize(parent)
+                    .with_context(|| format!("resolving {}", parent.display()))?,
+                parent.to_path_buf(),
+            )
+        }
     };
-    let profile = std::path::Path::new(&profile);
-    // Compared after canonicalising the PARENT: the file itself may not exist
-    // yet, and a path containing `..` would otherwise pass a prefix test while
-    // resolving somewhere else entirely.
-    let parent = path.parent().unwrap_or(path);
-    let resolved =
-        std::fs::canonicalize(parent).with_context(|| format!("resolving {}", parent.display()))?;
-    let profile = std::fs::canonicalize(profile)
-        .with_context(|| format!("resolving USERPROFILE {}", profile.display()))?;
-    if !resolved.starts_with(&profile) {
+    let anchor = std::fs::canonicalize(&anchor)
+        .with_context(|| format!("resolving {}", anchor.display()))?;
+    if !resolved.starts_with(&anchor) {
         bail!(
-            "{} is outside your user profile ({}), so Windows does not restrict \
-             who can read it. Keep this node's secrets under \
-             %LOCALAPPDATA%\\atlasctl, or point --config-dir at a directory \
-             inside your profile.",
+            "{} resolves to {}, outside {} — so Windows does not restrict who \
+             can read it. Keep this node's secrets under %LOCALAPPDATA%\\atlasctl, \
+             or point --config-dir at a directory inside it.",
+            described.display(),
             resolved.display(),
-            profile.display()
+            anchor.display()
         );
     }
     Ok(())
+}
+
+/// Whether a path names a network share: `\\server\share`, or the `\\?\UNC\…`
+/// form that canonicalize produces for one.
+#[cfg(windows)]
+fn is_unc(p: &Path) -> bool {
+    let s = p.to_string_lossy();
+    s.starts_with(r"\\?\UNC\") || (s.starts_with(r"\\") && !s.starts_with(r"\\?\"))
 }
 
 #[cfg(test)]
