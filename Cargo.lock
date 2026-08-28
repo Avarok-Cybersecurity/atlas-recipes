@@ -155,12 +155,14 @@ dependencies = [
  "anyhow",
  "atlas-recipes-data",
  "atlasctl-protocol",
+ "libc",
  "rustix",
  "serde",
  "serde_json",
  "serde_yaml_ng",
  "sha2 0.11.0",
  "thiserror",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

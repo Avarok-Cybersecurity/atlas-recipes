@@ -88,7 +88,7 @@ fn check_sparkrun() -> usize {
         return 0;
     };
     let config = std::path::Path::new(&home).join(".config/sparkrun/registries.yaml");
-    let installed = which("sparkrun").is_some();
+    let installed = atlasctl_core::platform::which("sparkrun").is_some();
     let redirected = std::fs::read_to_string(&config)
         .map(|s| s.contains(COMPROMISED_HOST))
         .unwrap_or(false);
@@ -118,14 +118,6 @@ fn check_sparkrun() -> usize {
     1
 }
 
-/// Find a binary on PATH.
-fn which(name: &str) -> Option<std::path::PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|d| d.join(name))
-        .find(|p| p.is_file())
-}
-
 /// Where the agent keeps its identity, its pins and its browser token.
 /// Free space where docker and the model cache live.
 ///
@@ -137,19 +129,8 @@ fn which(name: &str) -> Option<std::path::PathBuf> {
 /// unreadable `df` says nothing about whether there is room, and doctor now
 /// exits non-zero on a problem, so guessing here would fail a healthy box.
 fn check_disk() -> Finding {
-    let out = StdProcessRunner.run(&["df".into(), "-Pk".into(), ".".into()]);
-    let free_kb = out.ok().and_then(|o| {
-        if !o.success() {
-            return None;
-        }
-        o.stdout
-            .lines()
-            .nth(1)
-            .and_then(|l| l.split_whitespace().nth(3).map(str::to_owned))
-            .and_then(|k| k.parse::<u64>().ok())
-    });
-    match free_kb {
-        Some(kb) => doctor_checks::disk_space(kb.saturating_mul(1024), "."),
+    match atlasctl_core::platform::free_bytes(std::path::Path::new(".")) {
+        Some(bytes) => doctor_checks::disk_space(bytes, "."),
         None => doctor_checks::disk_unknown(),
     }
 }
@@ -197,16 +178,5 @@ fn check_reachable() -> Finding {
             doctor_checks::reachable(&addrs)
         }
         Err(e) => doctor_checks::unreadable_interfaces(&format!("{e:#}")),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn which_finds_a_binary_that_exists_and_not_one_that_does_not() {
-        assert!(which("sh").is_some());
-        assert!(which("definitely-not-a-real-binary-xyz").is_none());
     }
 }

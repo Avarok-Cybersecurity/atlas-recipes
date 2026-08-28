@@ -396,10 +396,25 @@ fn an_install_asks_whether_the_agent_is_actually_up() {
     let done = install(&fs, &runner, &agent(), &home(), 1000).expect("installs");
     let calls = runner.calls();
     assert!(
-        calls.iter().any(|c| c.contains("is-active")),
+        calls.iter().any(|c| *c == probe()),
         "the install must ask the supervisor, not infer from activation: {calls:?}"
     );
     assert!(done.running, "a healthy install reports running");
+}
+
+/// The verify command this platform's plan uses, taken FROM the plan rather
+/// than spelled out. The property — that an install asks rather than infers —
+/// is the same on every supervisor; only the question differs, and a test that
+/// hardcodes `is-active` asserts it on Linux and nothing anywhere else.
+fn probe() -> String {
+    plan(
+        ServiceKind::detect().expect("a supported supervisor"),
+        &agent(),
+        &home(),
+        1000,
+    )
+    .verify
+    .join(" ")
 }
 
 /// And a crash-looping agent must be reported as installed-but-not-running,
@@ -408,7 +423,7 @@ fn an_install_asks_whether_the_agent_is_actually_up() {
 #[test]
 fn a_crash_looping_agent_is_reported_rather_than_raised() {
     let fs = Files::default();
-    let runner = Recorder::failing("is-active");
+    let runner = Recorder::failing(&probe());
     let done = install(&fs, &runner, &agent(), &home(), 1000)
         .expect("a unit that will not stay up is still an install, not an error");
     assert!(!done.running, "the operator must be told it is not running");
