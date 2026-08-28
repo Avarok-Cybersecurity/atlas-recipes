@@ -58,7 +58,11 @@ printf 'payload\n' > "$WORK/atlasctl-x86_64-unknown-linux-musl.tar.xz"
 good=$(sha256sum "$WORK/atlasctl-x86_64-unknown-linux-musl.tar.xz" | awk '{print $1}')
 
 # shellcheck source=/dev/null  # generated above, from install.sh
+# Captures the STATUS as well as the output. Asserting only on the message
+# means `die` could lose its `exit 1` and every case here would still pass —
+# while production printed "Refusing to install" and then installed.
 verify() { ( . "$WORK/lib.sh"; verify_checksum "$1" "$2" ) 2>&1; }
+verify_rc() { ( . "$WORK/lib.sh"; verify_checksum "$1" "$2" ) >/dev/null 2>&1; echo $?; }
 
 printf '%s  atlasctl-x86_64-unknown-linux-musl.tar.xz\n' "$good" > "$WORK/SUMS.good"
 contains "a matching checksum is accepted" \
@@ -71,6 +75,22 @@ contains "a mismatched checksum refuses to install" \
 printf '%s  some-other-file.tar.xz\n' "$good" > "$WORK/SUMS.absent"
 contains "an archive with no entry refuses to install" \
     "$(verify "$WORK/atlasctl-x86_64-unknown-linux-musl.tar.xz" "$WORK/SUMS.absent")" "no checksum for"
+
+# A refusal has to STOP the script, not merely say so. Every assertion above is
+# about output; if `die` lost its `exit 1` they would all still pass while the
+# installer went on to run an unverified binary.
+check "a mismatched checksum exits non-zero" "1" \
+    "$(verify_rc "$WORK/atlasctl-x86_64-unknown-linux-musl.tar.xz" "$WORK/SUMS.bad")"
+check "a missing entry exits non-zero" "1" \
+    "$(verify_rc "$WORK/atlasctl-x86_64-unknown-linux-musl.tar.xz" "$WORK/SUMS.absent")"
+check "a good checksum exits zero" "0" \
+    "$(verify_rc "$WORK/atlasctl-x86_64-unknown-linux-musl.tar.xz" "$WORK/SUMS.good")"
+# And the refusal must not be followed by the success line, which is what a
+# `die` that printed and returned would look like.
+case "$(verify "$WORK/atlasctl-x86_64-unknown-linux-musl.tar.xz" "$WORK/SUMS.bad")" in
+    *"checksum verified"*) bad "a refusal must not also report success" "it did" ;;
+    *) ok "a refusal must not also report success" ;;
+esac
 
 # The regression: the name was interpolated into a REGEX, so `.` matched any
 # character and a line naming a DIFFERENT file satisfied the lookup — handing

@@ -131,6 +131,15 @@ pub fn git_update_argv(dest: &Path) -> Vec<Vec<String>> {
             "git".to_string(),
             "-C".to_string(),
             dest.display().to_string(),
+            // Discovery OFF. `-C dest` only sets the working directory; git
+            // then walks UP looking for a repository, so a `dest` that exists
+            // and is NOT one — an interrupted clone, a cache restored without
+            // dotdirs, a hand-edited registries.yaml — resolves to the nearest
+            // ANCESTOR repo. With `XDG_CACHE_HOME` inside a checkout, or a
+            // `$HOME` that is a dotfiles repo, `reset --hard` then destroys the
+            // operator's working tree. `guard_cache_path` proves the PATH is
+            // ours; this proves the REPOSITORY is.
+            "--git-dir=.git".to_string(),
         ];
         v.extend(args.iter().map(|s| (*s).to_string()));
         v

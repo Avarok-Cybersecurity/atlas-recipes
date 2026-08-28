@@ -68,6 +68,26 @@ try {
         Assert-Checksum -Archive $archive -SumsFile $sums
     }
 
+    # --- Die actually exits ---------------------------------------------------
+    # This file REPLACES `Die` with a throw so a refusal is observable, which
+    # puts production's exit path outside the tested surface by construction:
+    # `Die` could stop exiting and nothing above would notice, while the
+    # installer printed "Refusing to install" and then ran the binary. So run
+    # the real one in a child pwsh and assert the status.
+    $child = @"
+`$ErrorActionPreference = 'Stop'
+`$src = Get-Content -Raw -Encoding UTF8 -LiteralPath '$(Join-Path $root 'scripts/install.ps1')'
+Invoke-Expression `$src.Substring(0, `$src.IndexOf('# --- main'))
+Assert-Checksum -Archive '$archive' -SumsFile '$sums'
+Write-Host 'REACHED-THE-LINE-AFTER'
+"@
+    Set-Content -LiteralPath $sums -Value ("0" * 64 + "  atlasctl-x86_64-pc-windows-msvc.zip")
+    $childOut = & pwsh -NoProfile -NonInteractive -Command $child 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 1) { Ok 'a refusal exits non-zero' }
+    else { Bad 'a refusal exits non-zero' "exit was $LASTEXITCODE" }
+    if ($childOut -notmatch 'REACHED-THE-LINE-AFTER') { Ok 'a refusal stops the script' }
+    else { Bad 'a refusal stops the script' 'execution continued past the refusal' }
+
     # --- Get-Version ----------------------------------------------------------
     # An unreadable or absent binary must compare UNEQUAL, which lands on the
     # upgrade path — the safe direction. Reporting a version for a binary that
