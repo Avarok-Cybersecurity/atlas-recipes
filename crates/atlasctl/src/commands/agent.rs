@@ -114,21 +114,33 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     let fabric = atlasctl_agent::fabric::macos::MacFabric::new();
     #[cfg(not(target_os = "macos"))]
     let fabric = atlasctl_agent::fabric::linux::LinuxFabric::new();
-    let addresses = fabric.addresses().unwrap_or_default();
+    // NOT `unwrap_or_default()`. `doctor` learned this already: an
+    // enumeration that FAILED is not a machine with no addresses, and the
+    // line below makes a claim about the hardware ("no usable network link")
+    // that would then be a guess. Keep the two apart — the agent still
+    // starts either way, because it can serve this machine's own browser
+    // without a cluster link, but it must not say which situation it is in
+    // unless it knows.
+    let enumerated = fabric.addresses();
+    let addresses = enumerated
+        .as_ref()
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .to_vec();
     let launchability = match &can_launch {
         Ok(()) => atlasctl_protocol::fleet::Launchability::yes(),
         Err(why) => atlasctl_protocol::fleet::Launchability::no(why.clone()),
     };
     eprintln!("node identity: {}", identity.id().short());
-    if addresses.is_empty() {
-        eprintln!("no usable network link — this agent cannot take part in a cluster");
-    } else {
-        eprintln!(
-            "cluster address: {} ({})",
-            addresses[0].addr,
-            addresses[0].class.label()
-        );
-    }
+    eprintln!(
+        "{}",
+        link_line(
+            enumerated
+                .as_ref()
+                .map(|a| a.first().map(|f| (f.addr.to_string(), f.class.label())))
+                .map_err(|e| format!("{e:#}"))
+        )
+    );
     // Real vitals for this machine. Capabilities are probed once here rather
     // than per sample: on a GB10 that probe is what discovers there is no
     // framebuffer to report, and the answer does not change while we run.
@@ -416,4 +428,67 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         };
         atlasctl_agent::server::serve_on(state, listener).await
     })
+}
+
+/// What to tell the operator about this machine's links, as three distinct
+/// facts rather than two.
+///
+/// The distinction is the whole point: "we could not look" and "we looked and
+/// there is nothing" send a person to different places, and only one of them
+/// is a statement about their network. Pure so it can be tested — the
+/// enumeration it describes shells out, which is why the claim it makes is
+/// worth pinning down separately from the I/O that feeds it.
+fn link_line(first: Result<Option<(String, &'static str)>, String>) -> String {
+    match first {
+        Err(why) => format!(
+            "could not read this machine's network interfaces: {why} \
+             — clustering is off until that is fixed; run `atlasctl doctor`"
+        ),
+        Ok(None) => "no usable network link — this agent cannot take part in a cluster".to_owned(),
+        Ok(Some((addr, class))) => format!("cluster address: {addr} ({class})"),
+    }
+}
+
+#[cfg(test)]
+mod link_line_tests {
+    use super::link_line;
+
+    #[test]
+    fn a_failed_enumeration_is_never_reported_as_an_absent_network() {
+        let e = link_line(Err("running `ip -o -4 addr show`: No such file".into()));
+        assert!(
+            e.contains("could not read"),
+            "the operator must learn we could not look: {e}"
+        );
+        assert!(
+            !e.contains("no usable network link"),
+            "claiming the network is absent when `ip` is missing sends them to \
+             debug hardware that is fine: {e}"
+        );
+        assert!(
+            e.contains("doctor"),
+            "and it must say what to run next: {e}"
+        );
+    }
+
+    #[test]
+    fn an_empty_enumeration_still_says_the_network_is_the_problem() {
+        // The other side of the same coin: when we DID look and found nothing,
+        // hedging would be just as wrong.
+        let e = link_line(Ok(None));
+        assert_eq!(
+            e,
+            "no usable network link — this agent cannot take part in a cluster"
+        );
+    }
+
+    #[test]
+    fn a_found_address_is_reported_with_its_link_class() {
+        // The class is what tells RoCE from Wi-Fi, which is what the operator
+        // needs to know a cluster will actually be fast.
+        assert_eq!(
+            link_line(Ok(Some(("10.10.10.1".to_owned(), "InfiniBand")))),
+            "cluster address: 10.10.10.1 (InfiniBand)"
+        );
+    }
 }
