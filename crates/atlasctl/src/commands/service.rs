@@ -119,42 +119,20 @@ fn join_fleet(join: &crate::joinarg::Join, grant_control: bool) -> Result<()> {
         .build()
         .context("starting a runtime")?;
 
-    let mut tried: Vec<String> = Vec::new();
-    let mut paired = None;
-    for addr in &addrs {
+    // Same walk, same stop rule as pairing a discovered machine: `peer::reach`
+    // owns both, so the joining direction cannot drift from the other one.
+    let (addr, paired) = atlasctl_agent::peer::reach::walk(&addrs, |addr| {
         println!("\njoining the fleet at {addr}…");
-        match rt.block_on(atlasctl_agent::peer::join::dial_and_pair(
+        rt.block_on(atlasctl_agent::peer::join::dial_and_pair(
             &identity,
             pins.clone(),
-            *addr,
+            addr,
             &join.code,
-        )) {
-            Ok(p) => {
-                // Keep the address that WORKED: it is what gets pinned, and
-                // pinning the one we tried first would record a link this
-                // machine has just proved it cannot use.
-                paired = Some((p, *addr));
-                break;
-            }
-            Err(e) => {
-                // Same rule as `fleet::listing`: a machine that answered and
-                // refused has already spent an attempt, and the remaining
-                // addresses are the same machine. Stop, so one mistyped code
-                // costs one try rather than all three.
-                let keep_going = atlasctl_agent::peer::reach::never_reached(&e);
-                tried.push(format!("{addr}: {e:#}"));
-                if !keep_going {
-                    break;
-                }
-                println!("  no answer there; trying the next address…");
-            }
-        }
-    }
-    let (paired, addr) = paired.ok_or_else(|| {
+        ))
+    })
+    .map_err(|e| {
         anyhow::anyhow!(
-            "could not join over {}. The code expires, and is good for one machine only — mint a fresh one if this is not the first try.\n  {}",
-            if tried.len() == 1 { "that address".to_owned() } else { format!("any of {} addresses", tried.len()) },
-            tried.join("\n  ")
+            "could not join the fleet. The code expires, and is good for one machine only — mint a fresh one if this is not the first try.\n  {e:#}"
         )
     })?;
 
