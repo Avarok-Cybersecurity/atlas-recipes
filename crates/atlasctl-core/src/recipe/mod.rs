@@ -107,6 +107,34 @@ pub enum RecipeError {
         /// Recipe name.
         name: String,
     },
+
+    /// A field that lands in an argv position began with `-`.
+    #[error(
+        "{name}: `{field}: {value}` starts with `-`, so it would be read as an \
+         option rather than a value. `RecipeId` forbids this for the same \
+         reason: a leading dash lets a name be parsed as a flag."
+    )]
+    FlagShaped {
+        /// Recipe name.
+        name: String,
+        /// Which field.
+        field: &'static str,
+        /// What it said.
+        value: String,
+    },
+}
+
+/// Refuse a field that would be read as an option in the argv position it
+/// lands in.
+fn flag_shaped(name: &str, field: &'static str, value: &str) -> Result<(), RecipeError> {
+    if value.trim_start().starts_with('-') {
+        return Err(RecipeError::FlagShaped {
+            name: name.to_string(),
+            field,
+            value: value.to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// Why a loaded recipe cannot be launched.
@@ -159,6 +187,14 @@ impl Recipe {
             .ok_or_else(|| RecipeError::MissingModel {
                 name: name.to_string(),
             })?;
+        // `model` is rendered into `spark serve <model>` and `container` into
+        // the image operand of `docker run`, both positionally and both
+        // without a `--` separator ahead of them. A value beginning with `-`
+        // is therefore handed to an option parser: `container: --privileged`
+        // makes docker read a flag and take the NEXT token as the image. These
+        // two are recipe fields, so the audited guarantee that no override
+        // VALUE can become flag-shaped never covered them.
+        flag_shaped(name, "model", &model)?;
 
         let container = raw
             .container
@@ -167,6 +203,7 @@ impl Recipe {
             .ok_or_else(|| RecipeError::MissingContainer {
                 name: name.to_string(),
             })?;
+        flag_shaped(name, "container", &container)?;
 
         let runtime = match raw.runtime.as_deref() {
             Some("atlas") => RuntimeKind::Atlas,
