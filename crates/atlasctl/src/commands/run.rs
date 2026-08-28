@@ -11,6 +11,7 @@ use atlasctl_core::docker::collective::NcclRoce;
 use atlasctl_core::docker::profile::{NvidiaDevices, ROOTLESS_V1};
 use atlasctl_core::docker::translate::{LaunchContext, translate};
 use atlasctl_core::io::{ProcessRunner, StdProcessRunner};
+use atlasctl_core::nearest;
 use atlasctl_core::registry::RecipeRef;
 
 /// Launch a recipe, or print the command it would run.
@@ -51,9 +52,19 @@ pub fn run(args: &RunArgs) -> Result<()> {
     // Say what will not be applied before doing anything, not after. The tool
     // this replaces dropped these settings in silence.
     for u in &plan.unmapped {
+        // Two different mistakes, answered differently. Reading the rendered
+        // command and typing what you saw is not a typo -- `--max-seq-len` is
+        // the key `max_model_len` -- and no distance ranking finds it, so the
+        // table that holds both spellings answers it exactly. Anything else
+        // gets the near-miss list.
+        let hint = if let Some(key) = atlasctl_core::flags::key_for_flag_spelling(&u.key) {
+            format!(". That is the engine's flag name; the setting key is `{key}`")
+        } else {
+            nearest::did_you_mean(&nearest::nearest(&u.key, atlasctl_core::flags::keys()))
+        };
         eprintln!(
             "warning: `{}` is not a setting this version understands; \
-             it will NOT be applied (value: {})",
+             it will NOT be applied (value: {}){hint}",
             u.key, u.rendered
         );
     }
