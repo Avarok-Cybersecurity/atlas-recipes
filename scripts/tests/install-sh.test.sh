@@ -85,6 +85,7 @@ contains "a name that only matches as a regex is not accepted" \
 # with a gh older than 2.49 saw a security warning on a healthy install — which
 # is how an operator learns to scroll past the real one.
 attest() { # gh_state
+    # shellcheck source=/dev/null  # generated above, from install.sh
     ( . "$WORK/lib.sh"
       # shellcheck disable=SC2317  # called indirectly, by verify_attestation
       case "$1" in
