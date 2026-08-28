@@ -192,6 +192,23 @@ fn free_bytes_of_existing(probe: &std::path::Path) -> Option<u64> {
     (ok != 0).then_some(avail)
 }
 
+/// How this platform's shell names the user's home directory.
+///
+/// Used when rendering a command meant to be pasted rather than run: the
+/// literal home directory is replaced with this so the line is not tied to one
+/// account. `$HOME` was emitted unconditionally, and a Windows operator pasting
+/// it into PowerShell gets a volume mounted from a directory literally named
+/// `$HOME` — which docker then creates, empty, and the model is downloaded
+/// again.
+#[must_use]
+pub const fn home_placeholder() -> &'static str {
+    if cfg!(windows) {
+        "$env:USERPROFILE"
+    } else {
+        "$HOME"
+    }
+}
+
 /// Find an executable on `PATH`.
 ///
 /// On Windows a name without an extension is not a program: `docker` is
