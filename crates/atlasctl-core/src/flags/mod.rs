@@ -37,6 +37,25 @@ pub fn lookup(key: &str) -> Option<&'static FlagSpec> {
     ATLAS_FLAGS.iter().find(|s| s.key == key)
 }
 
+/// The recipe key for an engine flag spelled as if it were a key.
+///
+/// Someone reading the rendered command sees `--max-seq-len` and writes
+/// `-o max_seq_len=...`; the key is `max_model_len`. That is not a typo, and no
+/// edit-distance ranking finds it — the two are five edits apart — so it is
+/// answered exactly, from the table that already carries both spellings.
+#[must_use]
+pub fn key_for_flag_spelling(typed: &str) -> Option<&'static str> {
+    ATLAS_FLAGS
+        .iter()
+        .find(|s| s.flag.trim_start_matches('-').replace('-', "_") == typed && s.key != typed)
+        .map(|s| s.key)
+}
+
+/// Every key the table understands, for suggesting a near miss.
+pub fn keys() -> impl Iterator<Item = &'static str> {
+    ATLAS_FLAGS.iter().map(|s| s.key)
+}
+
 /// A resolved key that no flag in the table claims.
 ///
 /// The reference implementation dropped these in silence, which is how nine

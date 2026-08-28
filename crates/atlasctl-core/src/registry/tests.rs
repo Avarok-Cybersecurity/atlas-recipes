@@ -253,30 +253,9 @@ fn a_real_remote_recipe_name_is_still_accepted() {
 // character from a real one, and nothing at all for a missing hyphen. Both are
 // pinned below against the real builtin catalogue, so a future change to the
 // ranking has to keep answering them.
-
-#[test]
-fn edit_distance_is_symmetric_and_counts_single_edits() {
-    assert_eq!(super::edit_distance("", ""), 0);
-    assert_eq!(super::edit_distance("abc", ""), 3);
-    assert_eq!(super::edit_distance("", "abc"), 3);
-    assert_eq!(super::edit_distance("abc", "abc"), 0);
-    // one deletion, one insertion, one substitution
-    assert_eq!(super::edit_distance("unsloh", "unsloth"), 1);
-    assert_eq!(super::edit_distance("gemma4", "gemma-4"), 1);
-    assert_eq!(super::edit_distance("abc", "abd"), 1);
-    assert_eq!(super::edit_distance("unsloth", "unsloh"), 1);
-    // multi-byte input must not panic or count bytes
-    assert_eq!(super::edit_distance("héllo", "hello"), 1);
-}
-
-#[test]
-fn the_edit_ceiling_stays_inside_its_stated_bounds() {
-    assert_eq!(super::max_edits(0), 2, "floor");
-    assert_eq!(super::max_edits(7), 2, "floor still applies to short names");
-    assert_eq!(super::max_edits(12), 3);
-    assert_eq!(super::max_edits(20), 5);
-    assert_eq!(super::max_edits(200), 5, "cap");
-}
+//
+// The ranking itself now lives in `crate::nearest`, with its own tests; what
+// stays here is that the REGISTRY asks it the right question.
 
 #[test]
 fn a_one_character_typo_suggests_the_recipe_it_meant() {

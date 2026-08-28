@@ -11,6 +11,7 @@ pub mod hfcache;
 pub mod host;
 pub mod io;
 pub mod metrics;
+pub mod nearest;
 pub mod recipe;
 pub mod registry;
 pub mod scalar;
