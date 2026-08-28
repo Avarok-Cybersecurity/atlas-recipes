@@ -35,7 +35,7 @@ atlasctl run <recipe> --print              # print the command instead of runnin
 atlasctl logs <recipe> --follow
 atlasctl stop <recipe>
 atlasctl status
-atlasctl doctor                            # check this machine for problems
+atlasctl doctor                            # check this machine for problems (exit 1 if any)
 ```
 
 `--print` is worth knowing about: it shows the exact `docker run` that `run`
