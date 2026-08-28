@@ -239,16 +239,6 @@ fn setting_shaped(value: &str) -> bool {
 /// The accelerator comes from the machine, because the warning is about the
 /// hardware the container will run on and a recipe written for one card is
 /// routinely run on another.
-/// Whether the filesystem that will hold the weights has room for them.
-///
-/// The HF cache, not the working directory: that is where a model lands, and it
-/// is routinely a different filesystem from the one `doctor` reports on.
-fn disk_caution_for(hf_cache_dir: &str) -> Option<String> {
-    let path = std::path::Path::new(hf_cache_dir);
-    let free = atlasctl_core::platform::free_bytes(path)?;
-    super::doctor_checks::disk_caution(free, hf_cache_dir)
-}
-
 fn cautions(argv: &[String]) -> Vec<String> {
     let accelerator =
         atlasctl_agent::telemetry::accelerator_name(&StdProcessRunner).unwrap_or_default();
@@ -262,6 +252,16 @@ fn cautions(argv: &[String]) -> Vec<String> {
             atlasctl_core::settings::caution(&key, value, &accelerator)
         })
         .collect()
+}
+
+/// Whether the filesystem that will hold the weights has room for them.
+///
+/// The HF cache, not the working directory: that is where a model lands, and it
+/// is routinely a different filesystem from the one `doctor` reports on.
+fn disk_caution_for(hf_cache_dir: &str) -> Option<String> {
+    let path = std::path::Path::new(hf_cache_dir);
+    let free = atlasctl_core::platform::free_bytes(path)?;
+    super::doctor_checks::disk_caution(free, hf_cache_dir)
 }
 
 #[cfg(test)]
