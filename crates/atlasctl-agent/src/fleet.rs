@@ -25,6 +25,9 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
+#[path = "fleet/sightings_tests.rs"]
+mod sightings_tests;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
