@@ -136,10 +136,20 @@ attest() { # gh_state
       case "$1" in
         absent)   command() { if [ "$2" = gh ]; then return 1; fi; /usr/bin/env command "$@"; } ;;
         old)      gh() { case "$1" in attestation) return 1 ;; *) return 0 ;; esac; } ;;
-        # capable (attestation --help works) but not signed in
-        loggedout) gh() { case "$1" in attestation) [ "$2" = --help ] ;; auth) return 1 ;; *) return 1 ;; esac; } ;;
-        # capable, signed in, and the verification itself says no
-        broken)   gh() { case "$1" in attestation) [ "$2" = --help ] ;; auth) return 0 ;; *) return 1 ;; esac; } ;;
+        # capable, but never `gh auth login` — the state a machine is in right
+        # after `apt install gh`, and the one a pre-check silently skipped.
+        loggedout) gh() { case "$1$2" in attestation--help) return 0 ;; \
+                     attestationverify) echo "gh: To get started with GitHub CLI, please run: gh auth login"; return 1 ;; \
+                     *) return 1 ;; esac; } ;;
+        # capable and signed in, but GitHub is unreachable. A pre-check cannot
+        # see this case at all, and it must not alarm anyone.
+        offline)  gh() { case "$1$2" in attestation--help) return 0 ;; \
+                     attestationverify) echo "dial tcp: lookup api.github.com: no such host"; return 1 ;; \
+                     *) return 0 ;; esac; } ;;
+        # capable, signed in, reached GitHub, and the answer was no.
+        broken)   gh() { case "$1$2" in attestation--help) return 0 ;; \
+                     attestationverify) echo "verification failed: no matching attestation found"; return 1 ;; \
+                     *) return 0 ;; esac; } ;;
         good)     gh() { return 0; } ;;
       esac
       verify_attestation "$WORK/atlasctl-x86_64-unknown-linux-musl.tar.xz" ) 2>&1
@@ -153,6 +163,10 @@ case "$out" in *"could NOT be verified"*) bad "gh too old must not warn" "$out" 
 out=$(attest loggedout)
 contains "gh signed out: says so" "$out" "not signed in"
 case "$out" in *"could NOT be verified"*) bad "gh signed out must not warn" "$out" ;; *) ok "gh signed out must not warn" ;; esac
+
+out=$(attest offline)
+contains "unreachable GitHub: says so" "$out" "could not reach GitHub"
+case "$out" in *"could NOT be verified"*) bad "an unreachable GitHub must not warn" "$out" ;; *) ok "an unreachable GitHub must not warn" ;; esac
 
 contains "a capable gh that refuses IS a warning" "$(attest broken)" "could NOT be verified"
 contains "a capable gh that verifies says so"     "$(attest good)"   "provenance verified"

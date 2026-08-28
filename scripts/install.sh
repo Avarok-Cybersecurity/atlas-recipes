@@ -114,19 +114,34 @@ verify_attestation() {
         info "The checksum above was verified; provenance is the extra step."
         return
     fi
-    if ! gh auth status >/dev/null 2>&1; then
-        info "\`gh\` is not signed in, so build provenance was not checked."
-        info "The checksum above was verified. To also check provenance:"
-        info "    gh auth login && gh attestation verify <file> --repo $REPO"
+    # The check is ATTEMPTED, then its failure is classified. Deciding in
+    # advance on `gh auth status` skipped it entirely for a gh that is installed
+    # and never logged in — which is the state every machine is in right after
+    # `apt install gh` — so a tampered archive served with a matching
+    # SHA256SUMS would have installed in silence. Attempting first also catches
+    # the case a pre-check cannot see at all: gh signed in, GitHub unreachable.
+    if err=$(gh attestation verify "$archive" --repo "$REPO" 2>&1); then
+        info "build provenance verified"
         return
     fi
-    if gh attestation verify "$archive" --repo "$REPO" >/dev/null 2>&1; then
-        info "build provenance verified"
-    else
-        # Now it means something: gh can check, is signed in, and said no.
-        warn "build provenance could NOT be verified for $(basename "$archive")."
-        warn "If you did not expect that, stop and check the release page."
-    fi
+    # It failed. Whether that is a fact about the ARTIFACT or about this machine
+    # decides whether anyone should be alarmed.
+    case "$err" in
+        *"not logged"*|*"authentication"*|*"gh auth login"*|*"HTTP 401"*|*"HTTP 403"*)
+            info "\`gh\` is not signed in, so provenance could not be checked."
+            info "The checksum above was verified; provenance is the extra step."
+            info "    gh auth login && gh attestation verify <file> --repo $REPO"
+            ;;
+        *"dial tcp"*|*"no such host"*|*"connection refused"*|*"i/o timeout"*|*"TLS handshake"*|*"context deadline"*)
+            info "could not reach GitHub, so provenance was not checked."
+            info "The checksum above was verified; provenance is the extra step."
+            ;;
+        *)
+            # gh could ask, reached GitHub, and the answer was no.
+            warn "build provenance could NOT be verified for $(basename "$archive")."
+            warn "If you did not expect that, stop and check the release page."
+            ;;
+    esac
 }
 
 # Put the agent behind this machine's own supervisor, so the website has
