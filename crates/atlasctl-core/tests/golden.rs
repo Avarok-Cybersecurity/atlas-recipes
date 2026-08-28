@@ -87,7 +87,11 @@ fn render(recipe: &Recipe) -> String {
         out.push_str(&format!("# {label} — shell\n{}\n\n", plan.docker));
         out.push_str(&format!(
             "# {label} — portable\n{}\n\n",
-            plan.docker.display_portable(Some("/home/spark"))
+            // The placeholder is pinned, not read from the platform: the
+            // corpus is generated on Linux and compared byte for byte, so a
+            // target-dependent one would make every golden fail everywhere
+            // else while nothing had actually changed.
+            plan.docker.display_portable(Some("/home/spark"), "$HOME")
         ));
         out.push_str(&format!(
             "# {label} — argv\n{}\n\n",

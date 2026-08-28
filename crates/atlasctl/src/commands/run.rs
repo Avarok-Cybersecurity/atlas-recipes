@@ -91,7 +91,13 @@ pub fn run(args: &RunArgs) -> Result<()> {
 
     if args.print {
         if args.portable {
-            println!("{}", plan.docker.display_portable(Some(&host.home)));
+            println!(
+                "{}",
+                plan.docker.display_portable(
+                    Some(&host.home),
+                    atlasctl_core::platform::home_placeholder()
+                )
+            );
         } else {
             println!("{}", plan.docker);
         }

@@ -129,7 +129,9 @@ impl DockerCommand {
     pub fn to_argv(&self) -> Vec<String> {
         // Execution takes the text only: there is no shell on this path, so
         // the symbolic marking is meaningless here by construction.
-        self.render(UserRender::Resolved, None)
+        // A resolved command is executed, never pasted, so nothing is
+        // symbolic in it and the placeholder is unreachable.
+        self.render(UserRender::Resolved, None, "")
             .into_iter()
             .map(|a| a.text)
             .collect()
@@ -144,8 +146,14 @@ impl DockerCommand {
     /// **unquoted** — quoting `$(id -u)` would turn the whole point of this
     /// rendering into a literal string, and the pasted command would fail with
     /// an unusable uid.
-    pub fn display_portable(&self, home: Option<&str>) -> String {
-        self.render(UserRender::Portable, home)
+    /// `home_placeholder` is what the literal home directory is replaced WITH,
+    /// and it is a parameter rather than a platform lookup because this
+    /// renderer is pure: reading the target inside it would make one function
+    /// produce two outputs, and the golden corpus — which is compared byte for
+    /// byte and generated on Linux — could then never pass anywhere else.
+    /// [`crate::platform::home_placeholder`] is what production passes.
+    pub fn display_portable(&self, home: Option<&str>, home_placeholder: &str) -> String {
+        self.render(UserRender::Portable, home, home_placeholder)
             .into_iter()
             .map(|a| {
                 if a.symbolic {
@@ -158,7 +166,12 @@ impl DockerCommand {
             .join(" ")
     }
 
-    fn render(&self, user_render: UserRender, home: Option<&str>) -> Vec<Arg> {
+    fn render(
+        &self,
+        user_render: UserRender,
+        home: Option<&str>,
+        home_placeholder: &str,
+    ) -> Vec<Arg> {
         let mut v: Vec<Arg> = vec!["docker".into(), "run".into()];
         if self.detach {
             v.push("-d".into());
@@ -234,14 +247,9 @@ impl DockerCommand {
             // may name a volume that already starts with `$HOME/`, and that is
             // data, not something to let the shell expand.
             let (host, rewritten) = match (user_render, home) {
-                (UserRender::Portable, Some(h)) if !h.is_empty() && host.starts_with(h) => (
-                    format!(
-                        "{}{}",
-                        crate::platform::home_placeholder(),
-                        &host[h.len()..]
-                    ),
-                    true,
-                ),
+                (UserRender::Portable, Some(h)) if !h.is_empty() && host.starts_with(h) => {
+                    (format!("{home_placeholder}{}", &host[h.len()..]), true)
+                }
                 _ => (host.clone(), false),
             };
             v.push("-v".into());
