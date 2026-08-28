@@ -64,6 +64,13 @@ pub fn run(args: &RunArgs) -> Result<()> {
         );
     }
 
+    // Values that are allowed and still worth a word. Said BEFORE the pull and
+    // the launch, alongside the other pre-flight warnings, because afterwards
+    // the machine may not be answering.
+    for c in cautions(&plan.docker.command) {
+        eprintln!("warning: {c}");
+    }
+
     if args.print {
         if args.portable {
             println!("{}", plan.docker.display_portable(Some(&host.home)));
@@ -128,4 +135,29 @@ pub fn run(args: &RunArgs) -> Result<()> {
     println!("logs:     atlasctl logs {} --follow", recipe.name);
     println!("stop:     atlasctl stop {}", recipe.name);
     Ok(())
+}
+
+/// Cautions for the values this launch will actually use.
+///
+/// Read from the RENDERED command, not from the recipe or the overrides. That
+/// is the only place recipe defaults, `--options` and placement have already
+/// been resolved against each other, so it is the only place that describes
+/// what will actually run. The same technique the endpoint port uses below.
+///
+/// The accelerator comes from the machine, because the warning is about the
+/// hardware the container will run on and a recipe written for one card is
+/// routinely run on another.
+fn cautions(argv: &[String]) -> Vec<String> {
+    let accelerator =
+        atlasctl_agent::telemetry::accelerator_name(&StdProcessRunner).unwrap_or_default();
+    if accelerator.is_empty() {
+        return Vec::new();
+    }
+    argv.windows(2)
+        .filter_map(|w| {
+            let key = w[0].strip_prefix("--")?.replace('-', "_");
+            let value: f64 = w[1].parse().ok()?;
+            atlasctl_core::settings::caution(&key, value, &accelerator)
+        })
+        .collect()
 }
