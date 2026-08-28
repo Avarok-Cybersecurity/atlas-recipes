@@ -57,25 +57,47 @@ impl Finding {
 /// 185 GB, which would call a box with 172 GB free — comfortably enough for
 /// any launch here — a problem.
 pub fn disk_space(free_bytes: u64, path: &str) -> Finding {
-    const FLOOR: u64 = 25 * 1024 * 1024 * 1024;
-    let gb = free_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
-    if free_bytes >= FLOOR {
+    let Some(why) = disk_caution(free_bytes, path) else {
+        let gb = free_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
         return Finding::ok("disk", &format!("{gb:.0} GB free on {path}"));
-    }
+    };
     Finding::bad(
         "disk",
-        &format!(
-            "only {gb:.1} GB free on {path}. The runtime image is ~3 GB and the \
-             smallest model in the catalogue is ~22 GB, so a launch that has to \
-             pull either will fail — usually with a message about docker or a \
-             truncated download, not about space."
-        ),
+        &why,
         &[
             "atlasctl status            # stop anything you are not using",
             "docker image prune -a      # reclaim images no container needs",
             "du -sh ~/.cache/huggingface/hub/models--*   # then delete a model you can re-pull",
         ],
     )
+}
+
+/// The same judgement, as a one-line caution rather than a `doctor` finding.
+///
+/// `doctor` is the command an operator runs when something is already wrong.
+/// `run` is where the cost lands: a launch started on a full disk pulls for
+/// forty minutes and then fails with a docker error that never mentions space.
+/// Sharing the floor rather than copying it is what keeps the two from drifting
+/// into disagreeing about what "enough" means.
+///
+/// `None` when there is room.
+#[must_use]
+pub fn disk_caution(free_bytes: u64, path: &str) -> Option<String> {
+    /// Below the runtime image plus the smallest shipped model, a launch that
+    /// has to pull cannot succeed. An absolute floor, deliberately not a
+    /// percentage: 5% of a 3.7 TB array is 185 GB, which would call a box with
+    /// 172 GB free — comfortably enough for any launch here — a problem.
+    const FLOOR: u64 = 25 * 1024 * 1024 * 1024;
+    if free_bytes >= FLOOR {
+        return None;
+    }
+    let gb = free_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+    Some(format!(
+        "only {gb:.1} GB free on {path}. The runtime image is ~3 GB and the \
+         smallest model in the catalogue is ~22 GB, so a launch that has to \
+         pull either will fail — usually with a message about docker or a \
+         truncated download, not about space."
+    ))
 }
 
 /// When `df` could not be read at all.
@@ -311,5 +333,45 @@ mod disk_tests {
     #[test]
     fn a_large_but_full_looking_array_is_judged_on_free_space_not_percent() {
         assert!(!disk_space(172 * GB, "/").problem);
+    }
+}
+
+#[cfg(test)]
+mod disk_caution_tests {
+    use super::{disk_caution, disk_space};
+
+    const GB: u64 = 1024 * 1024 * 1024;
+
+    /// The two callers must agree about what "enough" means. They did not have
+    /// to before — `doctor` owned the floor and `run` had no check at all — and
+    /// a launch begun on a disk `doctor` would refuse is forty minutes spent to
+    /// reach a docker error that never mentions space.
+    #[test]
+    fn run_and_doctor_draw_the_line_in_the_same_place() {
+        for free in [0, GB, 24 * GB, 25 * GB, 26 * GB, 400 * GB] {
+            assert_eq!(
+                disk_caution(free, "/x").is_some(),
+                disk_space(free, "/x").problem,
+                "they disagree at {free} bytes"
+            );
+        }
+    }
+
+    /// A caution nobody can act on is noise. It has to say the number, where,
+    /// and what will actually go wrong — because what the operator sees without
+    /// it is a docker error.
+    #[test]
+    fn the_caution_names_the_space_the_path_and_the_symptom() {
+        let why = disk_caution(2 * GB, "/mnt/models").expect("2 GB must caution");
+        assert!(why.contains("2.0 GB"), "{why}");
+        assert!(why.contains("/mnt/models"), "{why}");
+        assert!(why.contains("not about space"), "{why}");
+    }
+
+    /// And silence when there is room: a warning that fires on a healthy box is
+    /// how an operator learns to ignore this one.
+    #[test]
+    fn a_roomy_disk_says_nothing() {
+        assert!(disk_caution(400 * GB, "/x").is_none());
     }
 }

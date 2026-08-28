@@ -88,6 +88,14 @@ pub fn run(args: &RunArgs) -> Result<()> {
     for c in cautions(&plan.docker.command) {
         eprintln!("warning: {c}");
     }
+    // Checked HERE and not only in `doctor`, because this is where the cost
+    // lands: a launch begun on a full disk pulls for forty minutes and then
+    // fails with a docker error that never mentions space. A warning rather
+    // than a refusal — the weights may already be cached, in which case nothing
+    // is pulled and the number is irrelevant.
+    if let Some(why) = disk_caution_for(&host.hf_cache_dir) {
+        eprintln!("warning: {why}");
+    }
 
     if args.print {
         if args.portable {
@@ -244,6 +252,16 @@ fn cautions(argv: &[String]) -> Vec<String> {
             atlasctl_core::settings::caution(&key, value, &accelerator)
         })
         .collect()
+}
+
+/// Whether the filesystem that will hold the weights has room for them.
+///
+/// The HF cache, not the working directory: that is where a model lands, and it
+/// is routinely a different filesystem from the one `doctor` reports on.
+fn disk_caution_for(hf_cache_dir: &str) -> Option<String> {
+    let path = std::path::Path::new(hf_cache_dir);
+    let free = atlasctl_core::platform::free_bytes(path)?;
+    super::doctor_checks::disk_caution(free, hf_cache_dir)
 }
 
 #[cfg(test)]
