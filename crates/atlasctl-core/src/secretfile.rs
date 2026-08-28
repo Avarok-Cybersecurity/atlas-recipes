@@ -37,6 +37,28 @@ use std::path::Path;
 /// # Errors
 /// If the file cannot be created or written.
 pub fn write(path: &Path, bytes: &[u8]) -> Result<()> {
+    // Written to a sibling temp file and RENAMED over the target, never
+    // truncate-then-write. `peers.json` goes through here, and truncate-first
+    // means a crash, a full disk or a kill between the two leaves a torn file --
+    // after which every `load()` fails to parse and the agent fails closed on
+    // EVERY peer at once. Rename is atomic on both platforms (Windows replaces
+    // an existing target), so a reader sees the old file or the new one.
+    //
+    // ⚠ This makes each write indivisible; it does NOT serialise two writers.
+    // The daemon and a separate `atlasctl peer remove` still read-modify-write
+    // the whole file, so an interleaving can lose one side's change -- including
+    // un-revoking a peer that was just removed. Closing that needs a lock file
+    // (or routing CLI mutations through the running daemon) and is a bigger
+    // change than this one.
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let tmp = dir.join(format!(
+        ".{}.tmp{}",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("secret"),
+        std::process::id()
+    ));
+
     #[cfg(unix)]
     {
         use std::io::Write;
@@ -46,17 +68,42 @@ pub fn write(path: &Path, bytes: &[u8]) -> Result<()> {
             .create(true)
             .truncate(true)
             .mode(0o600)
-            .open(path)
-            .with_context(|| format!("creating {}", path.display()))?;
+            .open(&tmp)
+            .with_context(|| format!("creating {}", tmp.display()))?;
         f.write_all(bytes)
-            .with_context(|| format!("writing {}", path.display()))?;
+            .with_context(|| format!("writing {}", tmp.display()))?;
+        // Durable before it is visible: a rename that beats the data to disk
+        // would survive a power cut as a correctly-named empty file.
+        f.sync_all()
+            .with_context(|| format!("flushing {}", tmp.display()))?;
+
+        // Carry the EXISTING file's mode over, rather than always landing 0600.
+        // `write` and `verify` are split on purpose in this module: write does
+        // not police permissions, verify detects them. A fresh 0600 on every
+        // write would silently re-privatise a secret someone had widened, and
+        // erase the only evidence that other accounts could read it -- which is
+        // exactly what `rewriting_over_a_widened_file_is_caught` pins.
+        if let Ok(meta) = std::fs::metadata(path) {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = meta.permissions().mode() & 0o7777;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))
+                .with_context(|| format!("carrying the mode of {}", path.display()))?;
+        }
     }
     #[cfg(windows)]
     {
         // Refused before the bytes exist, not after: a secret written to a
-        // share and then reported is a secret that was on the share.
+        // share and then reported is a secret that was on the share. The temp
+        // file is a sibling, so checking the destination covers both.
         verify_location(path)?;
-        std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))?;
+        std::fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
+    }
+
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        // Do not leave the temp file behind to be mistaken for state, or to
+        // accumulate one per crashed process.
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("replacing {}", path.display()));
     }
     Ok(())
 }
@@ -191,6 +238,38 @@ mod tests {
     /// Replacing must not widen. `OpenOptions` reuses an existing file's mode,
     /// so a secret rotated into a file someone had chmod-ed stays readable
     /// unless rotation is checked too.
+    /// The reason this write goes through a temp file: `peers.json` is
+    /// rewritten whole on every pin change, and a truncate-then-write left a
+    /// torn file if anything interrupted it -- after which every load fails to
+    /// parse and the agent fails closed on EVERY peer at once. A reader must see
+    /// the old bytes or the new ones, never a prefix.
+    #[test]
+    fn a_replaced_secret_is_never_seen_half_written() {
+        let d = tmp("atomic");
+        let p = d.join("peers.json");
+        write(&p, b"{\"peers\":[\"first\"]}").expect("writes");
+        // A much larger second write: a truncating writer would leave the file
+        // observably shorter than either version at some point.
+        let big = format!("{{\"peers\":[\"{}\"]}}", "x".repeat(200_000));
+        write(&p, big.as_bytes()).expect("writes");
+        let got = std::fs::read(&p).expect("reads");
+        assert_eq!(
+            got.len(),
+            big.len(),
+            "the file is exactly one of the versions"
+        );
+
+        // And no temp file is left lying around to be mistaken for state.
+        let strays: Vec<_> = std::fs::read_dir(&d)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(strays.is_empty(), "left temp files behind: {strays:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[cfg(unix)]
     #[test]
     fn rewriting_over_a_widened_file_is_caught() {

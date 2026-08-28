@@ -185,8 +185,20 @@ fn spawn_peer_listener(
         eprintln!("peer channel on 0.0.0.0:{port}");
 
         loop {
-            let Ok((tcp, _)) = listener.accept().await else {
-                continue;
+            let (tcp, _) = match listener.accept().await {
+                Ok(v) => v,
+                Err(e) => {
+                    // Backoff, not a bare `continue`. Under fd exhaustion
+                    // (EMFILE -- plausible while this same process is pulling a
+                    // multi-GB image) `accept` fails IMMEDIATELY and forever, so
+                    // retrying with no pause burns 100% of a core silently,
+                    // inside a service that bounds memory but not CPU. Ten
+                    // milliseconds is invisible to a real connection and turns a
+                    // hot spin into an idle one that says why.
+                    eprintln!("peer listener: accept failed: {e}");
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    continue;
+                }
             };
             let acceptor = acceptor.clone();
             let fleet = Arc::clone(&fleet);
