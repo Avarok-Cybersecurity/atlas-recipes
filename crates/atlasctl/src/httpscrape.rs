@@ -50,11 +50,24 @@ fn dechunk(body: &str) -> Result<String> {
         if len == 0 {
             return Ok(out);
         }
-        if tail.len() < len {
-            bail!("a chunked body claimed {len} bytes and sent {}", tail.len());
-        }
-        out.push_str(&tail[..len]);
-        rest = tail[len..].strip_prefix("\r\n").unwrap_or(&tail[len..]);
+        // `get`, not `[..len]`. The length is a BYTE count off the wire and
+        // `tail` is a `&str`, so an index landing mid-character panics rather
+        // than erroring — and it reaches here through
+        // `String::from_utf8_lossy`, which replaces each invalid byte with a
+        // 3-byte U+FFFD and therefore shifts every offset after it. The engine
+        // serves ASCII today, so this is a panic waiting on a malformed
+        // response rather than one anybody has seen; a scraper thread that
+        // dies takes the telemetry with it, silently.
+        let (chunk, after) = match (tail.get(..len), tail.get(len..)) {
+            (Some(c), Some(a)) => (c, a),
+            _ => bail!(
+                "a chunked body claimed {len} bytes and sent {} that do not \
+                 divide there",
+                tail.len()
+            ),
+        };
+        out.push_str(chunk);
+        rest = after.strip_prefix("\r\n").unwrap_or(after);
     }
 }
 
@@ -101,5 +114,35 @@ impl MetricsSource for HttpScraper {
             return dechunk(body);
         }
         Ok(body.to_owned())
+    }
+}
+
+#[cfg(test)]
+mod dechunk_tests {
+    use super::dechunk;
+
+    /// The chunk length is a BYTE count off the wire, and the body reaches
+    /// `dechunk` as a `&str` through `String::from_utf8_lossy` — which
+    /// replaces each invalid byte with a 3-byte U+FFFD and shifts every offset
+    /// after it. A length landing mid-character used to panic the scraper
+    /// thread, taking the telemetry with it and saying nothing.
+    #[test]
+    fn a_length_that_lands_mid_character_is_an_error_not_a_panic() {
+        // "é" is two bytes, so a claimed length of 1 lands INSIDE it. (A
+        // length of 3 would land after "é!" — a valid boundary — which is why
+        // the first version of this test decoded happily and proved nothing.)
+        let body = "1\r\né\r\n0\r\n\r\n";
+        let err = dechunk(body).expect_err("must refuse, and must not panic");
+        assert!(
+            format!("{err}").contains("divide"),
+            "the message must say why: {err}"
+        );
+    }
+
+    /// The ordinary case the engine actually serves.
+    #[test]
+    fn an_ascii_chunked_body_still_decodes() {
+        let body = "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
+        assert_eq!(dechunk(body).expect("decodes"), "hello world");
     }
 }
