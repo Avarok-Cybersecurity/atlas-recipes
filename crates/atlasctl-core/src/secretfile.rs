@@ -135,11 +135,25 @@ fn verify_location(path: &Path) -> Result<()> {
              can read it. Keep this node's secrets under %LOCALAPPDATA%\\atlasctl, \
              or point --config-dir at a directory inside it.",
             described.display(),
-            resolved.display(),
-            anchor.display()
+            plain(&resolved),
+            plain(&anchor)
         );
     }
     Ok(())
+}
+
+/// A canonicalised path as an operator would write it.
+///
+/// `canonicalize` returns the `\\?\` extended-length form, which is correct and
+/// unreadable. Stripped for DISPLAY only — the comparison still uses the
+/// canonical values, because resolving them is the whole point.
+#[cfg(windows)]
+fn plain(p: &Path) -> String {
+    let s = p.display().to_string();
+    s.strip_prefix(r"\\?\UNC\")
+        .map(|rest| format!(r"\\{rest}"))
+        .or_else(|| s.strip_prefix(r"\\?\").map(ToOwned::to_owned))
+        .unwrap_or(s)
 }
 
 /// Whether a path names a network share: `\\server\share`, or the `\\?\UNC\…`
@@ -217,10 +231,16 @@ mod tests {
             .join(format!("atlasctl-outside-{}", std::process::id()));
         std::fs::create_dir_all(&d).expect("temp dir");
         let p = d.join("agent.key");
-        let err = write(&p, b"k").expect_err("outside the profile must be refused");
+        let err = write(&p, b"k").expect_err("outside the anchor must be refused");
+        let msg = err.to_string();
+        // The PROPERTY, not the phrasing: it must name what was refused and the
+        // remedy, and it must not leak the extended-length prefix that
+        // canonicalize returns into a message an operator reads.
+        assert!(msg.contains("atlasctl-outside"), "{msg}");
+        assert!(msg.contains("--config-dir"), "{msg}");
         assert!(
-            err.to_string().contains("outside your user profile"),
-            "{err}"
+            !msg.contains(r"\\?\"),
+            "the extended-length prefix leaked into an operator message: {msg}"
         );
         assert!(!p.exists(), "the secret must not have been written");
         let _ = std::fs::remove_dir_all(&d);
