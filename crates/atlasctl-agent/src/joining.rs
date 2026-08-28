@@ -25,7 +25,7 @@
 //! searching, and the limiter closes the window rather than merely refusing —
 //! there is no value in leaving a partially-guessed code alive.
 
-use crate::pairing::{CODE_DIGITS, MAX_ATTEMPTS, PairingCode};
+use crate::pairing::{MAX_ATTEMPTS, PairingCode};
 use anyhow::Result;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -206,10 +206,15 @@ pub struct Consumed {
 }
 
 /// Whether a string could be a join code at all.
-#[must_use]
-pub fn looks_like_code(s: &str) -> bool {
-    s.len() == CODE_DIGITS && s.bytes().all(|b| b.is_ascii_digit())
-}
+///
+/// A join code IS a pairing code — same mint, same `CODE_DIGITS`, same
+/// `MAX_ATTEMPTS` lockout — so the rule is re-exported rather than restated.
+/// It was stated twice, and the two copies fed two different CLI paths:
+/// `--join` resolves here, `peer add --code` resolves in `pairing`. They agree
+/// today, byte for byte, and would have stopped agreeing the day either one
+/// changed — a code the invitation path accepts and the pairing path refuses is
+/// the kind of divergence nobody notices until a machine will not join.
+pub use crate::pairing::looks_like_code;
 
 #[cfg(test)]
 mod tests {
@@ -397,5 +402,37 @@ mod tests {
             w.consume().is_some(),
             "the holder of the last reservation must still be able to spend it"
         );
+    }
+}
+
+#[cfg(test)]
+mod one_shape_tests {
+    /// `--join` resolves `joining::looks_like_code`; `peer add --code`
+    /// resolves `pairing::looks_like_code`. They are one function today. This
+    /// asserts AGREEMENT rather than identity, so re-introducing a second
+    /// implementation is fine right up until it disagrees — which is the only
+    /// moment that matters, and the one nobody would otherwise notice until a
+    /// machine could not join.
+    #[test]
+    fn both_names_for_the_code_shape_answer_the_same() {
+        for s in [
+            "12345678",  // the real shape
+            "1234567",   // one short
+            "123456789", // one long
+            "",          // empty
+            "1234567a",  // a stray letter
+            "abcdefgh",  // no digits at all
+            "12 345678", // whitespace
+            "١٢٣٤٥٦٧٨",  // non-ASCII digits: 8 chars, 16 bytes
+            "-2345678",  // a sign
+            "+2345678",
+            "12345678 ", // trailing space
+        ] {
+            assert_eq!(
+                crate::joining::looks_like_code(s),
+                crate::pairing::looks_like_code(s),
+                "the two paths disagree about {s:?}"
+            );
+        }
     }
 }
