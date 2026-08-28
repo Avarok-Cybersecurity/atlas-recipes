@@ -323,27 +323,29 @@ mod tests {
         /// the one that separates it from a link going nowhere.
         #[test]
         fn a_refused_connection_counts_as_reachable() {
-            // A port this process just released, rather than a low fixed one:
-            // port 1 is not merely unbound on some hosts, it is filtered, and a
-            // filtered port answers with silence rather than a refusal — so the
-            // test would be asserting the opposite of what it reads.
-            let port = {
-                let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-                l.local_addr().expect("addr").port()
-            };
-            // Reported with the error the probe actually saw. "assertion failed:
-            // answers(...)" names neither the port nor why, which is the whole
-            // question when this fails on a platform nobody is sitting at.
-            let observed = std::net::TcpStream::connect_timeout(
-                &SocketAddr::new("127.0.0.1".parse().expect("ip"), port),
-                PROBE_TIMEOUT,
-            )
-            .err()
-            .map(|e| e.kind());
+            // The port number is reserved with a UDP socket, and TCP is probed
+            // on it. Two wrong ways to pick this port were tried first: a low
+            // fixed one (port 1 is filtered on some hosts, and a filtered port
+            // answers with silence, not a refusal), and a TCP port this process
+            // had just released — which leaves TCP TIME_WAIT behind, and a
+            // socket in TIME_WAIT drops the SYN instead of resetting it. A UDP
+            // reservation has neither problem: nothing has ever listened on
+            // that TCP port, so the stack refuses immediately.
+            let udp = std::net::UdpSocket::bind("127.0.0.1:0").expect("reserve a port");
+            let port = udp.local_addr().expect("addr").port();
+            let ip = "127.0.0.1".parse().expect("ip");
+            // Reported with what the probe actually saw. "assertion failed:
+            // answers(...)" names neither the port nor the reason, which is the
+            // whole question when this fails on a platform nobody is sitting at.
+            let via_timeout =
+                std::net::TcpStream::connect_timeout(&SocketAddr::new(ip, port), PROBE_TIMEOUT)
+                    .err()
+                    .map(|e| e.kind());
+            let via_probe = super::super::connect_outcome(SocketAddr::new(ip, port));
             assert!(
                 answers("127.0.0.1", port),
-                "a closed loopback port must read as reachable; \
-                 connecting to {port} gave {observed:?}"
+                "a closed loopback port must read as reachable; port {port} gave \
+                 connect_timeout={via_timeout:?} probe={via_probe:?}"
             );
         }
 
