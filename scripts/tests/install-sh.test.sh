@@ -62,6 +62,7 @@ good=$(sha256sum "$WORK/atlasctl-x86_64-unknown-linux-musl.tar.xz" | awk '{print
 # means `die` could lose its `exit 1` and every case here would still pass —
 # while production printed "Refusing to install" and then installed.
 verify() { ( . "$WORK/lib.sh"; verify_checksum "$1" "$2" ) 2>&1; }
+# shellcheck source=/dev/null  # generated above, from install.sh
 verify_rc() { ( . "$WORK/lib.sh"; verify_checksum "$1" "$2" ) >/dev/null 2>&1; echo $?; }
 
 printf '%s  atlasctl-x86_64-unknown-linux-musl.tar.xz\n' "$good" > "$WORK/SUMS.good"
