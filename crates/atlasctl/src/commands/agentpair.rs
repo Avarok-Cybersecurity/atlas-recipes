@@ -61,7 +61,7 @@ pub fn pair(args: &crate::cli::AgentPairArgs) -> Result<()> {
     // they were told to run.
     println!(
         "      atlasctl peer add {} --code {}",
-        dial_hint(&hostname_hint(), args.port),
+        dial_hints(&dial_hosts(), args.port),
         code.as_str()
     );
     println!();
@@ -142,10 +142,56 @@ pub fn pair(args: &crate::cli::AgentPairArgs) -> Result<()> {
 /// Only ever printed as a hint in a copy-pasteable command — the address that
 /// actually matters is whichever one the operator can route to, and they are
 /// the ones who know that.
+/// Where the other machine should dial this one, best link first.
+///
+/// The addresses come from the same fabric the agent advertises, NOT from a
+/// hostname. `/proc/sys/kernel/hostname` was the old source and it fails two
+/// ways: on macOS the path does not exist at all, so a MacBook printed
+/// `atlasctl peer add <this-machine>` — a line that cannot be run — and even
+/// on Linux a hostname is only dialable if something resolves it, which
+/// nothing on a plain LAN promises.
+///
+/// Falls back to the hostname, then to the placeholder, because a command with
+/// a name in it is still a better prompt than no command.
+fn dial_hosts() -> Vec<String> {
+    use atlasctl_agent::fabric::FabricProvider as _;
+    #[cfg(target_os = "macos")]
+    let fabric = atlasctl_agent::fabric::macos::MacFabric::new();
+    #[cfg(not(target_os = "macos"))]
+    let fabric = atlasctl_agent::fabric::linux::LinuxFabric::new();
+
+    let found: Vec<String> = fabric
+        .addresses()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|a| a.class.usable_for_control())
+        .map(|a| a.addr.to_string())
+        .collect();
+    if found.is_empty() {
+        return vec![hostname_hint()];
+    }
+    found
+}
+
 fn hostname_hint() -> String {
     std::fs::read_to_string("/proc/sys/kernel/hostname")
         .map(|h| h.trim().to_owned())
         .unwrap_or_else(|_| "<this-machine>".to_owned())
+}
+
+/// Every place to dial, as one `peer add` target.
+///
+/// Comma-separated for the same reason the browser's join command is: this
+/// machine cannot know which of its networks the other one shares. A DGX
+/// offers its RoCE fabric first — right for another DGX, unreachable from a
+/// laptop — and `peer add` walks the list.
+#[must_use]
+pub fn dial_hints(hosts: &[String], port: u16) -> String {
+    hosts
+        .iter()
+        .map(|h| dial_hint(h, port))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Whether this machine's own agent is answering on the browser port.
@@ -260,8 +306,41 @@ pub fn dial_hint(host: &str, port: u16) -> String {
 
 #[cfg(test)]
 mod dial_tests {
-    use super::dial_hint;
+    use super::{dial_hint, dial_hints};
     use atlasctl_agent::peer::DEFAULT_PEER_PORT;
+
+    /// The line has to be runnable on a machine that shares ANY of this one's
+    /// networks — a DGX's RoCE fabric for another DGX, its LAN address for a
+    /// laptop. `peer add` walks the list, so all of them go in.
+    #[test]
+    fn every_link_this_machine_has_reaches_the_printed_command() {
+        let hosts = vec![
+            "10.10.10.9".to_owned(),
+            "10.10.10.13".to_owned(),
+            "192.168.68.68".to_owned(),
+        ];
+        assert_eq!(
+            dial_hints(&hosts, DEFAULT_PEER_PORT),
+            "10.10.10.9,10.10.10.13,192.168.68.68"
+        );
+    }
+
+    /// The port applies to every entry, not just the first: a partial list is
+    /// a line that works until the operator's machine is on the wrong network.
+    #[test]
+    fn a_non_default_port_is_carried_onto_every_address() {
+        let hosts = vec!["10.0.0.1".to_owned(), "fe80::1".to_owned()];
+        assert_eq!(dial_hints(&hosts, 34444), "10.0.0.1:34444,[fe80::1]:34444");
+    }
+
+    #[test]
+    fn one_address_prints_exactly_as_it_did_before() {
+        // No comma, no change for the ordinary single-homed machine.
+        assert_eq!(
+            dial_hints(&["spark-256a".to_owned()], DEFAULT_PEER_PORT),
+            "spark-256a"
+        );
+    }
 
     #[test]
     fn the_default_port_is_left_off_because_peer_add_assumes_it() {

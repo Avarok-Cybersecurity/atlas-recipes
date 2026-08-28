@@ -89,10 +89,32 @@ pub fn add(args: &PeerAddArgs) -> Result<()> {
     let identity = Identity::load_or_create(&dir)?;
     let pins = PinStore::new(&dir);
 
-    let addrs = resolve_manual(&args.target, DEFAULT_PEER_PORT)?;
-    let addr = *addrs
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("{} resolved to no addresses", args.target))?;
+    // Every alternative the other machine printed, in the order it offered
+    // them. `agent pair` emits a comma-separated target for the same reason
+    // the browser's join command carries one: the inviting machine cannot know
+    // which of its networks this one shares. A host that will not resolve is
+    // recorded rather than fatal — often the LAST entry is the only one this
+    // machine's network can even name.
+    let mut addrs: Vec<std::net::SocketAddr> = Vec::new();
+    let mut unresolved: Vec<String> = Vec::new();
+    for host in args
+        .target
+        .split(',')
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+    {
+        match resolve_manual(host, DEFAULT_PEER_PORT) {
+            Ok(found) => addrs.extend(found),
+            Err(e) => unresolved.push(format!("{host}: {e:#}")),
+        }
+    }
+    if addrs.is_empty() {
+        anyhow::bail!(
+            "{} resolved to no addresses — {}",
+            args.target,
+            unresolved.join("; ")
+        );
+    }
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -101,12 +123,20 @@ pub fn add(args: &PeerAddArgs) -> Result<()> {
 
     // The same function the browser-driven path calls. Two implementations of
     // a pairing ceremony is one implementation nobody audits.
-    let paired = runtime.block_on(atlasctl_agent::peer::join::dial_and_pair(
-        &identity,
-        pins.clone(),
-        addr,
-        &args.code,
-    ))?;
+    //
+    // Walked by `peer::reach`, which stops the moment a machine ANSWERS: the
+    // addresses are all the same machine, so a refusal has already spent one
+    // of the code's attempts and marching through the rest spends them all on
+    // one typo.
+    let (addr, paired) = atlasctl_agent::peer::reach::walk(&addrs, |addr| {
+        runtime.block_on(atlasctl_agent::peer::join::dial_and_pair(
+            &identity,
+            pins.clone(),
+            addr,
+            &args.code,
+        ))
+    })
+    .map_err(|e| anyhow::anyhow!("could not pair with {} — {e:#}", args.target))?;
 
     println!();
     println!("  Verification words:  {}", paired.verification);
