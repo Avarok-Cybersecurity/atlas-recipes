@@ -192,7 +192,10 @@ fn dial_hosts() -> Vec<String> {
 }
 
 fn hostname_hint() -> String {
-    atlasctl_core::platform::hostname()
+    // A placeholder that obviously is not a hostname. This goes into a
+    // `peer add` line the operator must edit, and a plausible-looking fallback
+    // gets pasted verbatim and dialled.
+    atlasctl_core::platform::hostname_or("<this-machine>")
 }
 
 /// Every place to dial, as one `peer add` target.

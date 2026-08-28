@@ -85,8 +85,15 @@ function Install-Agent {
     # the machine needs starting.
     if ($SameVersion) {
         & $Exe agent status *> $null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Info "the agent is already running - this machine is ready."
+        $answering = $LASTEXITCODE -eq 0
+        # BOTH, not just the port. An operator who ran `atlasctl agent run` by
+        # hand has an agent answering and NO task, and skipping on the port
+        # alone left it that way: close the window, reboot, and "the website
+        # says no agent" is back -- the symptom this script exists to fix,
+        # reached through another door.
+        $supervised = $null -ne (Get-ScheduledTask -TaskName 'atlasctl-agent' -ErrorAction SilentlyContinue)
+        if ($answering -and $supervised) {
+            Write-Info "the agent is already running as a task - this machine is ready."
             Write-Info "if a browser does not see it, pair it: $BinName agent token"
             return
         }

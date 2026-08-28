@@ -100,6 +100,16 @@ verify_attestation() {
 # atlasctl, and the CLI works fully without an agent — so a failure here is a
 # note, not an error. ATLASCTL_NO_AGENT=1 skips it for anyone who would rather
 # decide when a background process with docker access starts running.
+# Whether a SUPERVISOR knows about the agent, as opposed to a process happening
+# to hold the port. The two are different machines to come back to tomorrow.
+service_installed() {
+    case "$(uname -s)" in
+        Darwin) launchctl print "gui/$(id -u)/io.atlasinference.atlasctl-agent" >/dev/null 2>&1 ;;
+        Linux)  systemctl --user is-enabled atlasctl-agent.service >/dev/null 2>&1 ;;
+        *)      return 1 ;;
+    esac
+}
+
 install_agent() {
     # The binary's path is passed rather than read from a variable another
     # function happened to set: install.sh runs under `set -eu` piped from the
@@ -116,8 +126,13 @@ install_agent() {
     # the machine needs STARTING. A join is the exception: it is the step the
     # operator came for, so it runs regardless.
     if [ -n "${4:-}" ] && [ -z "${2:-}" ]; then
-        if "$exe" agent status >/dev/null 2>&1; then
-            info "the agent is already running — this machine is ready."
+        # BOTH conditions, not just the port. An operator who ran `atlasctl
+        # agent run` by hand has an agent answering on 34333 and NO service, and
+        # skipping on the port alone left it that way: the terminal closes, the
+        # box reboots, and "the website says no agent" is back — the very
+        # symptom this script was changed to fix, reached through another door.
+        if "$exe" agent status >/dev/null 2>&1 && service_installed; then
+            info "the agent is already running as a service — this machine is ready."
             info "if a browser does not see it, pair it: $BIN_NAME agent token"
             return
         fi

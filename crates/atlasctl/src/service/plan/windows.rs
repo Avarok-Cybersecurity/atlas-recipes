@@ -101,8 +101,20 @@ pub(super) fn scheduled_task(agent: &AgentInvocation, home: &Path) -> ServicePla
 
     // Register through PowerShell rather than `schtasks /XML`: schtasks reads
     // the file itself and rejects anything it does not consider Unicode, while
-    // `Get-Content -Raw` hands the API a string and the file's encoding stops
-    // mattering.
+    // `Get-Content` hands the API a string.
+    //
+    // `-Encoding UTF8` is not optional. `powershell` is always 5.1, whose
+    // `Get-Content` decodes as the system ANSI codepage when the file has no
+    // BOM — and the unit is written UTF-8 without one. The body always contains
+    // a multibyte character, so on a profile path like `C:\Users\José` the
+    // registered `--log-file` and `--config-dir` arrive mojibake'd: the agent
+    // logs into a directory that does not exist, and a corrupted `--config-dir`
+    // mints a fresh identity and rejoins the fleet as a stranger.
+    //
+    // `-LiteralPath` for the same class of reason: `-Path` globs, and
+    // `C:\Users\[lab]\...` is a legal path whose brackets `-Path` reads as a
+    // character class, failing a perfectly valid install with "cannot find
+    // path".
     let ps = |script: &str| {
         vec![
             "powershell".to_owned(),
@@ -127,26 +139,34 @@ pub(super) fn scheduled_task(agent: &AgentInvocation, home: &Path) -> ServicePla
         ))],
         activate: vec![
             ps(&format!(
-                "Register-ScheduledTask -TaskName '{SERVICE_NAME}'                  -Xml (Get-Content -Raw -Path {quoted_unit}) -Force | Out-Null"
+                "Register-ScheduledTask -TaskName '{SERVICE_NAME}'                  -Xml (Get-Content -Raw -Encoding UTF8 -LiteralPath {quoted_unit}) \
+                 -Force | Out-Null"
             )),
             ps(&format!("Start-ScheduledTask -TaskName '{SERVICE_NAME}'")),
         ],
         // The same question `is-active` answers: the task EXISTING is not the
         // agent running, and `Get-ScheduledTask` alone would report success for
         // a task whose process died on startup.
-        // Polled, not sampled once. `Start-ScheduledTask` returns as soon as
-        // the scheduler has ACCEPTED the request, not when the process is up,
-        // so a single read right after it reports `Ready` and the install
-        // announces "installed, but it is NOT running" for an agent that is
-        // about to be. That is what a REINSTALL did on CI, because a replaced
-        // task has to be stopped and started rather than merely started. Ten
-        // seconds is long enough for that, and short enough that a genuinely
-        // crash-looping agent is still reported as one.
+        // Polled, then CONFIRMED. `Start-ScheduledTask` returns as soon as the
+        // scheduler has accepted the request, not when the process is up, so a
+        // single read right after it reports `Ready` and the install announces
+        // "installed, but it is NOT running" for an agent that is about to be.
+        // That is what a REINSTALL did on CI, because a replaced task has to be
+        // stopped and started rather than merely started.
+        //
+        // But waiting for ANY `Running` observation is weaker than one read:
+        // an agent that dies after a second would be seen alive on the way
+        // past. So the first sighting only starts a second look a second
+        // later, and both have to agree.
         verify: ps(&format!(
             "$deadline = (Get-Date).AddSeconds(10); \
+             $running = {{ (Get-ScheduledTask -TaskName '{SERVICE_NAME}' \
+                 -ErrorAction SilentlyContinue).State -eq 'Running' }}; \
              do {{ \
-               if ((Get-ScheduledTask -TaskName '{SERVICE_NAME}' \
-                    -ErrorAction SilentlyContinue).State -eq 'Running') {{ exit 0 }}; \
+               if (& $running) {{ \
+                 Start-Sleep -Seconds 1; \
+                 if (& $running) {{ exit 0 }} \
+               }}; \
                Start-Sleep -Milliseconds 250 \
              }} while ((Get-Date) -lt $deadline); \
              exit 1"
@@ -164,6 +184,11 @@ pub(super) fn scheduled_task(agent: &AgentInvocation, home: &Path) -> ServicePla
 /// before a quote, where it escapes. Getting this wrong turns
 /// `C:\Users\me\bin\` into an unterminated quote and the whole command line
 /// into one unusable argument.
+#[cfg(test)]
+pub(crate) fn windows_quote_for_test(a: &str) -> String {
+    windows_quote(a)
+}
+
 fn windows_quote(a: &str) -> String {
     if !a.is_empty() && !a.contains([' ', '\t', '"']) {
         return a.to_owned();
@@ -175,8 +200,11 @@ fn windows_quote(a: &str) -> String {
         match c {
             '\\' => backslashes += 1,
             '"' => {
-                // Double the run, then escape the quote itself.
-                out.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
+                // The run is ALREADY in `out` once, so this adds n more to
+                // double it, plus one to escape the quote. Extending by
+                // `2n + 1` emitted `3n + 1` and CommandLineToArgvW parsed
+                // `a\"b` back as `a\\b` — the quote silently gone.
+                out.extend(std::iter::repeat_n('\\', backslashes + 1));
                 backslashes = 0;
                 out.push('"');
                 continue;

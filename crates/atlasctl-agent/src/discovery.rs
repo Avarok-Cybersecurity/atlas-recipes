@@ -186,7 +186,8 @@ impl DiscoveryBrowser for NoDiscovery {
 /// because a node is its key.
 #[must_use]
 pub fn local_display_name() -> DisplayName {
-    DisplayName::new(&atlasctl_core::platform::hostname())
+    // Reads as a name, because it is shown as one in a node list.
+    DisplayName::new(&atlasctl_core::platform::hostname_or("atlas-node"))
 }
 
 /// This machine's operating system, coarsely, for display.
