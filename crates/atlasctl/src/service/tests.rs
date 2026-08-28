@@ -102,7 +102,7 @@ impl FileSystem for Files {
     }
 }
 
-fn agent() -> AgentInvocation {
+pub(super) fn agent() -> AgentInvocation {
     AgentInvocation {
         exe: PathBuf::from("/home/o/.local/bin/atlasctl"),
         port: 34333,
@@ -471,3 +471,5 @@ fn systemd_needs_no_pre_step() {
     let p = plan(ServiceKind::Systemd, &agent(), Path::new("/home/x"), 1000);
     assert!(p.pre_activate.is_empty(), "{:?}", p.pre_activate);
 }
+
+mod windows;
