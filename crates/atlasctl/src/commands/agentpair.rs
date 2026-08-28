@@ -133,7 +133,20 @@ pub fn pair(args: &crate::cli::AgentPairArgs) -> Result<()> {
         // separate, explicit act (`atlasctl peer grant-control`).
         false,
     )?;
+    // Two-phase pairing is two INDEPENDENT decisions, and this side cannot see
+    // the other one: a refusal there is a local `return`, and TLS carries the
+    // rejection back as a bare alert with none of its reasoning. So a machine
+    // that answered "n" — or whose prompt got EOF from a script — leaves this
+    // side listing a peer it will never be able to reach, which looks exactly
+    // like a box that is switched off. The remedies are unrelated, so say
+    // which situation this could be while the operator is still standing at
+    // the keyboard.
     println!("Paired with {} ({}).", paired.name, paired.node.short());
+    println!(
+        "  {} has to have accepted too. If it said \"Nothing was trusted\",",
+        paired.name
+    );
+    println!("  pair again — otherwise it will look unreachable from here.");
     Ok(())
 }
 
