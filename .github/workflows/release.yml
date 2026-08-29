@@ -648,3 +648,33 @@ jobs:
             exit 1
           fi
           echo "release $TAG shipped on every channel"
+
+      # Job results are not the outcome. The release is cut HIDDEN and promoted
+      # once its assets are attached, so every job above can succeed and still
+      # leave a release nobody can install: a prerelease is skipped by
+      # `releases/latest`, which is exactly what `install.sh` resolves. Assert
+      # the state a user actually meets, not the states we passed through.
+      - name: and it must be the release a user gets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -eu
+          rel="repos/$GITHUB_REPOSITORY/releases/tags/$TAG"
+          pre=$(gh api "$rel" --jq .prerelease)
+          n=$(gh api "$rel" --jq '.assets|length')
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          echo "prerelease=$pre assets=$n latest=$latest"
+          if [ "$pre" != false ]; then
+            echo "::error::$TAG is still a prerelease, so releases/latest skips it and install.sh cannot see it"
+            exit 1
+          fi
+          if [ "$n" -eq 0 ]; then
+            echo "::error::$TAG has no assets"
+            exit 1
+          fi
+          if [ "$latest" != "$TAG" ]; then
+            echo "::error::releases/latest is $latest, not $TAG — an install now would fetch the wrong version"
+            exit 1
+          fi
+          echo "$TAG is the release a user gets"
