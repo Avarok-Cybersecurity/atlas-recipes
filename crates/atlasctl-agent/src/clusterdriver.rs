@@ -45,6 +45,7 @@ use std::time::Duration;
 /// Built before any rank is asked anything, so a machine that has left the
 /// fleet or has no usable link fails the whole attempt while it is still free
 /// to fail — rather than half way through, with reservations already held.
+#[derive(Clone)]
 struct Target {
     assignment: crate::cluster::RankAssignment,
     /// Where to reach it, or `None` when it is this machine.
@@ -72,6 +73,7 @@ pub struct Torn {
 /// The containers are recorded rather than looked up later: a rank's container
 /// is named by that machine, and rediscovering it would mean trusting a name
 /// match instead of what the commit actually returned.
+#[derive(Clone)]
 struct Running {
     targets: Vec<Target>,
     started: Vec<RankStarted>,
@@ -463,33 +465,55 @@ impl ClusterControl for ClusterDriver {
     }
 
     fn stop_cluster(&self) -> Result<Vec<RankStarted>, String> {
+        // Read, do not TAKE. The record used to be removed before a single stop
+        // was attempted, so a reported failure could not be retried: pressing
+        // Stop again answered "this agent did not start a cluster" while the
+        // rank it had just failed to stop was still holding a GPU. One shot,
+        // then manual docker on every machine.
         let running = self
             .running
             .lock()
             .expect("running lock poisoned")
-            .take()
+            .clone()
             .ok_or_else(|| "this agent did not start a cluster".to_owned())?;
 
         // Every rank is attempted even after one fails: a rank left running
         // holds a whole GPU, so giving up on the first failure would be the
         // most expensive possible response to it.
         let mut failures = Vec::new();
+        let mut still_running = Vec::new();
         for r in &running.started {
             let Some(t) = running.targets.iter().find(|t| t.assignment.node == r.node) else {
                 continue;
             };
-            match t.addr {
-                None => {
-                    if let Err(e) = self.rank.stop(&r.container) {
-                        failures.push(format!("{}: {e:#}", t.name));
-                    }
-                }
-                Some(addr) => self.transport.stop(t.assignment.node, addr, &r.container),
+            let outcome = match t.addr {
+                None => self.rank.stop(&r.container).map_err(|e| format!("{e:#}")),
+                // Remote failures count now. This arm returned `()`, so an
+                // unreachable peer contributed nothing and the operator was told
+                // every rank had stopped.
+                Some(addr) => self
+                    .transport
+                    .stop(t.assignment.node, addr, &r.container)
+                    .map_err(|e| format!("{e:#}")),
+            };
+            if let Err(e) = outcome {
+                failures.push(format!("{}: {e}", t.name));
+                still_running.push(r.clone());
             }
         }
+
+        let mut held = self.running.lock().expect("running lock poisoned");
         if failures.is_empty() {
+            *held = None;
             Ok(running.started)
         } else {
+            // Keep exactly what is still up, so a retry targets that and not the
+            // ranks already stopped -- which would fail on a container that is
+            // gone and look like a new problem.
+            *held = Some(Running {
+                started: still_running,
+                ..running.clone()
+            });
             Err(format!("could not stop {}", failures.join("; ")))
         }
     }
@@ -516,7 +540,12 @@ impl ClusterDriver {
                 None => {
                     let _ = self.rank.stop(&r.container);
                 }
-                Some(addr) => self.transport.stop(t.assignment.node, addr, &r.container),
+                // Best effort here, deliberately: this is the supervision
+                // teardown, which already knows something is wrong and has no
+                // operator waiting on a return value.
+                Some(addr) => {
+                    let _ = self.transport.stop(t.assignment.node, addr, &r.container);
+                }
             }
         }
     }

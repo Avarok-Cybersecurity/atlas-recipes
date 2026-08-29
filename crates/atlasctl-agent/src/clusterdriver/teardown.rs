@@ -230,6 +230,17 @@ fn a_rank_that_dies_after_commit_tears_the_cluster_down() {
 /// the original with no Stop button that knew about it.
 #[test]
 fn a_second_cluster_is_refused_while_one_is_running() {
+
+/// A stop that could not reach a machine must SAY so, and must stay retryable.
+///
+/// Two bugs in one story. `RankTransport::stop` returned `()`, so a peer the
+/// driver could not reach contributed nothing to the failure list and the
+/// operator was told every rank had stopped -- while that machine kept its
+/// container and its GPU. And the running record was TAKEN before any stop was
+/// attempted, so even a reported failure could not be retried: pressing Stop
+/// again answered "this agent did not start a cluster".
+#[test]
+fn a_stop_that_could_not_reach_a_peer_is_reported_and_can_be_retried() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
     let (epoch, _, _) = d
@@ -249,6 +260,25 @@ fn a_second_cluster_is_refused_while_one_is_running() {
         calls(&log).len(),
         before,
         "the refusal must not reach any machine"
+
+    // spark-2 becomes unreachable -- the machine, not the container.
+    d.kill_for_test(node_id(2));
+
+    let err = d
+        .stop_cluster()
+        .expect_err("an unreachable peer must not be reported as stopped");
+    assert!(err.contains("spark-2"), "must name the machine: {err}");
+
+    // And the record survives, so the operator can press Stop again rather than
+    // being told there was never a cluster.
+    let again = d.stop_cluster();
+    assert!(
+        again.is_err(),
+        "the unreachable rank is still up, so a retry must still fail: {again:?}"
+    );
+    assert!(
+        again.unwrap_err().contains("spark-2"),
+        "and must still name the same machine"
     );
 }
 
