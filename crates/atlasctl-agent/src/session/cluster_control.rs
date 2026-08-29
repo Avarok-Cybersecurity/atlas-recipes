@@ -89,5 +89,5 @@ pub trait ClusterControl: Send + Sync {
     ///
     /// Returns a description of what it tore down, or `None` when the cluster
     /// is whole or absent.
-    fn supervise(&self) -> Option<String>;
+    fn supervise(&self) -> Option<crate::clusterdriver::Torn>;
 }

@@ -331,6 +331,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     // serving nothing.
     {
         let cluster = Arc::clone(&cluster);
+        let events = events.clone();
         rt.spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(20));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -340,8 +341,26 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
                 // Asking a peer dials the network, so it must not run on the
                 // async runtime's worker threads.
                 let torn = tokio::task::spawn_blocking(move || cluster.supervise()).await;
-                if let Ok(Some(why)) = torn {
-                    eprintln!("cluster: {why}");
+                if let Ok(Some(torn)) = torn {
+                    eprintln!("cluster: {}", torn.why);
+                    // And say it where an operator is looking. This used to go
+                    // only to the head agent's stderr, so a cluster could die
+                    // and the browser went on showing it running -- with a Stop
+                    // button that then answered "this agent did not start a
+                    // cluster". A fleet view that silently goes stale is worse
+                    // than one that says it does not know.
+                    for node in torn.nodes {
+                        let _ = events.send(atlasctl_protocol::msg::ServerMsg::FleetEvent {
+                            event: atlasctl_protocol::msg::fleet::FleetEvent::AlertRaised {
+                                node,
+                                alert: atlasctl_protocol::fleet::NodeAlert {
+                                    kind: atlasctl_protocol::fleet::AlertKind::PeerLost,
+                                    severity: atlasctl_protocol::fleet::Severity::Critical,
+                                    detail: torn.why.clone(),
+                                },
+                            },
+                        });
+                    }
                 }
             }
         });
