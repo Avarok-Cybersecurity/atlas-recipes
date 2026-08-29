@@ -45,10 +45,10 @@ pub const DEFAULT_PEER_PORT: u16 = 34334;
 
 /// Whether this process's peer listener has ever come up, and on which port.
 ///
-/// `0` means "not yet". Written once the listener binds, read by
-/// `atlasctl agent status` through the agent's own status reply, so an operator
-/// can see the one thing that otherwise only shows up as a "Connection refused"
-/// on a DIFFERENT machine: this agent is running, but cannot accept peers.
+/// `0` means "not yet". Written once the listener binds, and read when this
+/// agent is about to promise something that depends on it — minting a join code
+/// being the case that matters, since an unhonourable invitation is discovered
+/// on a DIFFERENT machine as a bare "Connection refused".
 static LISTENING_ON: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
 
 /// Record that the peer listener is accepting on `port`.
@@ -56,11 +56,12 @@ pub fn mark_listener_up(port: u16) {
     LISTENING_ON.store(port, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// The port the peer listener is accepting on, or `None` if it is not up.
+/// The port THIS process's peer listener is accepting on, or `None`.
 ///
-/// Not a probe: a probe from inside this process would also succeed against
-/// somebody ELSE's listener on the same port, which is precisely the case this
-/// is meant to distinguish.
+/// Not a probe, and that is the whole value of it. `atlasctl doctor` and
+/// `agent status` probe the port from outside the agent, which cannot tell our
+/// listener from somebody else's on the same port — useful to an operator, but
+/// not something the agent may rely on when deciding what it can promise.
 #[must_use]
 pub fn listening_on() -> Option<u16> {
     match LISTENING_ON.load(std::sync::atomic::Ordering::Relaxed) {
