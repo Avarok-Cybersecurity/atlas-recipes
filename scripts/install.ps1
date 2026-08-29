@@ -22,8 +22,19 @@
 # `irm | iex` cannot pass arguments; `[scriptblock]::Create` can, and is the
 # idiom every Windows installer that takes options uses.
 
+# `irm | iex` runs this in the CALLER'S SCOPE, so anything set here is still set
+# in the operator's session afterwards. `$ErrorActionPreference` is saved and put
+# back at the end for that reason: without it, a successful install silently left
+# every later command in the window failing on the first non-terminating error.
+$__atlasPrevEap = $ErrorActionPreference
 $ErrorActionPreference = 'Stop'
-Set-StrictMode -Version Latest
+
+# NOT `Set-StrictMode` here, for the same reason and one more: there is no way to
+# read the caller's current strict mode, so it cannot be restored -- turning it
+# off at the end would be a change in its own right for anyone who had it on. The
+# test harness sets it before loading these functions, so the strictness this
+# script is written under is still enforced where it can be observed, and not
+# imposed on a session that did not ask for it.
 
 # Deliberately NO `param()` block, and every option parsed by hand.
 #
@@ -354,4 +365,11 @@ try {
     Write-Info "    $BinName run qwen3.6-35b-a3b-fp8-mtp"
 } finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+    # Hand the session back as it was found. This runs on the success path and on
+    # a thrown failure; it does NOT run when `Die` calls `exit`, which is the
+    # right trade -- the operator is looking at an error message there, and
+    # restructuring the whole script to catch that case would put `exit`
+    # semantics inside a script block, where a failed checksum might stop halting
+    # the install. That is a far worse bug than a preference left set.
+    $ErrorActionPreference = $__atlasPrevEap
 }

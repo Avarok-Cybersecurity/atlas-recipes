@@ -13,6 +13,10 @@
 # test-specific code in a production path; this file is where that cost belongs.
 
 $ErrorActionPreference = 'Stop'
+# The shipped script no longer sets this itself: `irm | iex` runs in the caller's
+# scope and it cannot be restored. The strictness the script is WRITTEN under is
+# enforced here instead, where it costs no one their session.
+Set-StrictMode -Version Latest
 
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $src = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'scripts/install.ps1')
@@ -145,6 +149,28 @@ Write-Host 'REACHED-THE-LINE-AFTER'
 # x86_64 download that would run under emulation against an untested Docker.
 $t = Get-Target
 Should-Contain 'this runner resolves to a real target' $t 'pc-windows-msvc'
+
+# ── what the script does to the CALLER'S session ───────────────────────────────
+# `irm | iex` executes in the caller's scope, so these are properties of the
+# shipped TEXT, not of anything a loaded function can be asked. An operator whose
+# window is left in Stop-on-everything, or in strict mode, finds their next
+# pasted snippet failing for reasons that have nothing to do with them.
+$src = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'scripts/install.ps1')
+
+# Only the comment explaining its absence may mention it.
+$strictCalls = [regex]::Matches($src, '(?m)^\s*Set-StrictMode').Count
+if ($strictCalls -eq 0) {
+    Ok 'the installer does not impose strict mode on the caller''s session'
+} else {
+    Bad 'the installer does not impose strict mode on the caller''s session' "found $strictCalls Set-StrictMode call(s); iex cannot undo them"
+}
+
+if ($src -match '\$__atlasPrevEap = \$ErrorActionPreference' -and
+    $src -match '\$ErrorActionPreference = \$__atlasPrevEap') {
+    Ok 'ErrorActionPreference is saved and put back'
+} else {
+    Bad 'ErrorActionPreference is saved and put back' 'a successful install must hand the session back as it found it'
+}
 
 Write-Host ""
 Write-Host "  $script:pass passed, $script:fail failed"
