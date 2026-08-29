@@ -26,6 +26,33 @@ use std::io::ErrorKind;
 /// Errs toward `false`: an unrecognised failure stops the walk. Giving up one
 /// address early is a worse message; giving up an attempt is a lockout.
 #[must_use]
+/// Attached to a [`walk`] failure when NO address was ever reached.
+///
+/// The distinction is not cosmetic. A caller that never reached the far machine
+/// never presented its credentials either — so a pairing code is untouched, and
+/// telling the operator to mint a fresh one sends them to redo the one step
+/// that was not the problem. That is exactly the dead end a real onboarding
+/// transcript ended in.
+///
+/// Carried as an error source rather than sniffed out of a message, so the rule
+/// stays in [`never_reached`] and cannot drift into a second copy.
+#[derive(Debug)]
+pub struct NeverReached;
+
+impl std::fmt::Display for NeverReached {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("no address answered")
+    }
+}
+
+impl std::error::Error for NeverReached {}
+
+/// Whether this error carries [`NeverReached`].
+#[must_use]
+pub fn was_never_reached(err: &anyhow::Error) -> bool {
+    err.chain().any(|c| c.is::<NeverReached>())
+}
+
 pub fn never_reached(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
         cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
@@ -61,17 +88,23 @@ where
     F: FnMut(std::net::SocketAddr) -> anyhow::Result<T>,
 {
     let mut why: Vec<String> = Vec::new();
+    // Every failure so far was a failure to REACH, not a refusal by the far end.
+    let mut all_unreachable = true;
     for addr in addrs {
         match dial(*addr) {
             Ok(v) => return Ok((*addr, v)),
             Err(e) => {
                 let keep_going = never_reached(&e);
+                all_unreachable &= keep_going;
                 why.push(format!("{addr}: {e:#}"));
                 if !keep_going {
                     break;
                 }
             }
         }
+    }
+    if all_unreachable {
+        return Err(anyhow::Error::new(NeverReached).context(why.join("; ")));
     }
     anyhow::bail!("{}", why.join("; "))
 }
@@ -95,17 +128,23 @@ where
     Fut: std::future::Future<Output = anyhow::Result<T>>,
 {
     let mut why: Vec<String> = Vec::new();
+    // Every failure so far was a failure to REACH, not a refusal by the far end.
+    let mut all_unreachable = true;
     for addr in addrs {
         match dial(*addr).await {
             Ok(v) => return Ok((*addr, v)),
             Err(e) => {
                 let keep_going = never_reached(&e);
+                all_unreachable &= keep_going;
                 why.push(format!("{addr}: {e:#}"));
                 if !keep_going {
                     break;
                 }
             }
         }
+    }
+    if all_unreachable {
+        return Err(anyhow::Error::new(NeverReached).context(why.join("; ")));
     }
     anyhow::bail!("{}", why.join("; "))
 }
@@ -166,6 +205,43 @@ mod tests {
         // every failure as a refusal and stop after one address.
         let e = io(ErrorKind::ConnectionRefused).context("dialling 10.10.10.9:34334");
         assert!(never_reached(&e));
+    }
+
+    /// A walk where nothing ever answered is tagged, so the caller can say the
+    /// code is untouched instead of telling the operator to mint a new one.
+    ///
+    /// This is the distinction a real onboarding transcript died on: a
+    /// `Connection refused` was reported as "the code expires, and is good for
+    /// one machine only", so the next thing tried was a fresh code — the one
+    /// step that was not the problem.
+    #[test]
+    fn a_walk_that_reached_nothing_is_tagged_as_such() {
+        let out = super::walk(&[a(9), a(13)], |addr| -> anyhow::Result<()> {
+            Err(anyhow::Error::new(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                format!("nothing at {addr}"),
+            )))
+        });
+        let e = out.expect_err("nothing answered");
+        assert!(
+            super::was_never_reached(&e),
+            "an all-refused walk must be tagged: {e:#}"
+        );
+    }
+
+    /// A walk that DID reach a machine which then refused is not tagged: there
+    /// the credentials were presented, so the code really may be spent.
+    #[test]
+    fn a_walk_that_was_answered_is_not_tagged() {
+        let out = super::walk(&[a(9)], |_| -> anyhow::Result<()> {
+            // No io::Error in the chain: the far end answered and said no.
+            Err(anyhow::anyhow!("that code has already been used"))
+        });
+        let e = out.expect_err("refused");
+        assert!(
+            !super::was_never_reached(&e),
+            "a refusal by the far end must not read as unreachable: {e:#}"
+        );
     }
 
     #[test]

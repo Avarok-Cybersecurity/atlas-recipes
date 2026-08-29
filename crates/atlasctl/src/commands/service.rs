@@ -169,9 +169,35 @@ fn join_fleet(join: &crate::joinarg::Join, grant_control: bool) -> Result<()> {
         ))
     })
     .map_err(|e| {
-        anyhow::anyhow!(
-            "could not join the fleet. The code expires, and is good for one machine only — mint a fresh one if this is not the first try.\n  {e:#}"
-        )
+        // Blaming the code when nothing ever answered sends the operator to
+        // redo the one step that was not the problem. A refused or timed-out
+        // dial means this machine never presented the code at all, so it is
+        // still good — what is wrong is on the OTHER machine, and that is
+        // where the next command has to be run.
+        if atlasctl_agent::peer::reach::was_never_reached(&e) {
+            anyhow::anyhow!(
+                concat!(
+                    "could not reach that machine — nothing answered on its peer port.\n",
+                    "  {e:#}\n",
+                    "The code was never presented, so it is still good: do not mint a new one.\n",
+                    "On THAT machine, check the `peers:` line of:\n",
+                    "    atlasctl doctor\n",
+                    "A peer channel that is not listening is the usual cause. It retries, so ",
+                    "something else may still be holding the port.",
+                ),
+                e = e
+            )
+        } else {
+            anyhow::anyhow!(
+                concat!(
+                    "could not join the fleet. It answered, so the code is the likely ",
+                    "problem — it expires, and is good for one machine only. Mint a fresh ",
+                    "one if this is not the first try.\n",
+                    "  {e:#}",
+                ),
+                e = e
+            )
+        }
     })?;
 
     atlasctl_agent::fleet::record_pairing(
