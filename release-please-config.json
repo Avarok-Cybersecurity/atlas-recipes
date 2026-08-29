@@ -6,10 +6,13 @@
       "package-name": "atlas-recipes-data",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
-        "Cargo.toml",
-        "crates/atlasctl/Cargo.toml"
+        "Cargo.toml"
       ]
-    }
+    },
+    "crates/atlasctl-protocol": {},
+    "crates/atlasctl-core": {},
+    "crates/atlasctl-agent": {},
+    "crates/atlasctl": {}
   },
   "plugins": [
     "cargo-workspace",

@@ -120,6 +120,38 @@ def check_release_config() -> int:
         else:
             print(f"::error::linked-versions names {component!r}, which is no crate here")
             bad = 1
+
+    # Naming a real crate is not enough: release-please only bumps paths listed
+    # in `packages`. A component that is a real crate but NOT a package is
+    # grouped with things that move and then never moves itself -- silently,
+    # because an unlisted path is not an error to release-please either.
+    #
+    # That is not hypothetical. It froze `crates/atlasctl` at 0.1.7 while the
+    # root went to 0.4.1, so `atlasctl --version` reported the same string for
+    # builds an entire wire-protocol revision apart -- and the installer, which
+    # compared those strings, told an operator "already installed here" forever
+    # while the control page kept telling them to upgrade. The version string
+    # cannot be an identity for a build if releases never move it.
+    declared = {}
+    for path, spec in cfg.get("packages", {}).items():
+        name = spec.get("package-name")
+        if not name:
+            manifest = ROOT / path / "Cargo.toml"
+            if manifest.exists():
+                with manifest.open("rb") as fh:
+                    name = tomllib.load(fh)["package"]["name"]
+        if name:
+            declared[name] = path
+    for component in linked_components(cfg):
+        if component in declared:
+            print(f"ok   {component} is a released package ({declared[component]})")
+        else:
+            print(
+                f"::error::linked-versions groups {component!r}, but no `packages` "
+                f"entry covers it -- release-please will never bump it, so it will "
+                f"sit at whatever version it has today while the group moves on"
+            )
+            bad = 1
     return bad
 
 
