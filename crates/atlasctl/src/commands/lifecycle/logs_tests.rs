@@ -197,9 +197,15 @@ mod logs_finds_what_run_started {
         );
     }
 
-    /// Nothing running under that name at all keeps the original message.
+    /// Nothing under that name offers BOTH explanations, and asserts neither.
+    ///
+    /// The message used to state "it has not been started here" as fact. That is
+    /// false in the case an operator is most likely to be in: recipes run with
+    /// `--rm`, so a container that started and then died is removed, and looking
+    /// for its logs is what brought them here. Being told the launch never
+    /// happened contradicts the "started" they had just read.
     #[test]
-    fn genuinely_absent_still_says_it_was_never_started_here() {
+    fn nothing_under_that_name_offers_both_explanations() {
         let r = RecordingRunner::new();
         r.push_result(Output {
             status: 0,
@@ -212,6 +218,26 @@ mod logs_finds_what_run_started {
             stderr: String::new(),
         });
         let err = logs_with(&r, &args("x"), "x").expect_err("must refuse");
-        assert!(format!("{err:#}").contains("has not been started here"));
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("never started here"),
+            "must offer the never-started case: {msg}"
+        );
+        assert!(
+            msg.contains("--rm"),
+            "must offer the started-and-removed case, which is the likelier one \
+             for somebody reading logs: {msg}"
+        );
+        assert!(
+            !msg.contains("it has not been started here"),
+            "must not assert a cause it cannot know: {msg}"
+        );
+        // rustfmt reflows `\`-continued strings into runs of spaces inside the
+        // message body; it has done so three times in this session, and it is
+        // invisible in review.
+        assert!(
+            !msg.replace("\n    ", "").contains("   "),
+            "reflowed whitespace leaked into the message: {msg:?}"
+        );
     }
 }
