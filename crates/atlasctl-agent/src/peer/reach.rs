@@ -87,6 +87,14 @@ pub fn walk<T, F>(
 where
     F: FnMut(std::net::SocketAddr) -> anyhow::Result<T>,
 {
+    // An empty list is not "nothing answered" — nothing was ASKED. Tagging it
+    // `NeverReached` would be read by a caller as "the far machine did not
+    // respond", and the message it produces says so in as many words, which is
+    // a claim about a dial that never happened. Every caller guards against
+    // this today; the tag is defined here, so the distinction belongs here too.
+    if addrs.is_empty() {
+        anyhow::bail!("no address to try");
+    }
     let mut why: Vec<String> = Vec::new();
     // Every failure so far was a failure to REACH, not a refusal by the far end.
     let mut all_unreachable = true;
@@ -127,6 +135,14 @@ where
     F: FnMut(std::net::SocketAddr) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<T>>,
 {
+    // An empty list is not "nothing answered" — nothing was ASKED. Tagging it
+    // `NeverReached` would be read by a caller as "the far machine did not
+    // respond", and the message it produces says so in as many words, which is
+    // a claim about a dial that never happened. Every caller guards against
+    // this today; the tag is defined here, so the distinction belongs here too.
+    if addrs.is_empty() {
+        anyhow::bail!("no address to try");
+    }
     let mut why: Vec<String> = Vec::new();
     // Every failure so far was a failure to REACH, not a refusal by the far end.
     let mut all_unreachable = true;
@@ -308,12 +324,24 @@ mod tests {
         assert_eq!(v, "paired");
     }
 
+    /// An empty list is an error, and specifically NOT "nothing answered".
+    ///
+    /// The distinction matters since `walk` began tagging unreachable walks:
+    /// `NeverReached` tells the caller the far machine did not respond, and the
+    /// join path turns that into "the code was never presented, so it is still
+    /// good". With no address to dial, nothing was asked — a true statement
+    /// reached by a false route, and the first caller that stops guarding its
+    /// own input would inherit the wrong explanation.
     #[test]
-    fn an_empty_list_is_an_error_rather_than_a_silent_success() {
+    fn an_empty_list_is_an_error_but_not_an_unreachable_one() {
         let out = super::walk(&[], |_| -> anyhow::Result<()> {
             panic!("nothing to dial must not dial")
         });
-        assert!(out.is_err());
+        let e = out.expect_err("nothing to dial is an error");
+        assert!(
+            !super::was_never_reached(&e),
+            "an unasked question is not an unanswered one: {e:#}"
+        );
     }
 
     #[test]
