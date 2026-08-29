@@ -121,7 +121,27 @@ pub fn write(path: &Path, bytes: &[u8]) -> Result<()> {
     // token, a revoked pin -- silently rolls back to the previous contents.
     // Best-effort: not every filesystem lets you open a directory for sync, and
     // failing the write over an unsyncable parent would be worse than the risk.
-    if let Err(e) = std::fs::rename(&tmp, path) {
+    // Windows can REFUSE a replace-by-rename that unix performs unconditionally:
+    // `MoveFileEx` fails with a sharing violation while another thread or process
+    // holds the target, which includes the instant another writer is mid-replace
+    // on it. The concurrency test above found exactly that on a Windows runner --
+    // so without this retry the atomic write trades a torn file for a spurious
+    // failure, which for a pin write is not obviously the better trade. Unix
+    // renames atomically and never takes this path.
+    let mut waited_ms = 0u64;
+    let renamed = loop {
+        match std::fs::rename(&tmp, path) {
+            Ok(()) => break Ok(()),
+            // 200ms total, in 5ms steps: far longer than a competing rename, far
+            // shorter than anything a caller would notice.
+            Err(_) if cfg!(windows) && waited_ms < 200 => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                waited_ms += 5;
+            }
+            Err(e) => break Err(e),
+        }
+    };
+    if let Err(e) = renamed {
         // Do not leave the temp file behind to be mistaken for state, or to
         // accumulate one per crashed process.
         let _ = std::fs::remove_file(&tmp);
