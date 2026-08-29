@@ -296,3 +296,42 @@ pub(super) fn all_three() -> Vec<NodeId> {
 pub(super) fn calls(log: &Log) -> Vec<String> {
     log.lock().expect("log lock").clone()
 }
+
+/// The fallback endpoint port must be the engine's own default, not a number
+/// that once looked like it.
+///
+/// It was 8000 for as long as this constant existed, and the engine has never
+/// defaulted to 8000. Nothing caught it because the only thing asserting the
+/// value was a doc comment claiming it was "the serving runtime's own default"
+/// -- and a comment cannot fail. The symptom is the one `serve_port`'s doc
+/// already describes for the layer above: an endpoint printed as `:8000` while
+/// rank 0 serves on `:8888`.
+///
+/// Asserted against the vendored snapshot, which is reflected out of the
+/// engine's clap, so the engine changing its default fails here rather than
+/// quietly making this wrong again.
+#[test]
+fn the_fallback_port_is_the_engines_own_default() {
+    use super::plan::DEFAULT_SERVE_PORT;
+    const SNAPSHOT: &str = include_str!("../../../../vendor/serve-options.v1.json");
+
+    // Deliberately a string scan rather than a JSON parse: this file has no
+    // serde dependency, and the shape being matched is the one the generator
+    // emits verbatim.
+    let port_entry = SNAPSHOT
+        .split('{')
+        .find(|chunk| chunk.contains("\"key\": \"port\""))
+        .expect("the snapshot has a `port` flag");
+    let default = port_entry
+        .split("\"default\":")
+        .nth(1)
+        .and_then(|rest| rest.split('"').nth(1))
+        .expect("the `port` flag declares a default");
+
+    assert_eq!(
+        default,
+        DEFAULT_SERVE_PORT.to_string(),
+        "DEFAULT_SERVE_PORT is {DEFAULT_SERVE_PORT}, but the engine defaults --port to {default}. \
+         The endpoint this decorates would tell an operator the wrong port."
+    );
+}
