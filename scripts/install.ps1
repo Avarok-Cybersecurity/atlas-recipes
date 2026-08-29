@@ -175,6 +175,25 @@ function Get-Version {
     try { return (& $Exe --version 2>$null | Select-Object -First 1) } catch { return '' }
 }
 
+# Should the downloaded binary replace the installed one? CONTENT, not version.
+#
+# `--version` reports the crate semver, which release tooling bumps only
+# sometimes, so two builds separated by an entire wire-protocol revision can
+# both report "atlasctl 0.1.7". A user hit exactly that: their agent spoke
+# protocol 1, the published build spoke 4, both said 0.1.7, and the installer
+# answered "already installed" every time while the control page kept sending
+# them back to it. Bytes cannot lie about this.
+function Test-BinaryDiffers {
+    param($Installed, $Downloaded)
+    if (-not (Test-Path -LiteralPath $Installed)) { return $true }
+    try {
+        return (Get-Sha256 $Installed) -ne (Get-Sha256 $Downloaded)
+    } catch {
+        # Unreadable installed binary: replacing it is the safe direction.
+        return $true
+    }
+}
+
 function Install-Agent {
     param($Exe, $SameVersion, $JoinTarget, [bool]$Grant)
 
@@ -313,12 +332,21 @@ try {
     # changes.
     $newVersion = Get-Version $staged
     $oldVersion = Get-Version $exe
-    $sameVersion = $newVersion -and ($oldVersion -eq $newVersion)
+    # Versions are for the OPERATOR to read; the decision is content -- see
+    # Test-BinaryDiffers.
+    $differs = Test-BinaryDiffers -Installed $exe -Downloaded $staged
+    $sameVersion = -not $differs
 
     if ($sameVersion) {
         Write-Info "$newVersion is already installed here - keeping it."
     } else {
-        if ($oldVersion) { Write-Info "upgrading $oldVersion -> $newVersion" }
+        if ($oldVersion -and $oldVersion -eq $newVersion) {
+            # Same version string, different build: say so rather than printing
+            # "upgrading 0.1.7 -> 0.1.7", which reads like a bug.
+            Write-Info "$oldVersion is installed, but the published build differs - replacing it."
+        } elseif ($oldVersion) {
+            Write-Info "upgrading $oldVersion -> $newVersion"
+        }
         # Replacing a RUNNING exe fails with "file in use", and the agent this
         # installer is upgrading is exactly such a process. Move it aside first:
         # Windows permits renaming a running image, and the stale copy is

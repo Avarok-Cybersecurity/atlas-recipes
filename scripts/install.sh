@@ -57,6 +57,38 @@ detect_target() {
 }
 
 # Verify a downloaded archive against the release's SHA256SUMS.
+# The SHA256 of a file, or "" when it cannot be read. One implementation, used
+# both by the download check and by `binary_differs` below.
+sha256_of() {
+    [ -r "$1" ] || return 0
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+
+# Should the downloaded binary replace the installed one? CONTENT, not version.
+#
+# This used to compare `atlasctl --version` strings, and that is not an identity:
+# the crate version is bumped by release tooling only sometimes, so two builds
+# that differ by an entire wire-protocol revision can BOTH report "atlasctl
+# 0.1.7". That is not hypothetical -- it is exactly what a user hit: their agent
+# spoke protocol 1, the published build spoke 4, both said 0.1.7, and this
+# script answered "already installed here -- keeping it" every single time. The
+# control page told them to run the installer; the installer told them they were
+# fine; nothing could break the loop short of deleting the binary by hand.
+#
+# Bytes cannot lie about this. Same file -> nothing to do. Different file ->
+# install it, whatever the two version strings happen to say.
+binary_differs() { # installed_path downloaded_path
+    [ -x "$1" ] || return 0          # nothing installed: yes, install
+    old=$(sha256_of "$1")
+    new=$(sha256_of "$2")
+    [ -n "$new" ] || return 0        # cannot hash the download: prefer installing
+    [ "$old" != "$new" ]
+}
+
 verify_checksum() {
     archive="$1"
     sums="$2"
@@ -402,10 +434,16 @@ main() {
     old_version=""
     [ -x "$dir/$BIN_NAME" ] && old_version=$("$dir/$BIN_NAME" --version 2>/dev/null || true)
 
+    # Versions are for the OPERATOR to read. The decision is made on content --
+    # see `binary_differs`.
     same_version=""
-    if [ -n "$new_version" ] && [ "$old_version" = "$new_version" ]; then
+    if ! binary_differs "$dir/$BIN_NAME" "$tmp/$BIN_NAME"; then
         same_version="yes"
         info "$new_version is already installed here — keeping it."
+    elif [ -n "$old_version" ] && [ "$old_version" = "$new_version" ]; then
+        # Same version string, different build. Say so plainly rather than
+        # printing "upgrading 0.1.7 -> 0.1.7", which reads like a bug.
+        info "$old_version is installed, but the published build differs — replacing it."
     else
         [ -z "$old_version" ] || info "upgrading $old_version -> $new_version"
         # Install to a temp name and rename, so an interrupted install cannot leave
