@@ -127,36 +127,14 @@ pub fn run(args: &RunArgs) -> Result<()> {
     let brings_own_weights = plan.docker.command.iter().any(|a| a == "--model-from-path");
     if !brings_own_weights
         && let Some(dir) = hfcache::hub_dir(Path::new(&host.hf_cache_dir), &recipe.model)
+        && let Some(why) = cache_miss(
+            hfcache::cache_state(&dir),
+            &args.recipe,
+            &recipe.model,
+            &host.hf_cache_dir,
+        )
     {
-        match hfcache::cache_state(&dir) {
-            hfcache::CacheState::Weights => {}
-            hfcache::CacheState::Absent => bail!(
-                "`{}` needs the model `{}`, which is not in {}.\n\
-                     The launch runs offline, so it cannot download it. Fetch it first:\n\
-                       hf download {}",
-                args.recipe,
-                recipe.model,
-                host.hf_cache_dir,
-                recipe.model
-            ),
-            // Distinct from Absent on purpose. `hf download` is the same fix,
-            // but "it is not there" is the wrong thing to tell someone who can
-            // SEE the directory: they check, find it, and conclude the tool is
-            // broken. Naming the state — present, but no weights — is what makes
-            // the instruction believable.
-            hfcache::CacheState::MetadataOnly => bail!(
-                "`{}` needs the model `{}`. Its cache directory exists in {}, but \
-                 holds no weight files — only metadata, which is what an \
-                 interrupted or metadata-only download leaves behind.\n\
-                     The launch runs offline, so it cannot fetch the rest. \
-                 Complete it with:\n\
-                       hf download {}",
-                args.recipe,
-                recipe.model,
-                host.hf_cache_dir,
-                recipe.model
-            ),
-        }
+        bail!("{why}");
     }
 
     let runner = StdProcessRunner;
@@ -454,6 +432,94 @@ mod liveness_tests {
         assert!(
             liveness_verdict(None, "atlas-r").is_none(),
             "a runner error must not be read as a dead container"
+        );
+    }
+}
+
+/// What to say when the model a recipe needs is not usable from the cache.
+///
+/// `None` when it is. Built here rather than inline so the WORDING can be
+/// tested: these are read at a moment of failure, and the useful half is the
+/// command at the end, which has to survive both a refactor and rustfmt.
+fn cache_miss(
+    state: hfcache::CacheState,
+    recipe_arg: &str,
+    model: &str,
+    cache_dir: &str,
+) -> Option<String> {
+    match state {
+        hfcache::CacheState::Weights => None,
+        hfcache::CacheState::Absent => Some(format!(
+            concat!(
+                "`{recipe}` needs the model `{model}`, which is not in {dir}.\n",
+                "The launch runs offline, so it cannot download it. Fetch it first:\n",
+                "    hf download {model}",
+            ),
+            recipe = recipe_arg,
+            model = model,
+            dir = cache_dir
+        )),
+        // Distinct from Absent on purpose. `hf download` is the same fix, but
+        // "it is not there" is the wrong thing to tell someone who can SEE the
+        // directory: they check, find it, and conclude the tool is broken.
+        // Naming the state — present, but no weights — is what makes the
+        // instruction believable.
+        hfcache::CacheState::MetadataOnly => Some(format!(
+            concat!(
+                "`{recipe}` needs the model `{model}`. Its cache directory exists in ",
+                "{dir}, but holds no weight files — only metadata, which is what an ",
+                "interrupted or metadata-only download leaves behind.\n",
+                "The launch runs offline, so it cannot fetch the rest. Complete it with:\n",
+                "    hf download {model}",
+            ),
+            recipe = recipe_arg,
+            model = model,
+            dir = cache_dir
+        )),
+    }
+}
+
+#[cfg(test)]
+mod cache_miss_tests {
+    use super::cache_miss;
+    use atlasctl_core::hfcache::CacheState;
+
+    /// Usable weights say nothing at all.
+    #[test]
+    fn a_present_model_is_not_reported() {
+        assert!(cache_miss(CacheState::Weights, "r", "org/m", "/c").is_none());
+    }
+
+    /// Both failures end in a command the operator can run, indented so it is
+    /// findable in a wall of prose.
+    ///
+    /// The indent is asserted because it did NOT survive the first version:
+    /// written as a `\`-continued string, Rust strips the following line's
+    /// leading whitespace, so `hf download` rendered flush against the margin
+    /// and stopped looking like a command.
+    #[test]
+    fn both_failures_end_in_an_indented_command() {
+        for state in [CacheState::Absent, CacheState::MetadataOnly] {
+            let why = cache_miss(state, "r", "org/m", "/c").expect("must explain");
+            assert!(
+                why.contains("\n    hf download org/m"),
+                "the command must be indented and name the model: {why:?}"
+            );
+        }
+    }
+
+    /// The two states must not converge on one message: an operator who can see
+    /// the directory is told the model is missing, decides the tool is wrong,
+    /// and stops believing the fix it just offered.
+    #[test]
+    fn a_metadata_only_cache_is_not_described_as_absent() {
+        let absent = cache_miss(CacheState::Absent, "r", "org/m", "/c").expect("absent");
+        let meta = cache_miss(CacheState::MetadataOnly, "r", "org/m", "/c").expect("meta");
+        assert!(absent.contains("not in /c"), "{absent}");
+        assert!(meta.contains("no weight files"), "{meta}");
+        assert!(
+            !meta.contains("which is not in"),
+            "a directory the operator can see must not be called absent: {meta}"
         );
     }
 }
