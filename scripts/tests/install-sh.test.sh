@@ -236,6 +236,36 @@ check "fish is identified, not guessed" "fish"             "$(rc /usr/bin/fish L
 check "unknown shell falls back"        "/h/.profile"      "$(rc /bin/dash Linux)"
 check "empty SHELL falls back"          "/h/.profile"      "$(rc '' Linux)"
 
+# --- path_advice --------------------------------------------------------------
+# rc_file is tested in isolation above; this pins its CONTRACT with the only
+# caller. The "fish" return is a sentinel, not a path, and the caller has to
+# recognise it -- an agreement that previously lived in two places with nothing
+# checking they still agreed.
+
+adv() {
+    ( . "$WORK/lib.sh"; _os="$2"; SHELL="$1" HOME="${3:-/h}"
+      # shellcheck disable=SC2317  # called indirectly, by rc_file
+      uname() { echo "$_os"; }
+      path_advice "${4:-/opt/bin}" ) 2>&1 | tail -1
+}
+
+# fish gets fish syntax. `export PATH=...` is not valid fish, so emitting it
+# would hand the operator a line that fails when pasted.
+contains "fish is given fish syntax" \
+    "$(adv /usr/bin/fish Linux)" "fish_add_path"
+check "fish is NOT given an export line" "" \
+    "$(adv /usr/bin/fish Linux | grep -o 'export PATH')"
+
+# Everyone else gets the export line, aimed at the file their shell reads.
+contains "zsh is given .zshrc"        "$(adv /bin/zsh Darwin)"  ".zshrc"
+contains "bash on macos gets .bash_profile" "$(adv /bin/bash Darwin)" ".bash_profile"
+
+# A $HOME with a space must still paste. This is why both are quoted.
+contains "a spaced HOME stays quoted" \
+    "$(adv /bin/zsh Darwin '/Users/John Smith')" '>> "/Users/John Smith/.zshrc"'
+contains "a spaced dir stays quoted too" \
+    "$(adv /usr/bin/fish Linux /h '/opt/my bin')" 'fish_add_path "/opt/my bin"'
+
 # --- place_binary -------------------------------------------------------------
 # The point of these is that the FILE moved, not that a message was printed.
 # The bug they exist for printed exactly the right sentence and left the old
@@ -283,18 +313,38 @@ case "$1" in
   --version) echo "atlasctl 9.9.9" ;;
   agent) case "$2" in
       status)  [ -n "${RUNNING:-}" ] && exit 0 || exit 1 ;;
-      install) echo "[fake] agent install ran" ;;
+      # The whole argv, not a fixed string. Echoing a constant made the
+    # forwarding of --join and --grant-control invisible: a mutation deleting
+    # both still passed every test here.
+    install) echo "[fake] agent install ran: $*" ;;
     esac ;;
 esac
 EOF
 chmod +x "$WORK/fake-atlasctl"
 
-agent_run() { # same_version join running supervised
+agent_run() { # same_version join running supervised [grant]
     ( . "$WORK/lib.sh"
       # shellcheck disable=SC2317  # both stubs are called by install_agent
       if [ "$4" = yes ]; then service_installed() { return 0; }; else service_installed() { return 1; }; fi
-      RUNNING="$3" install_agent "$WORK/fake-atlasctl" "$2" "" "$1" ) 2>&1
+      # $5 reaches install_agent as its $3. Nothing passed one before, so
+      # `${3:+"$3"}` -- the grant-control forwarding -- was never executed by
+      # any test, which is how a dropped flag shipped.
+      RUNNING="$3" install_agent "$WORK/fake-atlasctl" "$2" "${5:-}" "$1" ) 2>&1
 }
+
+# The flags actually reach the binary. Asserted on the fake's full argv,
+# because a constant string cannot distinguish "forwarded" from "dropped".
+contains "a join forwards --join to the agent" \
+    "$(agent_run yes '12345678@10.0.0.1' 1 yes)" "agent install --join 12345678@10.0.0.1"
+
+contains "a join forwards --grant-control too" \
+    "$(agent_run yes '12345678@10.0.0.1' 1 yes --grant-control)" \
+    "--join 12345678@10.0.0.1 --grant-control"
+
+# ...and does NOT invent one on the path that has no inviter. `--grant-control`
+# is meaningful only with `--join`, so the no-join path must not forward it.
+check "no join means no --grant-control on the command line" "" \
+    "$(agent_run '' '' '' no --grant-control | grep -o '\-\-grant-control' | head -1)"
 
 contains "a fresh install installs the service" \
     "$(agent_run '' '' '' no)" "[fake] agent install ran"
