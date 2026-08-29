@@ -41,7 +41,24 @@ struct Reservation {
     epoch: String,
     recipe: String,
     plan: atlasctl_core::docker::LaunchPlan,
+    /// When this machine agreed. Without it a reservation is immortal: the head
+    /// that made it can close its tab, crash, or be restarted for an upgrade,
+    /// and nothing on this machine ever releases the hold. The refusal below
+    /// tells the operator to "abort that launch, or wait for it to finish" --
+    /// abort needs the lost epoch, and it never finishes, so every future
+    /// cluster launch on this machine is refused until someone restarts the
+    /// agent by hand. On a fleet that is every machine at once.
+    made: std::time::Instant,
 }
+
+/// How long a reservation outlives the head that made it.
+///
+/// It only has to cover prepare -> commit, which is a few round trips plus
+/// whatever `docker rm -f` takes; commit consumes the reservation, so a live
+/// launch is never at risk from this. Ten minutes is far past that and still
+/// short enough that an operator who lost a head can simply try again rather
+/// than ssh to every machine.
+const RESERVATION_TTL: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// What this machine can do, as opposed to what it ships.
 ///
@@ -294,13 +311,24 @@ impl RankService for LocalRankService {
         // the SAME epoch is allowed, because a retried prepare after a dropped
         // connection is an ordinary thing and not a second cluster.
         {
-            let held = self.reserved.lock().expect("reservation lock poisoned");
+            let mut held = self.reserved.lock().expect("reservation lock poisoned");
             if let Some(r) = held.as_ref()
                 && r.epoch != epoch
             {
-                return refuse(RefusalReason::Reserved {
-                    recipe: r.recipe.clone(),
-                });
+                if r.made.elapsed() >= RESERVATION_TTL {
+                    // The head that made this is gone -- it would have committed
+                    // or aborted long ago. Releasing here is what makes the
+                    // refusal's "wait for it to finish" true, and it is the
+                    // behaviour `RankService::abort`'s own doc already claims:
+                    // "a stale reservation is released by the next prepare
+                    // regardless".
+                    *held = None;
+                } else {
+                    return refuse(RefusalReason::Reserved {
+                        recipe: r.recipe.clone(),
+                        expires_in_s: (RESERVATION_TTL - r.made.elapsed()).as_secs(),
+                    });
+                }
             }
         }
 
@@ -334,6 +362,7 @@ impl RankService for LocalRankService {
             epoch: epoch.to_owned(),
             recipe: assignment.recipe.clone(),
             plan,
+            made: std::time::Instant::now(),
         });
         PrepareReply::Prepared
     }
@@ -454,5 +483,7 @@ pub(crate) fn is_ours(container: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-')
 }
 
+#[cfg(test)]
+mod commit_tests;
 #[cfg(test)]
 mod tests;
