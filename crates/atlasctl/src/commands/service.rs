@@ -168,11 +168,7 @@ fn join_fleet(join: &crate::joinarg::Join, grant_control: bool) -> Result<()> {
             &join.code,
         ))
     })
-    .map_err(|e| {
-        anyhow::anyhow!(
-            "could not join the fleet. The code expires, and is good for one machine only — mint a fresh one if this is not the first try.\n  {e:#}"
-        )
-    })?;
+    .map_err(|e| join_failure(&e))?;
 
     atlasctl_agent::fleet::record_pairing(
         &pins,
@@ -323,6 +319,105 @@ mod obstacle_tests {
             assert!(
                 !why.contains("already listening"),
                 "must not blame a free port: {why}"
+            );
+        }
+    }
+}
+
+/// Turn a failed join into words the operator can act on.
+///
+/// Extracted so the WORDING is testable. The defect this replaced was entirely
+/// a wording defect — the code was blamed for a failure that never presented
+/// it — and a fix to wording that no test can see is one refactor away from
+/// coming back.
+fn join_failure(e: &anyhow::Error) -> anyhow::Error {
+    // Blaming the code when nothing ever answered sends the operator to redo
+    // the one step that was not the problem. A refused or timed-out dial means
+    // this machine never presented the code at all, so it is still good — what
+    // is wrong is on the OTHER machine, and that is where the next command has
+    // to be run.
+    if atlasctl_agent::peer::reach::was_never_reached(e) {
+        anyhow::anyhow!(
+            concat!(
+                "could not reach that machine — nothing answered on its peer port.\n",
+                "  {e:#}\n",
+                "The code was never presented, so it is still good: do not mint a new one.\n",
+                "On THAT machine, check the `peers:` line of:\n",
+                "    atlasctl doctor\n",
+                "A peer channel that is not listening is the usual cause. It retries, so ",
+                "something else may still be holding the port.",
+            ),
+            e = e
+        )
+    } else {
+        anyhow::anyhow!(
+            concat!(
+                "could not join the fleet. It answered, so the code is the likely ",
+                "problem — it expires, and is good for one machine only. Mint a fresh ",
+                "one if this is not the first try.\n",
+                "  {e:#}",
+            ),
+            e = e
+        )
+    }
+}
+
+#[cfg(test)]
+mod join_failure_tests {
+    use super::join_failure;
+
+    fn unreachable() -> anyhow::Error {
+        anyhow::Error::new(atlasctl_agent::peer::reach::NeverReached)
+            .context("192.168.68.67:34334: Connection refused (os error 111)")
+    }
+
+    /// Nothing answered: the code is exonerated, and the next command is aimed
+    /// at the machine that is actually broken.
+    #[test]
+    fn an_unreachable_target_does_not_blame_the_code() {
+        let msg = format!("{:#}", join_failure(&unreachable()));
+        assert!(msg.contains("still good"), "must exonerate the code: {msg}");
+        assert!(
+            !msg.contains("Mint a fresh"),
+            "must NOT send them to mint a new code — that is the dead end: {msg}"
+        );
+        assert!(
+            msg.contains("doctor"),
+            "must aim the next command at the other machine: {msg}"
+        );
+        assert!(
+            msg.contains("Connection refused"),
+            "must keep the underlying cause: {msg}"
+        );
+    }
+
+    /// Answered and refused: the code IS the likely problem, and saying so is
+    /// correct here. The two branches must not converge on one vague message.
+    #[test]
+    fn a_refusal_by_the_far_end_still_points_at_the_code() {
+        let e = anyhow::anyhow!("that code has already been used");
+        let msg = format!("{:#}", join_failure(&e));
+        assert!(msg.contains("Mint a fresh"), "{msg}");
+        assert!(
+            !msg.contains("still good"),
+            "a spent code must not be called good: {msg}"
+        );
+    }
+
+    /// No run of spaces inside either message.
+    ///
+    /// Written as ordinary string continuations, rustfmt reflows these into the
+    /// message body. That happened to the first draft of this change and to a
+    /// test fixture the same day, and it is invisible in review.
+    #[test]
+    fn neither_message_carries_reflowed_whitespace() {
+        for msg in [
+            format!("{:#}", join_failure(&unreachable())),
+            format!("{:#}", join_failure(&anyhow::anyhow!("refused"))),
+        ] {
+            assert!(
+                !msg.contains("  ") || msg.contains("\n  "),
+                "reflowed whitespace leaked into the message: {msg:?}"
             );
         }
     }
