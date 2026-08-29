@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.1](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.6.0...v0.6.1) (2026-08-29)
+
+
+### Bug Fixes
+
+* **nearest:** suggest the name the operator half-typed ([#166](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/166)) ([d04d386](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/d04d3868515ce5c03170dc3ef890a4809cdc1808))
+* **reach:** an unasked question is not an unanswered one ([#162](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/162)) ([242e8ae](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/242e8aefb0fbbe4ca934b9c563b716b09aa84686))
+* **release:** assert the release is one a user can actually install ([#163](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/163)) ([1e44a78](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/1e44a7817c2de6be5dbf4c922f510fd771ec0337))
+* **run:** do not report a container that already died as started ([#164](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/164)) ([8d5f5dd](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/8d5f5dd5473ad1ae25258c758e835b3264b12b37))
+
 ## [0.6.0](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.5.0...v0.6.0) (2026-08-29)
 
 
