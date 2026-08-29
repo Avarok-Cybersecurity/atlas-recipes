@@ -197,7 +197,7 @@ pub fn run(args: &RunArgs) -> Result<()> {
     // holds the container for minutes while weights load, so a couple of seconds
     // only distinguishes "died immediately" from "running", which is the whole
     // question here.
-    if let Some(why) = died_immediately(&runner, &plan.docker.name) {
+    if let Some(why) = died_immediately(&runner, &recipe.name, &plan.docker.name) {
         bail!("{why}");
     }
 
@@ -343,18 +343,37 @@ mod value_shape_tests {
 const LIVENESS_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// `Some(explanation)` when the container is already gone.
-fn died_immediately(runner: &dyn atlasctl_core::io::ProcessRunner, name: &str) -> Option<String> {
+fn died_immediately(
+    runner: &dyn atlasctl_core::io::ProcessRunner,
+    recipe: &str,
+    container: &str,
+) -> Option<String> {
     std::thread::sleep(LIVENESS_WAIT);
-    let out = runner
-        .run(&[
-            "docker".to_string(),
-            "ps".to_string(),
-            "-q".to_string(),
-            "-f".to_string(),
-            format!("name={name}"),
-        ])
-        .ok();
-    liveness_verdict(out.as_ref(), name)
+    let out = runner.run(&liveness_argv(recipe)).ok();
+    liveness_verdict(out.as_ref(), container)
+}
+
+/// Ask docker about THIS recipe's container, by label.
+///
+/// Not `--filter name=`: docker matches that as a substring, and recipe names
+/// nest — `qwen3.6-27b-fp8` is inside `qwen3.6-27b-fp8-mtp`, and three more
+/// pairs do the same. A name filter would see the sibling still running and
+/// report the container that just died as alive, which is silence in exactly
+/// the case this check exists for.
+///
+/// The label is what the launch writes and what `atlasctl logs`/`stop` already
+/// match on, so all three agree about which container belongs to a recipe.
+fn liveness_argv(recipe: &str) -> Vec<String> {
+    vec![
+        "docker".to_string(),
+        "ps".to_string(),
+        "-q".to_string(),
+        "--filter".to_string(),
+        format!(
+            "label={}={recipe}",
+            atlasctl_core::docker::translate::LABEL_RECIPE
+        ),
+    ]
 }
 
 /// The judgement, separated from the waiting and the process call so it can be
@@ -418,6 +437,27 @@ mod liveness_tests {
     #[test]
     fn a_running_container_is_not_reported() {
         assert!(liveness_verdict(Some(&out(0, "9f3c1a2b\n")), "atlas-r").is_none());
+    }
+
+    /// The query must be by LABEL, not by name.
+    ///
+    /// Docker matches `--filter name=` as a substring, and recipe names nest:
+    /// `qwen3.6-27b-fp8` is inside `qwen3.6-27b-fp8-mtp`, and three other pairs
+    /// in the shipped corpus do the same. With a name filter, launching the
+    /// shorter recipe while the longer one runs would match the SIBLING and
+    /// report the dead container as alive — silence in the one case this check
+    /// exists for.
+    #[test]
+    fn the_query_is_by_label_so_a_sibling_recipe_cannot_answer_for_it() {
+        let argv = super::liveness_argv("qwen3.6-27b-fp8").join(" ");
+        assert!(
+            argv.contains("label=io.atlasctl.recipe=qwen3.6-27b-fp8"),
+            "must ask by label: {argv}"
+        );
+        assert!(
+            !argv.contains("name="),
+            "a name filter is a substring match and would match the -mtp sibling: {argv}"
+        );
     }
 
     /// A docker that will not answer is NOT evidence of failure. Refusing a
