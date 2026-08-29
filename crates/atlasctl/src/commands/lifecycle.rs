@@ -373,4 +373,6 @@ fn managed_containers(runner: &dyn ProcessRunner) -> Result<Vec<String>> {
 }
 
 #[cfg(test)]
+mod logs_tests;
+#[cfg(test)]
 mod tests;
