@@ -392,6 +392,46 @@ jobs:
             -F prerelease=false -f make_latest=true >/dev/null
           echo "$TAG is now the latest release"
 
+  # The wheels are built by a job that runs BESIDE `build`, not before
+  # `github-release` — deliberately, so a flaky wheel toolchain cannot stop the
+  # binaries shipping (it tried, on v0.5.0). The cost was that `github-release`
+  # downloaded whatever artifacts happened to exist at that instant, so which
+  # wheels reached the release was a RACE:
+  #
+  #     v0.6.0 -> 6 wheels + sdist      v0.6.1 -> 1 wheel + sdist
+  #
+  # Same workflow, same commit shape, different outcome. Attaching them here
+  # instead keeps both properties: binaries never wait on wheels, and wheels are
+  # complete whenever they built.
+  #
+  # Not part of SHA256SUMS: that file covers `*.tar.xz` and `*.zip` only, and is
+  # written before this runs. Wheels carry their own hashes on PyPI.
+  attach-wheels:
+    name: attach the wheels
+    needs: [resolve, github-release, wheels, sdist]
+    if: ${{ !cancelled() && needs.resolve.outputs.release == 'true'
+      && needs['github-release'].result == 'success'
+      && needs.wheels.result == 'success'
+      && needs.sdist.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: wheels-*
+          merge-multiple: true
+      - name: upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -eu
+          ls -1 dist
+          gh release upload "$TAG" dist/* --clobber
+
+
   publish-crates:
     name: crates.io
     needs: [resolve, github-release]
@@ -623,7 +663,8 @@ jobs:
   # here rather than left to be noticed by a 404 on the install path.
   verify-published:
     name: assert the release actually shipped
-    needs: [resolve, github-release, publish-crates, publish-pypi, smoke-install]
+    needs:
+      [resolve, github-release, publish-crates, publish-pypi, smoke-install, attach-wheels]
     if: ${{ !cancelled() && needs.resolve.outputs.release == 'true' }}
     runs-on: ubuntu-24.04
     steps:
@@ -633,6 +674,7 @@ jobs:
           CRATES: ${{ needs['publish-crates'].result }}
           PYPI: ${{ needs['publish-pypi'].result }}
           SMOKE: ${{ needs['smoke-install'].result }}
+          WHEELS: ${{ needs['attach-wheels'].result }}
           TAG: ${{ needs.resolve.outputs.tag }}
         run: |
           set -eu
@@ -643,6 +685,13 @@ jobs:
             printf '%-16s %s\n' "$name" "$result"
             [ "$result" = success ] || fail=1
           done
+          # Attaching the wheels may legitimately be SKIPPED: that means the
+          # wheels did not build, which `publish-pypi` above already reports.
+          # What must not pass silently is attaching FAILING while the wheels
+          # succeeded — that is the release quietly losing assets, which is how
+          # v0.6.1 shipped one wheel where v0.6.0 shipped six.
+          printf '%-16s %s\\n' attach-wheels "$WHEELS"
+          if [ "$WHEELS" = failure ]; then fail=1; fi
           if [ "$fail" -ne 0 ]; then
             echo "::error::release $TAG did not ship: at least one publish job did not succeed"
             exit 1
