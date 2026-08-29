@@ -31,7 +31,7 @@ pub struct SessionDeps<'a> {
     /// The recipe inventory.
     pub registry: &'a RegistrySet,
     /// How launches actually happen.
-    pub launcher: &'a dyn Launcher,
+    pub launcher: std::sync::Arc<dyn Launcher>,
     /// The expected pairing token.
     pub token: &'a str,
     /// Whether this machine can run a recipe at all.
@@ -155,7 +155,7 @@ impl<'a> Session<'a> {
     }
 
     /// Handle one decoded message.
-    pub fn handle(&mut self, msg: ClientMsg) -> Vec<ServerMsg> {
+    pub async fn handle(&mut self, msg: ClientMsg) -> Vec<ServerMsg> {
         if self.phase == Phase::Closed {
             return Vec::new();
         }
@@ -164,8 +164,11 @@ impl<'a> Session<'a> {
         // misattribution the provenance fields exist to prevent. Only once
         // authenticated, so an unauthenticated socket still learns nothing.
         // Every arm below therefore handles only this machine's own verbs.
+        // Hoisted out of the `if let` chain: a let-chain cannot hold an
+        // `.await`, and `route_remote` now awaits the relay rather than
+        // blocking a worker while the peer answers.
         if self.phase == Phase::Ready
-            && let Some(replies) = self.route_remote(&msg)
+            && let Some(replies) = self.route_remote(&msg).await
         {
             return replies;
         }
@@ -221,18 +224,20 @@ impl<'a> Session<'a> {
                     settings,
                     on: _,
                 },
-            ) => self.launch(id, &recipe, &settings),
-            (Phase::Ready, ClientMsg::Stop { id, recipe, on: _ }) => self.stop(id, &recipe),
-            (Phase::Ready, ClientMsg::Status { id, on: _ }) => self.status(id),
+            ) => self.launch(id, &recipe, &settings).await,
+            (Phase::Ready, ClientMsg::Stop { id, recipe, on: _ }) => self.stop(id, &recipe).await,
+            (Phase::Ready, ClientMsg::Status { id, on: _ }) => self.status(id).await,
 
             (Phase::Ready, ClientMsg::ListNodes { id }) => self.nodes(id),
             // A watch is answered with the current fleet; the transport pushes
             // subsequent changes. Accepting the subscription here rather than in
             // the socket layer keeps the authorization decision in one place.
             (Phase::Ready, ClientMsg::WatchFleet { id, vitals: _ }) => self.nodes(id),
-            (Phase::Ready, ClientMsg::PairPeer { id, node, code }) => self.pair(id, node, &code),
+            (Phase::Ready, ClientMsg::PairPeer { id, node, code }) => {
+                self.pair(id, node, &code).await
+            }
             (Phase::Ready, ClientMsg::PairPeerAt { id, target, code }) => {
-                self.pair_at(id, &target, &code)
+                self.pair_at(id, &target, &code).await
             }
             (
                 Phase::Ready,
@@ -261,7 +266,10 @@ impl<'a> Session<'a> {
                     head,
                     settings,
                 },
-            ) => self.preview_cluster(id, &recipe, &nodes, head, &settings),
+            ) => {
+                self.preview_cluster(id, &recipe, &nodes, head, &settings)
+                    .await
+            }
 
             // Two phases, because a single-phase launch cannot fail cleanly:
             // the third machine's refusal would leave two containers waiting
@@ -275,15 +283,20 @@ impl<'a> Session<'a> {
                     head,
                     settings,
                 },
-            ) => self.prepare_cluster(id, &recipe, &nodes, head, &settings),
-
-            (Phase::Ready, ClientMsg::CommitCluster { id, epoch }) => {
-                self.commit_cluster(id, &epoch)
+            ) => {
+                self.prepare_cluster(id, &recipe, &nodes, head, &settings)
+                    .await
             }
 
-            (Phase::Ready, ClientMsg::AbortCluster { id, epoch }) => self.abort_cluster(id, &epoch),
+            (Phase::Ready, ClientMsg::CommitCluster { id, epoch }) => {
+                self.commit_cluster(id, &epoch).await
+            }
 
-            (Phase::Ready, ClientMsg::StopCluster { id }) => self.stop_cluster(id),
+            (Phase::Ready, ClientMsg::AbortCluster { id, epoch }) => {
+                self.abort_cluster(id, &epoch).await
+            }
+
+            (Phase::Ready, ClientMsg::StopCluster { id }) => self.stop_cluster(id).await,
 
             (Phase::Ready, ClientMsg::LaunchStats { id, recipe, on: _ }) => {
                 self.launch_stats(id, &recipe)
@@ -341,7 +354,7 @@ impl<'a> Session<'a> {
     fn control(&self) -> crate::control::LocalControl<'_> {
         crate::control::LocalControl {
             registry: self.deps.registry,
-            launcher: self.deps.launcher,
+            launcher: self.deps.launcher.clone(),
             telemetry: self.deps.telemetry,
             can_launch: &self.deps.can_launch,
             accelerator: self.deps.accelerator,
@@ -379,7 +392,7 @@ mod fleet;
 // of a cluster", and nothing else moved.
 #[path = "session/cluster_control.rs"]
 mod cluster_control;
-pub use cluster_control::ClusterControl;
+pub use cluster_control::{ClusterControl, PrepareAnswer, PreviewAnswer};
 
 #[path = "session/launch.rs"]
 mod launch;
@@ -410,6 +423,9 @@ mod join_tests;
 #[cfg(test)]
 #[path = "session/pair_at_tests.rs"]
 mod pair_at_tests;
+#[cfg(test)]
+#[path = "session/pairing_address_tests.rs"]
+mod pairing_address_tests;
 #[cfg(test)]
 #[path = "session/pairing_tests.rs"]
 mod pairing_tests;

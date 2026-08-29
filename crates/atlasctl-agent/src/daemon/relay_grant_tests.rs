@@ -29,17 +29,12 @@ async fn the_grant_is_checked_independently_at_relay_and_target() {
 
     let port = {
         let launcher = std::sync::Arc::clone(&relay.launcher);
-        spawn_serving(&mut relay, 0, Duration::from_secs(5), Box::new(launcher))
+        spawn_serving(&mut relay, 0, Duration::from_secs(5), launcher)
     }
     .await;
     {
         let launcher = std::sync::Arc::clone(&target.launcher);
-        spawn_serving(
-            &mut target,
-            port,
-            Duration::from_secs(5),
-            Box::new(launcher),
-        )
+        spawn_serving(&mut target, port, Duration::from_secs(5), launcher)
     }
     .await;
     poll(&relay, &target).await;
@@ -48,7 +43,10 @@ async fn the_grant_is_checked_independently_at_relay_and_target() {
 
     // (1) No grant at the relay: refused there, target never dialled.
     let dials_before = target.accepted.load(Ordering::SeqCst);
-    let (rep, via) = d.control(target.id(), status()).expect("relay answers");
+    let (rep, via) = d
+        .control(target.id(), status())
+        .await
+        .expect("relay answers");
     assert_eq!(via, Some(relay.id()));
     match rep {
         ControlRep::Refused {
@@ -72,7 +70,10 @@ async fn the_grant_is_checked_independently_at_relay_and_target() {
     // (2) Grant at the relay, none at the target: the TARGET refuses.
     // R2 alone is insufficient — this is what proves T2 exists.
     assert!(relay.pins.set_controller(origin.id(), true).expect("grant"));
-    let (rep, via) = d.control(target.id(), status()).expect("chain answers");
+    let (rep, via) = d
+        .control(target.id(), status())
+        .await
+        .expect("chain answers");
     assert_eq!(via, Some(relay.id()));
     match rep {
         ControlRep::Refused {
@@ -87,7 +88,10 @@ async fn the_grant_is_checked_independently_at_relay_and_target() {
 
     // (3) Both grants: the verb executes on the target.
     assert!(target.pins.set_controller(relay.id(), true).expect("grant"));
-    let (rep, via) = d.control(target.id(), status()).expect("chain answers");
+    let (rep, via) = d
+        .control(target.id(), status())
+        .await
+        .expect("chain answers");
     assert!(matches!(rep, ControlRep::Status { .. }), "got {rep:?}");
     assert_eq!(via, Some(relay.id()));
 
@@ -99,7 +103,10 @@ async fn the_grant_is_checked_independently_at_relay_and_target() {
             .set_controller(origin.id(), false)
             .expect("revoke")
     );
-    let (rep, _) = d.control(target.id(), status()).expect("relay answers");
+    let (rep, _) = d
+        .control(target.id(), status())
+        .await
+        .expect("relay answers");
     assert!(
         matches!(
             rep,
@@ -122,13 +129,16 @@ async fn a_directly_pinned_target_still_requires_its_own_grant() {
     pin(&target, &origin, false);
     let port = {
         let launcher = std::sync::Arc::clone(&target.launcher);
-        spawn_serving(&mut target, 0, Duration::from_secs(5), Box::new(launcher))
+        spawn_serving(&mut target, 0, Duration::from_secs(5), launcher)
     }
     .await;
     poll(&origin, &target).await;
     let d = driver(&origin, port);
 
-    let (rep, via) = d.control(target.id(), status()).expect("target answers");
+    let (rep, via) = d
+        .control(target.id(), status())
+        .await
+        .expect("target answers");
     assert_eq!(via, None, "provenance: a direct dial names no relay");
     assert!(
         matches!(
@@ -147,7 +157,10 @@ async fn a_directly_pinned_target_still_requires_its_own_grant() {
             .set_controller(origin.id(), true)
             .expect("grant")
     );
-    let (rep, via) = d.control(target.id(), status()).expect("target answers");
+    let (rep, via) = d
+        .control(target.id(), status())
+        .await
+        .expect("target answers");
     assert!(matches!(rep, ControlRep::Status { .. }), "got {rep:?}");
     assert_eq!(via, None);
 }
@@ -165,6 +178,7 @@ async fn a_v1_peer_is_refused_by_version_and_receives_no_control_frame() {
 
     let err = driver(&origin, port)
         .control(old.id(), status())
+        .await
         .expect_err("must refuse locally");
     match err {
         AgentError::NotRoutable { node, reason } => {
@@ -197,7 +211,7 @@ async fn a_slow_target_times_out_at_the_relay_not_at_the_origin() {
     let relay_budget = Duration::from_millis(300);
     let port = {
         let launcher = std::sync::Arc::clone(&relay.launcher);
-        spawn_serving(&mut relay, 0, relay_budget, Box::new(launcher))
+        spawn_serving(&mut relay, 0, relay_budget, launcher)
     }
     .await;
     // The fake target answers a Control only after twice the relay budget.
@@ -213,6 +227,7 @@ async fn a_slow_target_times_out_at_the_relay_not_at_the_origin() {
     let started = std::time::Instant::now();
     let (rep, via) = driver(&origin, port)
         .control(target.id(), status())
+        .await
         .expect("the relay answers with its own timeout");
     let waited = started.elapsed();
     assert!(
@@ -305,14 +320,14 @@ async fn a_retried_launch_after_a_lost_reply_is_already_running_not_doubled() {
     });
     let port = {
         let launcher = std::sync::Arc::clone(&relay.launcher);
-        spawn_serving(&mut relay, 0, relay_budget, Box::new(launcher))
+        spawn_serving(&mut relay, 0, relay_budget, launcher)
     }
     .await;
     spawn_serving(
         &mut target,
         port,
         Duration::from_secs(5),
-        Box::new(Arc::clone(&launcher)),
+        Arc::clone(&launcher) as Arc<dyn crate::launcher::Launcher>,
     )
     .await;
     poll(&relay, &target).await;
@@ -323,7 +338,10 @@ async fn a_retried_launch_after_a_lost_reply_is_already_running_not_doubled() {
         recipe: recipe(),
         settings: BTreeMap::new(),
     };
-    let (rep, _) = d.control(target.id(), launch.clone()).expect("answers");
+    let (rep, _) = d
+        .control(target.id(), launch.clone())
+        .await
+        .expect("answers");
     assert!(
         matches!(
             rep,
@@ -337,7 +355,7 @@ async fn a_retried_launch_after_a_lost_reply_is_already_running_not_doubled() {
 
     // Let the slow launch actually finish before retrying.
     tokio::time::sleep(relay_budget * 4).await;
-    let (rep, _) = d.control(target.id(), launch).expect("answers");
+    let (rep, _) = d.control(target.id(), launch).await.expect("answers");
     match rep {
         ControlRep::Refused {
             by,

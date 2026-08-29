@@ -16,24 +16,46 @@ use std::collections::BTreeMap;
 /// A trait so the session stays transport-free: the preview needs to reach
 /// other machines, and a session that opened sockets itself could not be tested
 /// without them.
+/// What [`ClusterControl::preview`] answers: each rank's own rendering, plus a
+/// warning when the plan is possible but worth reading twice.
+///
+/// Named because the method returns it inside a [`crate::BoxFut`], and spelling
+/// the whole thing at both the trait and the impl is exactly the repetition
+/// `clippy::type_complexity` objects to.
+pub type PreviewAnswer = Result<
+    (
+        Vec<atlasctl_protocol::msg::fleet::RankPreview>,
+        Option<String>,
+    ),
+    String,
+>;
+
+/// What [`ClusterControl::prepare`] answers: the epoch a later commit must
+/// quote, each rank's reply, and whether a commit may proceed at all.
+pub type PrepareAnswer = Result<
+    (
+        String,
+        Vec<atlasctl_protocol::msg::fleet::RankPrepare>,
+        bool,
+    ),
+    String,
+>;
+
+/// Every method returns a boxed future rather than being an `async fn`: this
+/// trait is used as `dyn ClusterControl`, and an `async fn` in a trait is not
+/// dyn-compatible.
 pub trait ClusterControl: Send + Sync {
     /// Plan the launch and collect each rank's own rendering. Reserves nothing.
     ///
     /// # Errors
     /// If the plan is impossible, or a rank refuses or cannot be reached.
-    fn preview(
-        &self,
-        recipe: &RecipeId,
-        nodes: &[atlasctl_protocol::fleet::NodeId],
+    fn preview<'a>(
+        &'a self,
+        recipe: &'a RecipeId,
+        nodes: &'a [atlasctl_protocol::fleet::NodeId],
         head: atlasctl_protocol::fleet::NodeId,
-        settings: &BTreeMap<String, SettingValue>,
-    ) -> Result<
-        (
-            Vec<atlasctl_protocol::msg::fleet::RankPreview>,
-            Option<String>,
-        ),
-        String,
-    >;
+        settings: &'a BTreeMap<String, SettingValue>,
+    ) -> crate::BoxFut<'a, PreviewAnswer>;
 
     /// Ask every rank to validate and reserve. Nothing starts.
     ///
@@ -43,40 +65,49 @@ pub trait ClusterControl: Send + Sync {
     ///
     /// # Errors
     /// If the plan itself is impossible, which is before any rank was asked.
-    fn prepare(
-        &self,
-        recipe: &RecipeId,
-        nodes: &[atlasctl_protocol::fleet::NodeId],
+    fn prepare<'a>(
+        &'a self,
+        recipe: &'a RecipeId,
+        nodes: &'a [atlasctl_protocol::fleet::NodeId],
         head: atlasctl_protocol::fleet::NodeId,
-        settings: &BTreeMap<String, SettingValue>,
-    ) -> Result<
-        (
-            String,
-            Vec<atlasctl_protocol::msg::fleet::RankPrepare>,
-            bool,
-        ),
-        String,
-    >;
+        settings: &'a BTreeMap<String, SettingValue>,
+    ) -> crate::BoxFut<'a, PrepareAnswer>;
 
     /// Start what every rank prepared under this epoch.
     ///
     /// # Errors
     /// If no such prepare is outstanding, or a rank fails to start — in which
     /// case every rank that did start has already been stopped.
-    fn commit(
-        &self,
-        epoch: &str,
-    ) -> Result<Vec<atlasctl_protocol::msg::fleet::RankStarted>, String>;
+    fn commit<'a>(
+        &'a self,
+        epoch: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<Vec<atlasctl_protocol::msg::fleet::RankStarted>, String>,
+                > + Send
+                + 'a,
+        >,
+    >;
 
     /// Abandon a prepare, releasing every reservation.
-    fn abort(&self, epoch: &str);
+    fn abort<'a>(&'a self, epoch: &'a str) -> crate::BoxFut<'a, ()>;
 
     /// Stop every rank of the cluster this agent started.
     ///
     /// # Errors
     /// If no cluster is running, or a rank could not be stopped — and the
     /// error names which, because a rank left running holds a whole GPU.
-    fn stop_cluster(&self) -> Result<Vec<atlasctl_protocol::msg::fleet::RankStarted>, String>;
+    fn stop_cluster<'a>(
+        &'a self,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<Vec<atlasctl_protocol::msg::fleet::RankStarted>, String>,
+                > + Send
+                + 'a,
+        >,
+    >;
 
     /// Check a running cluster is still whole, and tear it down if it is not.
     ///
@@ -89,5 +120,5 @@ pub trait ClusterControl: Send + Sync {
     ///
     /// Returns a description of what it tore down, or `None` when the cluster
     /// is whole or absent.
-    fn supervise(&self) -> Option<crate::clusterdriver::Torn>;
+    fn supervise<'a>(&'a self) -> crate::BoxFut<'a, Option<crate::clusterdriver::Torn>>;
 }

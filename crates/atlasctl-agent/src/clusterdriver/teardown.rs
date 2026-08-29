@@ -9,16 +9,17 @@
 use super::tests::*;
 use super::*;
 
-#[test]
-fn a_started_cluster_can_be_stopped_on_every_machine() {
+#[tokio::test]
+async fn a_started_cluster_can_be_stopped_on_every_machine() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
     let (epoch, _, _) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("prepares");
-    let started = d.commit(&epoch).expect("commits");
+    let started = d.commit(&epoch).await.expect("commits");
 
-    let stopped = d.stop_cluster().expect("stops");
+    let stopped = d.stop_cluster().await.expect("stops");
     assert_eq!(stopped.len(), started.len());
 
     let c = calls(&log);
@@ -37,29 +38,33 @@ fn a_started_cluster_can_be_stopped_on_every_machine() {
 
 /// An agent stops the cluster it started. Asking it to stop one it did not is
 /// how a page would use its local agent to reach machines it cannot authorize.
-#[test]
-fn stopping_without_having_started_anything_is_refused() {
+#[tokio::test]
+async fn stopping_without_having_started_anything_is_refused() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
-    let err = d.stop_cluster().expect_err("nothing was started");
+    let err = d.stop_cluster().await.expect_err("nothing was started");
     assert!(err.contains("did not start a cluster"), "{err}");
     assert!(calls(&log).is_empty(), "no machine may be contacted");
 }
 
 /// A cluster is stopped once. A second stop must not tear down a cluster
 /// started since.
-#[test]
-fn a_cluster_is_stopped_once() {
+#[tokio::test]
+async fn a_cluster_is_stopped_once() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
     let (epoch, _, _) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("prepares");
-    d.commit(&epoch).expect("commits");
-    d.stop_cluster().expect("stops");
+    d.commit(&epoch).await.expect("commits");
+    d.stop_cluster().await.expect("stops");
 
     let before = calls(&log).len();
-    assert!(d.stop_cluster().is_err(), "the cluster is already stopped");
+    assert!(
+        d.stop_cluster().await.is_err(),
+        "the cluster is already stopped"
+    );
     assert_eq!(
         calls(&log).len(),
         before,
@@ -69,16 +74,20 @@ fn a_cluster_is_stopped_once() {
 
 /// A rank left running holds a whole GPU, so giving up on the first failure
 /// would be the most expensive possible response to it.
-#[test]
-fn every_rank_is_attempted_even_when_one_refuses_to_stop() {
+#[tokio::test]
+async fn every_rank_is_attempted_even_when_one_refuses_to_stop() {
     let log = new_log();
     let (d, _) = driver(refusing_stop_rank(&log), transport(&log));
     let (epoch, _, _) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("prepares");
-    d.commit(&epoch).expect("commits");
+    d.commit(&epoch).await.expect("commits");
 
-    let err = d.stop_cluster().expect_err("rank 0 could not be stopped");
+    let err = d
+        .stop_cluster()
+        .await
+        .expect_err("rank 0 could not be stopped");
     assert!(err.contains("could not stop"), "{err}");
 
     let c = calls(&log);
@@ -95,15 +104,16 @@ fn every_rank_is_attempted_even_when_one_refuses_to_stop() {
 /// so the commit reported success — and rank 0's container had already died a
 /// second later, leaving rank 1 running alone and waiting forever on a
 /// rendezvous that would never complete. The operator saw a hang, not an error.
-#[test]
-fn a_rank_that_dies_on_startup_fails_the_commit_and_stops_the_rest() {
+#[tokio::test]
+async fn a_rank_that_dies_on_startup_fails_the_commit_and_stops_the_rest() {
     let log = new_log();
     let (d, _) = driver(dying_rank(&log), transport(&log));
     let (epoch, _, _) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("prepares");
 
-    let err = d.commit(&epoch).expect_err("rank 0 did not survive");
+    let err = d.commit(&epoch).await.expect_err("rank 0 did not survive");
     assert!(err.contains("stopped within"), "{err}");
     assert!(
         err.contains("spark-1"),
@@ -121,15 +131,16 @@ fn a_rank_that_dies_on_startup_fails_the_commit_and_stops_the_rest() {
     }
 }
 
-#[test]
-fn a_peer_that_dies_on_startup_fails_the_commit_too() {
+#[tokio::test]
+async fn a_peer_that_dies_on_startup_fails_the_commit_too() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log).dying(node_id(3)));
     let (epoch, _, _) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("prepares");
 
-    let err = d.commit(&epoch).expect_err("rank 2 did not survive");
+    let err = d.commit(&epoch).await.expect_err("rank 2 did not survive");
     assert!(err.contains("spark-3"), "{err}");
     assert!(
         calls(&log).contains(&"local.stop(head-container)".to_owned()),
@@ -139,14 +150,15 @@ fn a_peer_that_dies_on_startup_fails_the_commit_too() {
 }
 
 /// Every rank is checked, not just the first — a cluster is whole or absent.
-#[test]
-fn every_rank_is_asked_whether_it_survived() {
+#[tokio::test]
+async fn every_rank_is_asked_whether_it_survived() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
     let (epoch, _, _) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("prepares");
-    d.commit(&epoch).expect("commits");
+    d.commit(&epoch).await.expect("commits");
 
     let c = calls(&log);
     assert!(
@@ -163,17 +175,18 @@ fn every_rank_is_asked_whether_it_survived() {
 }
 
 /// A commit that failed its settling gate must leave no cluster behind to stop.
-#[test]
-fn a_cluster_that_failed_to_settle_is_not_recorded_as_running() {
+#[tokio::test]
+async fn a_cluster_that_failed_to_settle_is_not_recorded_as_running() {
     let log = new_log();
     let (d, _) = driver(dying_rank(&log), transport(&log));
     let (epoch, _, _) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("prepares");
-    let _ = d.commit(&epoch);
+    let _ = d.commit(&epoch).await;
 
     assert!(
-        d.stop_cluster().is_err(),
+        d.stop_cluster().await.is_err(),
         "nothing is running, so there is nothing to stop"
     );
 }
@@ -183,21 +196,25 @@ fn a_cluster_that_failed_to_settle_is_not_recorded_as_running() {
 /// A rank that dies four minutes in — during model build — passed the
 /// five-second gate. Its peers then hold their GPUs indefinitely, waiting at a
 /// rendezvous that will never complete, and nothing notices.
-#[test]
-fn a_rank_that_dies_after_commit_tears_the_cluster_down() {
+#[tokio::test]
+async fn a_rank_that_dies_after_commit_tears_the_cluster_down() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
     let (epoch, _, _) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("prepares");
-    d.commit(&epoch).expect("commits");
+    d.commit(&epoch).await.expect("commits");
 
     // It was whole a moment ago.
-    assert!(d.supervise().is_none(), "a healthy cluster is left alone");
+    assert!(
+        d.supervise().await.is_none(),
+        "a healthy cluster is left alone"
+    );
 
     // Now rank 2 dies.
     d.kill_for_test(node_id(2));
-    let torn = d.supervise().expect("a dead rank must be noticed");
+    let torn = d.supervise().await.expect("a dead rank must be noticed");
     assert!(
         torn.why.contains("spark-2"),
         "must name what died: {}",
@@ -216,7 +233,7 @@ fn a_rank_that_dies_after_commit_tears_the_cluster_down() {
         "the survivors must be stopped: {c:?}"
     );
     assert!(
-        d.stop_cluster().is_err(),
+        d.stop_cluster().await.is_err(),
         "the cluster is gone, so there is nothing left to stop"
     );
 }
@@ -228,18 +245,20 @@ fn a_rank_that_dies_after_commit_tears_the_cluster_down() {
 /// cluster mid-service, and with a different one both ran, contending for the
 /// GPUs, while the second commit overwrote the record of the first -- leaving
 /// the original with no Stop button that knew about it.
-#[test]
-fn a_second_cluster_is_refused_while_one_is_running() {
+#[tokio::test]
+async fn a_second_cluster_is_refused_while_one_is_running() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
     let (epoch, _, _) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("prepares");
-    d.commit(&epoch).expect("commits");
+    d.commit(&epoch).await.expect("commits");
 
     let before = calls(&log).len();
     let err = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect_err("a second cluster must be refused while one runs");
     assert!(err.contains("already running"), "{err}");
     assert!(err.contains("stop it"), "must say what to do: {err}");
@@ -260,26 +279,28 @@ fn a_second_cluster_is_refused_while_one_is_running() {
 /// container and its GPU. And the running record was TAKEN before any stop was
 /// attempted, so even a reported failure could not be retried: pressing Stop
 /// again answered "this agent did not start a cluster".
-#[test]
-fn a_stop_that_could_not_reach_a_peer_is_reported_and_can_be_retried() {
+#[tokio::test]
+async fn a_stop_that_could_not_reach_a_peer_is_reported_and_can_be_retried() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
     let (epoch, _, _) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("prepares");
-    d.commit(&epoch).expect("commits");
+    d.commit(&epoch).await.expect("commits");
 
     // spark-2 becomes unreachable -- the machine, not the container.
     d.kill_for_test(node_id(2));
 
     let err = d
         .stop_cluster()
+        .await
         .expect_err("an unreachable peer must not be reported as stopped");
     assert!(err.contains("spark-2"), "must name the machine: {err}");
 
     // And the record survives, so the operator can press Stop again rather than
     // being told there was never a cluster.
-    let again = d.stop_cluster();
+    let again = d.stop_cluster().await;
     assert!(
         again.is_err(),
         "the unreachable rank is still up, so a retry must still fail: {again:?}"
@@ -299,29 +320,31 @@ fn a_stop_that_could_not_reach_a_peer_is_reported_and_can_be_retried() {
 /// that stopped answering, so its stop fails, the record survives, and every
 /// later launch is refused with "a cluster is already running" the operator
 /// cannot clear, because Stop keeps failing against a machine that is gone.
-#[test]
-fn a_supervised_teardown_does_not_block_the_next_cluster() {
+#[tokio::test]
+async fn a_supervised_teardown_does_not_block_the_next_cluster() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
     let (epoch, _, _) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("prepares");
-    d.commit(&epoch).expect("commits");
+    d.commit(&epoch).await.expect("commits");
 
     // The machine goes away: its liveness probe AND its stop both fail.
     d.kill_for_test(node_id(2));
-    d.supervise().expect("a dead rank must be noticed");
+    d.supervise().await.expect("a dead rank must be noticed");
 
     // The operator starts again. This must not be refused.
     d.prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("a torn-down cluster must not block the next one");
 }
 
 /// Supervising when nothing is running must not reach for the network.
-#[test]
-fn supervising_an_idle_agent_does_nothing() {
+#[tokio::test]
+async fn supervising_an_idle_agent_does_nothing() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
-    assert!(d.supervise().is_none());
+    assert!(d.supervise().await.is_none());
     assert!(calls(&log).is_empty(), "{:?}", calls(&log));
 }

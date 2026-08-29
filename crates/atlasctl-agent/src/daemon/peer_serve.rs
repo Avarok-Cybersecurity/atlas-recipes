@@ -128,7 +128,7 @@ where
                 PeerFrame::Aborted { epoch }
             }
             PeerFrame::Control { req } => PeerFrame::ControlReply {
-                rep: terminal_control(&ctx.control.control(), sender, &ctx.pins, local, req),
+                rep: terminal_control(&ctx.control.control(), sender, &ctx.pins, local, req).await,
             },
             PeerFrame::ControlTo { node, req } => PeerFrame::ControlReply {
                 rep: relay_control(ctx, sender, node, req).await,
@@ -151,7 +151,7 @@ where
 /// the pin store, and this agent's own name — no dialer, no fleet, no
 /// address book — so a forward cannot be written in here without widening
 /// the signature in review, and the frame itself has no target field.
-fn terminal_control(
+async fn terminal_control(
     control: &LocalControl<'_>,
     sender: NodeId,
     pins: &PinStore,
@@ -176,7 +176,7 @@ fn terminal_control(
     // schema validation, same AlreadyRunning, same log-line cap. No argv, no
     // container id, no address was taken from the wire — `ControlReq` cannot
     // carry one.
-    match control.execute(req) {
+    match control.execute(req).await {
         Ok(rep) => rep,
         Err(error) => ControlRep::Refused { by: local, error },
     }

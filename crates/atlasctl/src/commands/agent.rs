@@ -24,19 +24,31 @@ impl atlasctl_agent::fleet::FleetView for FleetHandle {
         self.0.nodes()
     }
 
-    fn pair(
-        &self,
+    fn pair<'a>(
+        &'a self,
         node: atlasctl_protocol::fleet::NodeId,
-        code: &str,
-    ) -> anyhow::Result<atlasctl_agent::fleet::PairOutcome> {
+        code: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = anyhow::Result<atlasctl_agent::fleet::PairOutcome>>
+                + Send
+                + 'a,
+        >,
+    > {
         self.0.pair(node, code)
     }
 
-    fn pair_at(
-        &self,
-        target: &str,
-        code: &str,
-    ) -> anyhow::Result<atlasctl_agent::fleet::PairOutcome> {
+    fn pair_at<'a>(
+        &'a self,
+        target: &'a str,
+        code: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = anyhow::Result<atlasctl_agent::fleet::PairOutcome>>
+                + Send
+                + 'a,
+        >,
+    > {
         self.0.pair_at(target, code)
     }
 
@@ -225,7 +237,6 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     .with_pairing(Box::new(crate::peerpairing::RuntimePeerPairing::new(
         Arc::clone(&identity),
         pins.clone(),
-        rt.handle().clone(),
     )));
 
     let fleet = Arc::new(fleet);
@@ -263,7 +274,6 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         Arc::new(crate::peertransport::PeerTransport::new(
             Arc::clone(&identity),
             pins.clone(),
-            rt.handle().clone(),
             atlasctl_agent::peer::link::SelfIntro::new(can_launch.is_ok(), &accelerator),
         )),
         atlasctl_agent::peer::DEFAULT_PEER_PORT,
@@ -275,7 +285,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     // the checks are identical because both are the one `LocalControl`.
     let control_host = Arc::new(atlasctl_agent::control::ControlHost::new(
         crate::commands::registry_set()?,
-        Box::new(DockerLauncher::new(
+        std::sync::Arc::new(DockerLauncher::new(
             Arc::clone(&runner),
             hostinfo::snapshot()?,
             &ROOTLESS_V1,
@@ -293,7 +303,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
 
     let state = Arc::new(AgentState {
         registry: crate::commands::registry_set()?,
-        launcher: Box::new(DockerLauncher::new(
+        launcher: std::sync::Arc::new(DockerLauncher::new(
             Arc::clone(&runner),
             hostinfo::snapshot()?,
             &ROOTLESS_V1,
@@ -318,7 +328,6 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
             atlasctl_agent::identity::PinStore::new(&config_dir),
             Arc::clone(&fleet),
             atlasctl_agent::peer::DEFAULT_PEER_PORT,
-            rt.handle().clone(),
         ))),
         events: events.clone(),
     });
@@ -338,10 +347,11 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
             loop {
                 tick.tick().await;
                 let cluster = Arc::clone(&cluster);
-                // Asking a peer dials the network, so it must not run on the
-                // async runtime's worker threads.
-                let torn = tokio::task::spawn_blocking(move || cluster.supervise()).await;
-                if let Ok(Some(torn)) = torn {
+                // Asking a peer dials the network. That is now awaited rather
+                // than run on a blocking thread: `ClusterControl::supervise` is
+                // async, so the dial yields the worker instead of occupying one.
+                let torn = cluster.supervise().await;
+                if let Some(torn) = torn {
                     eprintln!("cluster: {}", torn.why);
                     // And say it where an operator is looking. This used to go
                     // only to the head agent's stderr, so a cluster could die

@@ -5,12 +5,13 @@
 use super::tests::*;
 use super::*;
 
-#[test]
-fn a_prepare_every_rank_accepts_may_commit() {
+#[tokio::test]
+async fn a_prepare_every_rank_accepts_may_commit() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
     let (epoch, ranks, may) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("the plan is possible");
 
     assert!(may, "every rank accepted");
@@ -28,8 +29,8 @@ fn a_prepare_every_rank_accepts_may_commit() {
 /// The reason two phases exist. One machine says no, and every machine that
 /// already said yes is still holding a reservation — if those are not released,
 /// the fleet cannot launch anything until each is prepared again.
-#[test]
-fn one_refusal_releases_every_reservation_already_taken() {
+#[tokio::test]
+async fn one_refusal_releases_every_reservation_already_taken() {
     let log = new_log();
     let (d, _) = driver(
         ready_rank(&log),
@@ -37,6 +38,7 @@ fn one_refusal_releases_every_reservation_already_taken() {
     );
     let (_, ranks, may) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("the plan is possible");
 
     assert!(!may, "a refusal must block the commit");
@@ -67,8 +69,8 @@ fn one_refusal_releases_every_reservation_already_taken() {
 
 /// A machine that cannot be reached has not agreed to anything, so it must read
 /// as a refusal rather than abandon the ranks before it mid-loop.
-#[test]
-fn an_unreachable_rank_is_a_refusal_not_an_abandoned_launch() {
+#[tokio::test]
+async fn an_unreachable_rank_is_a_refusal_not_an_abandoned_launch() {
     let log = new_log();
     let (d, _) = driver(
         ready_rank(&log),
@@ -76,6 +78,7 @@ fn an_unreachable_rank_is_a_refusal_not_an_abandoned_launch() {
     );
     let (_, ranks, may) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("the plan is possible");
 
     assert!(!may);
@@ -84,16 +87,17 @@ fn an_unreachable_rank_is_a_refusal_not_an_abandoned_launch() {
     assert!(calls(&log).contains(&"local.abort".to_owned()));
 }
 
-#[test]
-fn a_commit_starts_every_rank_and_only_rank_zero_gets_an_endpoint() {
+#[tokio::test]
+async fn a_commit_starts_every_rank_and_only_rank_zero_gets_an_endpoint() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
     let (epoch, _, may) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("prepares");
     assert!(may);
 
-    let started = d.commit(&epoch).expect("commits");
+    let started = d.commit(&epoch).await.expect("commits");
     assert_eq!(started.len(), 3);
     assert_eq!(
         started.iter().filter(|r| r.endpoint.is_some()).count(),
@@ -108,16 +112,17 @@ fn a_commit_starts_every_rank_and_only_rank_zero_gets_an_endpoint() {
 /// changed nothing produced an empty map, and the endpoint offered `:8000`
 /// while the model served on the `:8888` its recipe pins. The URL was the one
 /// thing on that screen the operator would actually paste somewhere.
-#[test]
-fn the_endpoint_uses_the_recipes_port_when_the_operator_overrode_nothing() {
+#[tokio::test]
+async fn the_endpoint_uses_the_recipes_port_when_the_operator_overrode_nothing() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
     let (epoch, _, may) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("prepares");
     assert!(may);
 
-    let started = d.commit(&epoch).expect("commits");
+    let started = d.commit(&epoch).await.expect("commits");
     let endpoint = started[0].endpoint.as_deref().expect("rank 0 serves");
     assert!(
         endpoint.ends_with(":8888"),
@@ -126,8 +131,8 @@ fn the_endpoint_uses_the_recipes_port_when_the_operator_overrode_nothing() {
 }
 
 /// And an override still wins over the recipe, or the setting would do nothing.
-#[test]
-fn an_operators_port_override_still_beats_the_recipe() {
+#[tokio::test]
+async fn an_operators_port_override_still_beats_the_recipe() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
     let mut settings = BTreeMap::new();
@@ -137,10 +142,11 @@ fn an_operators_port_override_still_beats_the_recipe() {
     );
     let (epoch, _, may) = d
         .prepare(&recipe(), &all_three(), node_id(1), &settings)
+        .await
         .expect("prepares");
     assert!(may);
 
-    let started = d.commit(&epoch).expect("commits");
+    let started = d.commit(&epoch).await.expect("commits");
     let endpoint = started[0].endpoint.as_deref().expect("rank 0 serves");
     assert!(
         endpoint.ends_with(":9001"),
@@ -150,8 +156,8 @@ fn an_operators_port_override_still_beats_the_recipe() {
 
 /// A half-started cluster waits forever on a rendezvous that never completes,
 /// and the operator sees a hang rather than an error.
-#[test]
-fn a_failed_commit_stops_the_ranks_that_already_started() {
+#[tokio::test]
+async fn a_failed_commit_stops_the_ranks_that_already_started() {
     let log = new_log();
     let (d, _) = driver(
         ready_rank(&log),
@@ -159,9 +165,10 @@ fn a_failed_commit_stops_the_ranks_that_already_started() {
     );
     let (epoch, _, _) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("prepares");
 
-    let err = d.commit(&epoch).expect_err("rank 2 cannot start");
+    let err = d.commit(&epoch).await.expect_err("rank 2 cannot start");
     assert!(
         err.contains("image missing"),
         "the reason must survive: {err}"
@@ -181,17 +188,18 @@ fn a_failed_commit_stops_the_ranks_that_already_started() {
 
 /// A commit consumes its prepare. Replaying the frame must not start a second
 /// cluster on machines already running the first.
-#[test]
-fn a_replayed_commit_starts_nothing_twice() {
+#[tokio::test]
+async fn a_replayed_commit_starts_nothing_twice() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
     let (epoch, _, _) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("prepares");
-    d.commit(&epoch).expect("first commit succeeds");
+    d.commit(&epoch).await.expect("first commit succeeds");
 
     let before = calls(&log).len();
-    let err = d.commit(&epoch).expect_err("the prepare is spent");
+    let err = d.commit(&epoch).await.expect_err("the prepare is spent");
     assert!(err.contains("no prepare is outstanding"), "{err}");
     assert_eq!(
         calls(&log).len(),
@@ -201,63 +209,67 @@ fn a_replayed_commit_starts_nothing_twice() {
 }
 
 /// An epoch from another attempt cannot authorize this one.
-#[test]
-fn a_commit_quoting_the_wrong_epoch_is_refused() {
+#[tokio::test]
+async fn a_commit_quoting_the_wrong_epoch_is_refused() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
     let (_, _, _) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("prepares");
 
     let before = calls(&log).len();
-    let err = d.commit("some-other-epoch").expect_err("wrong epoch");
+    let err = d.commit("some-other-epoch").await.expect_err("wrong epoch");
     assert!(err.contains("is holding a prepare for"), "{err}");
     assert_eq!(calls(&log).len(), before, "no rank may be asked anything");
 }
 
-#[test]
-fn an_abort_releases_every_rank() {
+#[tokio::test]
+async fn an_abort_releases_every_rank() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
     let (epoch, _, _) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("prepares");
 
-    d.abort(&epoch);
+    d.abort(&epoch).await;
     let c = calls(&log);
     assert!(c.contains(&"local.abort".to_owned()));
     assert!(c.contains(&format!("{}.abort", node_id(2).short())));
     assert!(c.contains(&format!("{}.abort", node_id(3).short())));
 
     // And the prepare is gone, so it cannot then be committed.
-    assert!(d.commit(&epoch).is_err());
+    assert!(d.commit(&epoch).await.is_err());
 }
 
 /// An abort for a stale epoch arriving late must not release the prepare made
 /// since — that would silently cancel a launch the operator is watching.
-#[test]
-fn a_stale_abort_does_not_release_a_newer_prepare() {
+#[tokio::test]
+async fn a_stale_abort_does_not_release_a_newer_prepare() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
     let (first, _, _) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("prepares");
     let (second, _, _) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("prepares again");
     assert_ne!(first, second, "each attempt gets its own epoch");
 
-    d.abort(&first);
+    d.abort(&first).await;
     assert!(
-        d.commit(&second).is_ok(),
+        d.commit(&second).await.is_ok(),
         "the newer prepare must survive a stale abort"
     );
 }
 
 /// The selection is not a suggestion: a machine the fleet does not know about
 /// must fail before anything is asked of anybody.
-#[test]
-fn a_machine_outside_the_fleet_fails_before_any_rank_is_asked() {
+#[tokio::test]
+async fn a_machine_outside_the_fleet_fails_before_any_rank_is_asked() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
     let err = d
@@ -267,6 +279,7 @@ fn a_machine_outside_the_fleet_fails_before_any_rank_is_asked() {
             node_id(1),
             &BTreeMap::new(),
         )
+        .await
         .expect_err("node 9 is not in this fleet");
     assert!(err.contains("not in this fleet"), "{err}");
     assert!(
@@ -278,12 +291,13 @@ fn a_machine_outside_the_fleet_fails_before_any_rank_is_asked() {
 
 /// The head is a rank like any other. A head that skipped its own prepare would
 /// commit a rank nobody validated.
-#[test]
-fn the_head_prepares_itself_like_any_other_rank() {
+#[tokio::test]
+async fn the_head_prepares_itself_like_any_other_rank() {
     let log = new_log();
     let (d, _) = driver(refusing_rank(&log, "docker is down"), transport(&log));
     let (_, ranks, may) = d
         .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .await
         .expect("the plan is possible");
 
     assert!(!may, "the head refusing must block the commit too");

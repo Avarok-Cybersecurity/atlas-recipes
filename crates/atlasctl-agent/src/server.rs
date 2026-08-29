@@ -32,7 +32,7 @@ pub struct AgentState {
     /// The recipe inventory.
     pub registry: RegistrySet,
     /// How launches happen.
-    pub launcher: Box<dyn Launcher>,
+    pub launcher: Arc<dyn Launcher>,
     /// The expected pairing token.
     pub token: String,
     /// Whether this machine can run a recipe, and why not if it cannot.
@@ -173,7 +173,7 @@ async fn run_session(mut socket: ws::WebSocket, state: Arc<AgentState>) {
     let mut events = state.events.subscribe();
     let (mut session, welcome) = Session::new(SessionDeps {
         registry: &state.registry,
-        launcher: state.launcher.as_ref(),
+        launcher: state.launcher.clone(),
         token: &state.token,
         can_launch: state.can_launch.clone(),
         accelerator: &state.accelerator,
@@ -233,7 +233,7 @@ async fn run_session(mut socket: ws::WebSocket, state: Arc<AgentState>) {
         };
 
         let replies = match serde_json::from_str::<ClientMsg>(&text) {
-            Ok(msg) => session.handle(msg),
+            Ok(msg) => session.handle(msg).await,
             Err(e) => vec![session.on_malformed(e.to_string())],
         };
 

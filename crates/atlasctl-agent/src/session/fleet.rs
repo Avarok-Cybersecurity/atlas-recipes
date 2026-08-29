@@ -97,12 +97,12 @@ impl Session<'_> {
         addrs.into_iter().map(|a| a.addr).collect()
     }
 
-    pub(super) fn pair(&mut self, id: u32, node: NodeId, code: &str) -> Vec<ServerMsg> {
+    pub(super) async fn pair(&mut self, id: u32, node: NodeId, code: &str) -> Vec<ServerMsg> {
         // (helper `decision` is defined at the bottom of this file)
         let Some(fleet) = self.deps.fleet else {
             return vec![err(Some(id), AgentError::NotReady)];
         };
-        match fleet.pair(node, code) {
+        match fleet.pair(node, code).await {
             Ok(outcome) => {
                 let verification = outcome.verification.clone();
                 // Held, not written. Replacing any previous one: the UI shows a
@@ -141,11 +141,11 @@ impl Session<'_> {
     }
 
     /// Pair with a machine at an address the operator typed.
-    pub(super) fn pair_at(&mut self, id: u32, target: &str, code: &str) -> Vec<ServerMsg> {
+    pub(super) async fn pair_at(&mut self, id: u32, target: &str, code: &str) -> Vec<ServerMsg> {
         let Some(fleet) = self.deps.fleet else {
             return vec![err(Some(id), AgentError::NotReady)];
         };
-        match fleet.pair_at(target, code) {
+        match fleet.pair_at(target, code).await {
             Ok(outcome) => {
                 let (node, name, address, verification) = (
                     outcome.node,
@@ -286,7 +286,7 @@ impl Session<'_> {
         }
     }
 
-    pub(super) fn preview_cluster(
+    pub(super) async fn preview_cluster(
         &self,
         id: u32,
         recipe: &RecipeId,
@@ -297,7 +297,7 @@ impl Session<'_> {
         let Some(cluster) = self.deps.cluster else {
             return vec![err(Some(id), AgentError::NotReady)];
         };
-        match cluster.preview(recipe, nodes, head, settings) {
+        match cluster.preview(recipe, nodes, head, settings).await {
             Ok((ranks, link_warning)) => vec![ServerMsg::ClusterPreview {
                 id,
                 ranks,
@@ -318,7 +318,7 @@ impl Session<'_> {
     }
 
     /// Ask every selected node to validate and reserve. Nothing starts.
-    pub(super) fn prepare_cluster(
+    pub(super) async fn prepare_cluster(
         &self,
         id: u32,
         recipe: &RecipeId,
@@ -329,7 +329,7 @@ impl Session<'_> {
         let Some(cluster) = self.deps.cluster else {
             return vec![err(Some(id), AgentError::NotReady)];
         };
-        match cluster.prepare(recipe, nodes, head, settings) {
+        match cluster.prepare(recipe, nodes, head, settings).await {
             Ok((epoch, ranks, may_commit)) => vec![ServerMsg::ClusterPrepared {
                 id,
                 epoch,
@@ -347,11 +347,11 @@ impl Session<'_> {
     }
 
     /// Start what every rank prepared under this epoch.
-    pub(super) fn commit_cluster(&self, id: u32, epoch: &str) -> Vec<ServerMsg> {
+    pub(super) async fn commit_cluster(&self, id: u32, epoch: &str) -> Vec<ServerMsg> {
         let Some(cluster) = self.deps.cluster else {
             return vec![err(Some(id), AgentError::NotReady)];
         };
-        match cluster.commit(epoch) {
+        match cluster.commit(epoch).await {
             Ok(ranks) => vec![ServerMsg::ClusterStarted {
                 id,
                 epoch: epoch.to_owned(),
@@ -368,11 +368,11 @@ impl Session<'_> {
     ///
     /// Answered with the same shape as a prepare that nobody accepted, so the
     /// page has one code path for "this launch is not going to happen".
-    pub(super) fn abort_cluster(&self, id: u32, epoch: &str) -> Vec<ServerMsg> {
+    pub(super) async fn abort_cluster(&self, id: u32, epoch: &str) -> Vec<ServerMsg> {
         let Some(cluster) = self.deps.cluster else {
             return vec![err(Some(id), AgentError::NotReady)];
         };
-        cluster.abort(epoch);
+        cluster.abort(epoch).await;
         vec![ServerMsg::ClusterPrepared {
             id,
             epoch: epoch.to_owned(),
@@ -382,11 +382,11 @@ impl Session<'_> {
     }
 
     /// Stop every rank of the running cluster.
-    pub(super) fn stop_cluster(&self, id: u32) -> Vec<ServerMsg> {
+    pub(super) async fn stop_cluster(&self, id: u32) -> Vec<ServerMsg> {
         let Some(cluster) = self.deps.cluster else {
             return vec![err(Some(id), AgentError::NotReady)];
         };
-        match cluster.stop_cluster() {
+        match cluster.stop_cluster().await {
             Ok(ranks) => vec![ServerMsg::ClusterStopped { id, ranks }],
             Err(detail) => vec![err(Some(id), AgentError::LaunchFailed { detail })],
         }

@@ -30,11 +30,16 @@ pub trait ControlRelay: Send + Sync {
     /// # Errors
     /// `NotRoutable` when this agent has no route at all, `RelayRefused` /
     /// `ControlRefused` when someone on the path said no.
-    fn control(
-        &self,
+    ///
+    /// Returns a boxed future rather than being an `async fn`: this trait is
+    /// used as `dyn ControlRelay`, and an `async fn` in a trait is not
+    /// dyn-compatible. Boxing here is what lets the implementation `await` its
+    /// peer calls instead of blocking a runtime worker to run them.
+    fn control<'a>(
+        &'a self,
         target: NodeId,
         req: ControlReq,
-    ) -> Result<(ControlRep, Option<NodeId>), AgentError>;
+    ) -> crate::BoxFut<'a, Result<(ControlRep, Option<NodeId>), AgentError>>;
 }
 
 impl Session<'_> {
@@ -46,12 +51,12 @@ impl Session<'_> {
     /// execute a remote-addressed verb on this box: that silent
     /// misattribution is the exact thing the provenance fields exist to
     /// prevent.
-    pub(super) fn route_remote(&mut self, msg: &ClientMsg) -> Option<Vec<ServerMsg>> {
+    pub(super) async fn route_remote(&mut self, msg: &ClientMsg) -> Option<Vec<ServerMsg>> {
         let (id, target, req) = as_remote(msg)?;
         if self.is_local_node(target) {
             return None;
         }
-        Some(vec![self.forward(id, target, req)])
+        Some(vec![self.forward(id, target, req).await])
     }
 
     /// Whether `node` is this machine, by the fleet's own account.
@@ -67,7 +72,7 @@ impl Session<'_> {
 
     /// Rules O2–O5 live behind the relay; this applies its verdict and
     /// states the provenance.
-    fn forward(&mut self, id: u32, target: NodeId, req: ControlReq) -> ServerMsg {
+    async fn forward(&mut self, id: u32, target: NodeId, req: ControlReq) -> ServerMsg {
         let Some(relay) = self.deps.relay else {
             return err(
                 Some(id),
@@ -77,7 +82,7 @@ impl Session<'_> {
                 },
             );
         };
-        match relay.control(target, req.clone()) {
+        match relay.control(target, req.clone()).await {
             Ok((rep, via)) => rep_to_msg(id, target, via, &req, rep),
             Err(e) => err(Some(id), e),
         }

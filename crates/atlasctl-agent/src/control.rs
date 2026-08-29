@@ -33,7 +33,7 @@ pub struct LocalControl<'a> {
     /// The recipe inventory.
     pub registry: &'a RegistrySet,
     /// How launches actually happen.
-    pub launcher: &'a dyn Launcher,
+    pub launcher: std::sync::Arc<dyn Launcher>,
     /// Sampling a running launch, when this agent can.
     pub telemetry: Option<&'a dyn LaunchTelemetry>,
     /// Whether this machine can run a recipe at all.
@@ -42,6 +42,24 @@ pub struct LocalControl<'a> {
     /// hardware-aware refusal in [`Self::launch`]. Empty when the probe found
     /// nothing — which reads as "not GB10" and so gates nothing.
     pub accelerator: &'a str,
+}
+
+/// Run a blocking launcher call on tokio's blocking pool.
+///
+/// A panic inside the launcher becomes a `LaunchFailed` rather than taking the
+/// agent down: the loop that called this is serving other sessions, and killing
+/// them over one bad launch is the worse failure.
+async fn blocking<T, F>(f: F) -> Result<T, AgentError>
+where
+    F: FnOnce() -> Result<T, AgentError> + Send + 'static,
+    T: Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(r) => r,
+        Err(e) => Err(AgentError::LaunchFailed {
+            detail: format!("the launcher task did not complete: {e}"),
+        }),
+    }
 }
 
 impl LocalControl<'_> {
@@ -94,7 +112,7 @@ impl LocalControl<'_> {
     /// # Errors
     /// If this machine cannot launch, the recipe is unknown or unlaunchable,
     /// the settings are rejected, or the launcher refuses.
-    pub fn launch(
+    pub async fn launch(
         &self,
         recipe_id: &RecipeId,
         requested: &BTreeMap<String, SettingValue>,
@@ -140,23 +158,47 @@ impl LocalControl<'_> {
                 });
             }
         }
-        self.launcher.launch(&recipe, &overrides)
+        // `Launcher::launch` shells out to `docker run` and does not return
+        // until the container is up — seconds, or minutes behind an image pull.
+        // Run inline it would hold a runtime worker for that whole time, and the
+        // cost is not the caller's alone: every websocket session shares this
+        // runtime, and so do the timers meant to BOUND these operations.
+        //
+        // `spawn_blocking`, not `block_in_place`: the latter evicts the other
+        // tasks from the current worker and may spawn a replacement thread, so
+        // it suits OCCASIONAL blocking, and every launch doing it becomes worker
+        // cannibalisation as concurrency rises. The blocking pool exists for
+        // exactly this and keeps all async workers pollable. The extra context
+        // switch is irrelevant against a `fork`/`exec`. (Same reasoning, and the
+        // same conclusion, as `spark-server`'s chat-prompt path.)
+        //
+        // `'static` is satisfied by OWNERSHIP rather than a scoped spawn: the
+        // launcher is an `Arc` (clone = refcount bump), and `recipe` and
+        // `overrides` are owned locals moved in.
+        let launcher = std::sync::Arc::clone(&self.launcher);
+        blocking(move || launcher.launch(&recipe, &overrides)).await
     }
 
     /// Stop a running launch, by recipe.
     ///
     /// # Errors
     /// If the launcher refuses.
-    pub fn stop(&self, recipe_id: &RecipeId) -> Result<(), AgentError> {
-        self.launcher.stop(recipe_id.as_str())
+    pub async fn stop(&self, recipe_id: &RecipeId) -> Result<(), AgentError> {
+        // `docker stop` blocks for as long as the container takes to exit.
+        let launcher = std::sync::Arc::clone(&self.launcher);
+        let recipe = recipe_id.as_str().to_owned();
+        blocking(move || launcher.stop(&recipe)).await
     }
 
     /// What is running on this machine.
     ///
     /// # Errors
     /// If the launcher cannot answer.
-    pub fn status(&self) -> Result<Vec<RunningLaunch>, AgentError> {
-        self.launcher.running()
+    pub async fn status(&self) -> Result<Vec<RunningLaunch>, AgentError> {
+        // `docker ps` is short, but it is still a process spawn, and this is
+        // polled by the browser rather than called once.
+        let launcher = std::sync::Arc::clone(&self.launcher);
+        blocking(move || launcher.running()).await
     }
 
     /// How a running launch is doing.
@@ -204,7 +246,7 @@ impl LocalControl<'_> {
     ///
     /// # Errors
     /// Whatever the underlying operation refuses with.
-    pub fn execute(&self, req: ControlReq) -> Result<ControlRep, AgentError> {
+    pub async fn execute(&self, req: ControlReq) -> Result<ControlRep, AgentError> {
         match req {
             ControlReq::ListRecipes => Ok(ControlRep::Recipes {
                 recipes: self.recipes(),
@@ -217,7 +259,7 @@ impl LocalControl<'_> {
                 })
             }
             ControlReq::Launch { recipe, settings } => {
-                let started = self.launch(&recipe, &settings)?;
+                let started = self.launch(&recipe, &settings).await?;
                 Ok(ControlRep::Started {
                     recipe,
                     container: started.container,
@@ -225,11 +267,11 @@ impl LocalControl<'_> {
                 })
             }
             ControlReq::Stop { recipe } => {
-                self.stop(&recipe)?;
+                self.stop(&recipe).await?;
                 Ok(ControlRep::Stopped { recipe })
             }
             ControlReq::Status => Ok(ControlRep::Status {
-                running: self.status()?,
+                running: self.status().await?,
             }),
             ControlReq::Stats { recipe } => {
                 let stats = self.stats(&recipe)?;
@@ -292,7 +334,7 @@ fn to_wire(v: &atlasctl_core::ScalarValue) -> SettingValue {
 /// [`AgentState`]: crate::server::AgentState
 pub struct ControlHost {
     registry: RegistrySet,
-    launcher: Box<dyn Launcher>,
+    launcher: std::sync::Arc<dyn Launcher>,
     telemetry: Option<Box<dyn LaunchTelemetry>>,
     can_launch: Result<(), String>,
     accelerator: String,
@@ -303,7 +345,7 @@ impl ControlHost {
     #[must_use]
     pub fn new(
         registry: RegistrySet,
-        launcher: Box<dyn Launcher>,
+        launcher: std::sync::Arc<dyn Launcher>,
         telemetry: Option<Box<dyn LaunchTelemetry>>,
         can_launch: Result<(), String>,
         accelerator: String,
@@ -323,7 +365,7 @@ impl ControlHost {
         LocalControl {
             accelerator: &self.accelerator,
             registry: &self.registry,
-            launcher: self.launcher.as_ref(),
+            launcher: std::sync::Arc::clone(&self.launcher),
             telemetry: self.telemetry.as_deref(),
             can_launch: &self.can_launch,
         }

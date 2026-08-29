@@ -76,6 +76,40 @@ where
     anyhow::bail!("{}", why.join("; "))
 }
 
+/// The async twin of [`walk`], for a dial that is a future.
+///
+/// The stop rule is [`never_reached`] — the same function, not a copy — so the
+/// two directions cannot drift apart on the question that matters: whether a
+/// failure earns another address. Only the loop is written twice, because there
+/// is no stable way to be generic over "returns `T`" and "returns a future of
+/// `T`" in one function.
+///
+/// # Errors
+/// When no address answered; the message accumulates every address's reason.
+pub async fn walk_async<T, F, Fut>(
+    addrs: &[std::net::SocketAddr],
+    mut dial: F,
+) -> anyhow::Result<(std::net::SocketAddr, T)>
+where
+    F: FnMut(std::net::SocketAddr) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<T>>,
+{
+    let mut why: Vec<String> = Vec::new();
+    for addr in addrs {
+        match dial(*addr).await {
+            Ok(v) => return Ok((*addr, v)),
+            Err(e) => {
+                let keep_going = never_reached(&e);
+                why.push(format!("{addr}: {e:#}"));
+                if !keep_going {
+                    break;
+                }
+            }
+        }
+    }
+    anyhow::bail!("{}", why.join("; "))
+}
+
 /// Where to dial one peer: its address, and the port IT advertised.
 ///
 /// Two rules, both of which were learned the hard way and neither of which

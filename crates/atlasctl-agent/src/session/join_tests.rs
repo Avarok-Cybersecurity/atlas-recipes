@@ -12,11 +12,11 @@ use super::{Session, SessionDeps};
 use atlasctl_protocol::{ClientMsg, ServerMsg};
 
 /// A session whose agent can take on a new machine.
-fn ready_with_window<'a>(f: &'a Fixture, w: &'a crate::joining::JoinWindow) -> Session<'a> {
+async fn ready_with_window<'a>(f: &'a Fixture, w: &'a crate::joining::JoinWindow) -> Session<'a> {
     let (mut s, _) = Session::new(SessionDeps {
         accelerator: "",
         registry: &f.registry,
-        launcher: &f.launcher,
+        launcher: f.launcher.clone(),
         token: TOKEN,
         can_launch: Ok(()),
         fleet: None,
@@ -28,20 +28,23 @@ fn ready_with_window<'a>(f: &'a Fixture, w: &'a crate::joining::JoinWindow) -> S
     s.handle(ClientMsg::Hello {
         protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
         token: TOKEN.into(),
-    });
+    })
+    .await;
     s
 }
 
-#[test]
-fn minting_opens_the_window_and_hands_back_the_digits() {
+#[tokio::test]
+async fn minting_opens_the_window_and_hands_back_the_digits() {
     let f = Fixture::new();
     let w = crate::joining::JoinWindow::default();
-    let mut s = ready_with_window(&f, &w);
+    let mut s = ready_with_window(&f, &w).await;
 
-    let out = s.handle(ClientMsg::MintJoinCode {
-        id: 1,
-        allow_control: false,
-    });
+    let out = s
+        .handle(ClientMsg::MintJoinCode {
+            id: 1,
+            allow_control: false,
+        })
+        .await;
     match &out[0] {
         ServerMsg::JoinInvitation {
             code, expires_in_s, ..
@@ -57,17 +60,18 @@ fn minting_opens_the_window_and_hands_back_the_digits() {
 
 /// Revoking is how an operator shuts a window they opened by mistake, and the
 /// absent code is how the page knows it is shut.
-#[test]
-fn revoking_closes_the_window_and_says_so() {
+#[tokio::test]
+async fn revoking_closes_the_window_and_says_so() {
     let f = Fixture::new();
     let w = crate::joining::JoinWindow::default();
-    let mut s = ready_with_window(&f, &w);
+    let mut s = ready_with_window(&f, &w).await;
     s.handle(ClientMsg::MintJoinCode {
         id: 1,
         allow_control: false,
-    });
+    })
+    .await;
 
-    let out = s.handle(ClientMsg::RevokeJoinCode { id: 2 });
+    let out = s.handle(ClientMsg::RevokeJoinCode { id: 2 }).await;
     match &out[0] {
         ServerMsg::JoinInvitation { code, .. } => assert!(code.is_none()),
         other => panic!("expected an invitation, got {other:?}"),
@@ -77,14 +81,16 @@ fn revoking_closes_the_window_and_says_so() {
 
 /// An agent with no window must not mint a code nothing will honour — that
 /// would send the operator to another machine to run a command that fails.
-#[test]
-fn an_agent_that_cannot_take_members_refuses_to_mint() {
+#[tokio::test]
+async fn an_agent_that_cannot_take_members_refuses_to_mint() {
     let f = Fixture::new();
-    let mut s = f.ready();
-    let out = s.handle(ClientMsg::MintJoinCode {
-        id: 1,
-        allow_control: false,
-    });
+    let mut s = f.ready().await;
+    let out = s
+        .handle(ClientMsg::MintJoinCode {
+            id: 1,
+            allow_control: false,
+        })
+        .await;
     assert!(
         matches!(out[0], ServerMsg::Error { .. }),
         "expected a refusal, got {out:?}"
@@ -93,14 +99,14 @@ fn an_agent_that_cannot_take_members_refuses_to_mint() {
 
 /// Minting is a Ready-phase verb: an unauthenticated socket must not be able
 /// to open this machine to a stranger.
-#[test]
-fn minting_before_the_handshake_is_refused() {
+#[tokio::test]
+async fn minting_before_the_handshake_is_refused() {
     let f = Fixture::new();
     let w = crate::joining::JoinWindow::default();
     let (mut s, _) = Session::new(SessionDeps {
         accelerator: "",
         registry: &f.registry,
-        launcher: &f.launcher,
+        launcher: f.launcher.clone(),
         token: TOKEN,
         can_launch: Ok(()),
         fleet: None,
@@ -109,10 +115,12 @@ fn minting_before_the_handshake_is_refused() {
         joining: Some(&w),
         relay: None,
     });
-    let out = s.handle(ClientMsg::MintJoinCode {
-        id: 1,
-        allow_control: false,
-    });
+    let out = s
+        .handle(ClientMsg::MintJoinCode {
+            id: 1,
+            allow_control: false,
+        })
+        .await;
     assert!(
         matches!(out[0], ServerMsg::Error { .. }),
         "expected a refusal, got {out:?}"
