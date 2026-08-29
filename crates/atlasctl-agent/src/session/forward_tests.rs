@@ -97,22 +97,14 @@ impl crate::fleet::FleetView for SelfAwareFleet {
         &'a self,
         _: NodeId,
         _: &'a str,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = anyhow::Result<crate::fleet::PairOutcome>> + Send + 'a,
-        >,
-    > {
+    ) -> crate::BoxFut<'a, anyhow::Result<crate::fleet::PairOutcome>> {
         Box::pin(async move { anyhow::bail!("not under test") })
     }
     fn pair_at<'a>(
         &'a self,
         _: &'a str,
         _: &'a str,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = anyhow::Result<crate::fleet::PairOutcome>> + Send + 'a,
-        >,
-    > {
+    ) -> crate::BoxFut<'a, anyhow::Result<crate::fleet::PairOutcome>> {
         Box::pin(async move { anyhow::bail!("not under test") })
     }
     fn trust(&self, _: &crate::fleet::PairOutcome, _: bool) -> anyhow::Result<()> {
@@ -150,13 +142,7 @@ impl ControlRelay for FakeRelay {
         &'a self,
         target: NodeId,
         req: ControlReq,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<(ControlRep, Option<NodeId>), AgentError>>
-                + Send
-                + 'a,
-        >,
-    > {
+    ) -> crate::BoxFut<'a, Result<(ControlRep, Option<NodeId>), AgentError>> {
         self.calls.lock().expect("lock").push((target, req.clone()));
         let answered = (self.answer)(&req);
         Box::pin(async move { answered })

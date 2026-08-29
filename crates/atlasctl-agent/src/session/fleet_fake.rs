@@ -66,8 +66,7 @@ impl FleetView for RecordingFleet {
         &'a self,
         _node: NodeId,
         _code: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<PairOutcome>> + Send + 'a>>
-    {
+    ) -> crate::BoxFut<'a, anyhow::Result<PairOutcome>> {
         Box::pin(async move { self.exchange() })
     }
 
@@ -75,8 +74,7 @@ impl FleetView for RecordingFleet {
         &'a self,
         _target: &'a str,
         _code: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<PairOutcome>> + Send + 'a>>
-    {
+    ) -> crate::BoxFut<'a, anyhow::Result<PairOutcome>> {
         Box::pin(async move { self.exchange() })
     }
 

@@ -52,11 +52,7 @@ pub trait FleetView: Send + Sync {
     ///
     /// # Errors
     /// If the peer is unknown, unreachable, or the ceremony fails.
-    fn pair<'a>(
-        &'a self,
-        node: NodeId,
-        code: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<PairOutcome>> + Send + 'a>>;
+    fn pair<'a>(&'a self, node: NodeId, code: &'a str) -> crate::BoxFut<'a, Result<PairOutcome>>;
 
     /// Run the ceremony against an address the operator typed.
     ///
@@ -73,7 +69,7 @@ pub trait FleetView: Send + Sync {
         &'a self,
         target: &'a str,
         code: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<PairOutcome>> + Send + 'a>>;
+    ) -> crate::BoxFut<'a, Result<PairOutcome>>;
 
     /// Write the pin for an exchange a human has accepted.
     ///
@@ -119,9 +115,7 @@ pub trait PeerPairing: Send + Sync {
         &'a self,
         addr: std::net::SocketAddr,
         code: &'a str,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<crate::peer::pair::Paired>> + Send + 'a>,
-    >;
+    ) -> crate::BoxFut<'a, Result<crate::peer::pair::Paired>>;
 }
 
 /// A completed exchange, not yet trusted.

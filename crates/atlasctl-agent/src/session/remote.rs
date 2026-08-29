@@ -39,13 +39,7 @@ pub trait ControlRelay: Send + Sync {
         &'a self,
         target: NodeId,
         req: ControlReq,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<(ControlRep, Option<NodeId>), AgentError>>
-                + Send
-                + 'a,
-        >,
-    >;
+    ) -> crate::BoxFut<'a, Result<(ControlRep, Option<NodeId>), AgentError>>;
 }
 
 impl Session<'_> {

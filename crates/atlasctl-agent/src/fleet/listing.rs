@@ -43,11 +43,7 @@ fn as_launchability(can_launch: bool) -> Launchability {
 }
 
 impl FleetView for LocalFleet {
-    fn pair<'a>(
-        &'a self,
-        node: NodeId,
-        code: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<PairOutcome>> + Send + 'a>> {
+    fn pair<'a>(&'a self, node: NodeId, code: &'a str) -> crate::BoxFut<'a, Result<PairOutcome>> {
         Box::pin(self.pair_inner(node, code))
     }
 
@@ -55,7 +51,7 @@ impl FleetView for LocalFleet {
         &'a self,
         target: &'a str,
         code: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<PairOutcome>> + Send + 'a>> {
+    ) -> crate::BoxFut<'a, Result<PairOutcome>> {
         Box::pin(self.pair_at_inner(target, code))
     }
 

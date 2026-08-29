@@ -392,7 +392,7 @@ mod fleet;
 // of a cluster", and nothing else moved.
 #[path = "session/cluster_control.rs"]
 mod cluster_control;
-pub use cluster_control::ClusterControl;
+pub use cluster_control::{ClusterControl, PrepareAnswer, PreviewAnswer};
 
 #[path = "session/launch.rs"]
 mod launch;

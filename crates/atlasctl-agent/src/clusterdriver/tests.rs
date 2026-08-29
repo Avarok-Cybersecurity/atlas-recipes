@@ -56,20 +56,14 @@ impl FleetView for FixtureFleet {
     fn nodes(&self) -> Vec<NodeDescriptor> {
         self.0.clone()
     }
-    fn pair<'a>(
-        &'a self,
-        _: NodeId,
-        _: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<PairOutcome>> + Send + 'a>>
-    {
+    fn pair<'a>(&'a self, _: NodeId, _: &'a str) -> crate::BoxFut<'a, anyhow::Result<PairOutcome>> {
         Box::pin(async move { unreachable!("the driver never pairs") })
     }
     fn pair_at<'a>(
         &'a self,
         _: &'a str,
         _: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<PairOutcome>> + Send + 'a>>
-    {
+    ) -> crate::BoxFut<'a, anyhow::Result<PairOutcome>> {
         Box::pin(async move { unreachable!("the driver never pairs") })
     }
     fn trust(&self, _: &PairOutcome, _: bool) -> anyhow::Result<()> {
@@ -191,9 +185,7 @@ impl RankTransport for FixtureTransport {
         node: NodeId,
         _: SocketAddr,
         a: &'a RankAssignment,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = anyhow::Result<(String, Vec<String>)>> + Send + 'a>,
-    > {
+    ) -> crate::BoxFut<'a, anyhow::Result<(String, Vec<String>)>> {
         Box::pin(async move {
             self.note(format!("{}.preview(rank={})", node.short(), a.rank));
             Ok((format!("docker run rank{}", a.rank), Vec::new()))
@@ -206,7 +198,7 @@ impl RankTransport for FixtureTransport {
         _: SocketAddr,
         _: &'a str,
         a: &'a RankAssignment,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PrepareReply> + Send + 'a>> {
+    ) -> crate::BoxFut<'a, PrepareReply> {
         Box::pin(async move {
             self.note(format!("{}.prepare(rank={})", node.short(), a.rank));
             self.prepare
@@ -221,8 +213,7 @@ impl RankTransport for FixtureTransport {
         node: NodeId,
         _: SocketAddr,
         _: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + 'a>>
-    {
+    ) -> crate::BoxFut<'a, anyhow::Result<String>> {
         Box::pin(async move {
             self.note(format!("{}.commit", node.short()));
             self.commit
@@ -233,12 +224,7 @@ impl RankTransport for FixtureTransport {
         })
     }
 
-    fn abort<'a>(
-        &'a self,
-        node: NodeId,
-        _: SocketAddr,
-        _: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+    fn abort<'a>(&'a self, node: NodeId, _: SocketAddr, _: &'a str) -> crate::BoxFut<'a, ()> {
         Box::pin(async move {
             self.note(format!("{}.abort", node.short()));
         })
@@ -249,8 +235,7 @@ impl RankTransport for FixtureTransport {
         node: NodeId,
         _: SocketAddr,
         container: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + 'a>>
-    {
+    ) -> crate::BoxFut<'a, anyhow::Result<bool>> {
         Box::pin(async move {
             self.note(format!("{}.alive({container})", node.short()));
             if self.killed.lock().expect("killed lock").contains(&node) {
@@ -265,7 +250,7 @@ impl RankTransport for FixtureTransport {
         node: NodeId,
         _: SocketAddr,
         container: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
+    ) -> crate::BoxFut<'a, anyhow::Result<()>> {
         Box::pin(async move {
             self.note(format!("{}.stop({container})", node.short()));
             // A killed rank is one this transport cannot reach, which is exactly

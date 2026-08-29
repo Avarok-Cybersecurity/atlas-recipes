@@ -55,11 +55,7 @@ impl crate::fleet::PeerPairing for Arc<FakePairing> {
         &'a self,
         addr: std::net::SocketAddr,
         code: &'a str,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = anyhow::Result<crate::peer::pair::Paired>> + Send + 'a,
-        >,
-    > {
+    ) -> crate::BoxFut<'a, anyhow::Result<crate::peer::pair::Paired>> {
         Box::pin(async move {
             self.calls
                 .lock()

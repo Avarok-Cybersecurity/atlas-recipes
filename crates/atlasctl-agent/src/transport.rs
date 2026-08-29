@@ -38,9 +38,7 @@ pub trait RankTransport: Send + Sync {
         node: NodeId,
         addr: SocketAddr,
         assignment: &'a RankAssignment,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<(String, Vec<String>)>> + Send + 'a>,
-    >;
+    ) -> crate::BoxFut<'a, Result<(String, Vec<String>)>>;
 
     /// Ask this rank to validate and reserve.
     ///
@@ -54,7 +52,7 @@ pub trait RankTransport: Send + Sync {
         addr: SocketAddr,
         epoch: &'a str,
         assignment: &'a RankAssignment,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PrepareReply> + Send + 'a>>;
+    ) -> crate::BoxFut<'a, PrepareReply>;
 
     /// Start what this rank prepared.
     ///
@@ -66,15 +64,11 @@ pub trait RankTransport: Send + Sync {
         node: NodeId,
         addr: SocketAddr,
         epoch: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>>;
+    ) -> crate::BoxFut<'a, Result<String>>;
 
     /// Release this rank's reservation. Failures are the driver's to ignore.
-    fn abort<'a>(
-        &'a self,
-        node: NodeId,
-        addr: SocketAddr,
-        epoch: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
+    fn abort<'a>(&'a self, node: NodeId, addr: SocketAddr, epoch: &'a str)
+    -> crate::BoxFut<'a, ()>;
 
     /// Whether a container this rank started is still running.
     ///
@@ -88,7 +82,7 @@ pub trait RankTransport: Send + Sync {
         node: NodeId,
         addr: SocketAddr,
         container: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool>> + Send + 'a>>;
+    ) -> crate::BoxFut<'a, Result<bool>>;
 
     /// Stop a container this rank started.
     ///
@@ -102,7 +96,7 @@ pub trait RankTransport: Send + Sync {
         node: NodeId,
         addr: SocketAddr,
         container: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>>;
+    ) -> crate::BoxFut<'a, Result<()>>;
 
     /// Mark a rank dead, so a test can exercise supervision.
     #[cfg(test)]

@@ -122,20 +122,7 @@ impl ClusterControl for ClusterDriver {
         nodes: &'a [atlasctl_protocol::fleet::NodeId],
         head: atlasctl_protocol::fleet::NodeId,
         settings: &'a BTreeMap<String, SettingValue>,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<
-                        (
-                            Vec<atlasctl_protocol::msg::fleet::RankPreview>,
-                            Option<String>,
-                        ),
-                        String,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    > {
+    ) -> crate::BoxFut<'a, crate::session::PreviewAnswer> {
         Box::pin(self.preview_inner(recipe, nodes, head, settings))
     }
 
@@ -145,21 +132,7 @@ impl ClusterControl for ClusterDriver {
         nodes: &'a [atlasctl_protocol::fleet::NodeId],
         head: atlasctl_protocol::fleet::NodeId,
         settings: &'a BTreeMap<String, SettingValue>,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<
-                        (
-                            String,
-                            Vec<atlasctl_protocol::msg::fleet::RankPrepare>,
-                            bool,
-                        ),
-                        String,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    > {
+    ) -> crate::BoxFut<'a, crate::session::PrepareAnswer> {
         Box::pin(self.prepare_inner(recipe, nodes, head, settings))
     }
 
@@ -177,10 +150,7 @@ impl ClusterControl for ClusterDriver {
         Box::pin(self.commit_inner(epoch))
     }
 
-    fn abort<'a>(
-        &'a self,
-        epoch: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+    fn abort<'a>(&'a self, epoch: &'a str) -> crate::BoxFut<'a, ()> {
         Box::pin(self.abort_inner(epoch))
     }
 
@@ -197,11 +167,7 @@ impl ClusterControl for ClusterDriver {
         Box::pin(self.stop_cluster_inner())
     }
 
-    fn supervise<'a>(
-        &'a self,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Option<crate::clusterdriver::Torn>> + Send + 'a>,
-    > {
+    fn supervise<'a>(&'a self) -> crate::BoxFut<'a, Option<crate::clusterdriver::Torn>> {
         Box::pin(self.supervise_inner())
     }
 }
