@@ -1,7 +1,7 @@
 recipe_version: "2"
 model: Inferact/Qwen3.8-Flash-Next-NVFP4
 runtime: atlas
-container: avarok/atlas-gb10:latest
+container: avarok/atlas-gb10:5be3fc1
 max_nodes: 1
 
 metadata:
@@ -9,14 +9,23 @@ metadata:
     Qwen3.8-Flash-Next (NVFP4) — a 48-layer hybrid (36 GDN linear-attention +
     12 full-attention) MoE with 512 experts, top-10, and QSA sparse attention.
 
-    ⚠ REQUIRES AN ENGINE THAT HAS THE `qwen3.8-flash-next` KERNEL TARGET.
-    Support arrives with the Flash-Next integration; on an older image this
-    checkpoint does not load at all. `container:` below is `:latest`, matching
-    every sibling recipe, which means THIS FILE MUST NOT SHIP BEFORE THAT
-    SUPPORT IS IN THE PUBLISHED IMAGE -- otherwise `:latest` is precisely the
-    older image and every user meets the load refusal on day one. If
-    `atlasctl run` fails at load, the image is the first thing to check, not
-    this file.
+    ⚠ REQUIRES AN ENGINE THAT HAS THE `qwen3.8-flash-next` KERNEL TARGET, and
+    `container:` above therefore PINS A DIGEST-STABLE TAG rather than `:latest`,
+    which every sibling recipe uses. That deviation is deliberate.
+
+    `avarok/atlas-gb10:5be3fc1` is built from main at 5be3fc1 and is the image
+    this recipe was verified against: 26 kernel targets including
+    `gb10/qwen3.8-flash-next/nvfp4` built for sm_121f, and a four-model matrix
+    at 49/49 with this checkpoint answering 10/10 coherence probes.
+
+    `:latest` is NOT used because 27 other recipes share it. Publishing a new
+    `:latest` would migrate all of them onto a build verified against four of
+    their models, to fix a problem only this recipe has. Pinning keeps the
+    blast radius at one recipe and makes what shipped reproducible.
+
+    Return this to `:latest` once a published `:latest` both carries Flash-Next
+    and has been verified across the recipes that depend on it. Until then, if
+    `atlasctl run` fails at load, the image is the first thing to check.
 
     ★ THERE ARE TWO PUBLISHED CONVERSIONS AND THEY ARE NOT THE SAME WEIGHTS.
     This recipe names `Inferact/…` deliberately. It ships the per-layer n-gram
