@@ -272,9 +272,8 @@ fn logs_with(runner: &dyn ProcessRunner, args: &LogsArgs, resolved: &str) -> Res
                  Either it was never started here — `atlasctl status` lists what is \
                  running — or it started and exited: recipes run with `--rm`, so a \
                  container that dies is removed and its logs go with it.\n\
-                 To see why one dies, run it in the foreground:\n    \
-                 atlasctl run {recipe} --print\n\
-                 then paste that command without `-d`.",
+                 To keep the next one so its logs survive:\n    \
+                 atlasctl run {recipe} --no-rm",
                 recipe = args.recipe
             ),
             1 => name = found.into_iter().next().unwrap_or_default(),

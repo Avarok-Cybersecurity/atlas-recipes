@@ -350,7 +350,7 @@ fn died_immediately(
 ) -> Option<String> {
     std::thread::sleep(LIVENESS_WAIT);
     let out = runner.run(&liveness_argv(recipe)).ok();
-    liveness_verdict(out.as_ref(), container)
+    liveness_verdict(out.as_ref(), container, recipe)
 }
 
 /// Ask docker about THIS recipe's container, by label.
@@ -386,22 +386,27 @@ fn liveness_argv(recipe: &str) -> Vec<String> {
 fn liveness_verdict(
     out: Option<&atlasctl_core::io::process::Output>,
     name: &str,
+    recipe_arg: &str,
 ) -> Option<String> {
     let out = out?;
     if !out.success() || !out.stdout.trim().is_empty() {
         return None;
     }
     Some(format!(
-        "`{name}` started and then exited within {}s.\n\
-         That is the container failing at load rather than the launch failing: \
-         docker accepted it, and the engine stopped afterwards.\n\
-         Its logs are already gone — recipes run with `--rm` — so run it in the \
-         foreground to see why:\n    \
-         atlasctl run <recipe> --print\n\
-         then paste that command without `-d`. The usual causes are an image \
-         without a kernel target for this checkpoint, a KV dtype the engine \
-         refuses, and not enough memory.",
-        LIVENESS_WAIT.as_secs()
+        concat!(
+            "`{name}` started and then exited within {secs}s.\n",
+            "That is the container failing at load rather than the launch failing: ",
+            "docker accepted it, and the engine stopped afterwards.\n",
+            "Its logs are already gone, because the launch runs with `--rm`. ",
+            "Re-run keeping the container so they survive:\n",
+            "    atlasctl run {name_arg} --no-rm\n",
+            "then read them with `atlasctl logs {name_arg}`. The usual causes are ",
+            "an image with no kernel target for this checkpoint, a KV dtype the ",
+            "engine refuses, and not enough memory.",
+        ),
+        name = name,
+        secs = LIVENESS_WAIT.as_secs(),
+        name_arg = recipe_arg
     ))
 }
 
@@ -424,19 +429,23 @@ mod liveness_tests {
     /// container was removed on exit.
     #[test]
     fn an_empty_ps_is_a_container_that_died() {
-        let why = liveness_verdict(Some(&out(0, "")), "atlas-r").expect("gone");
+        let why = liveness_verdict(Some(&out(0, "")), "atlas-r", "r").expect("gone");
         assert!(why.contains("atlas-r"), "must name it: {why}");
         assert!(why.contains("--rm"), "must explain the missing logs: {why}");
         assert!(
-            why.contains("--print"),
+            why.contains("--no-rm"),
             "must offer a way to actually see the failure: {why}"
+        );
+        assert!(
+            why.contains("atlasctl logs r"),
+            "and the command that then reads them: {why}"
         );
     }
 
     /// A container id means it is still running: say nothing.
     #[test]
     fn a_running_container_is_not_reported() {
-        assert!(liveness_verdict(Some(&out(0, "9f3c1a2b\n")), "atlas-r").is_none());
+        assert!(liveness_verdict(Some(&out(0, "9f3c1a2b\n")), "atlas-r", "r").is_none());
     }
 
     /// The query must be by LABEL, not by name.
@@ -466,11 +475,11 @@ mod liveness_tests {
     #[test]
     fn an_unanswerable_docker_is_not_treated_as_a_dead_container() {
         assert!(
-            liveness_verdict(Some(&out(1, "")), "atlas-r").is_none(),
+            liveness_verdict(Some(&out(1, "")), "atlas-r", "r").is_none(),
             "a failed ps must not be read as a dead container"
         );
         assert!(
-            liveness_verdict(None, "atlas-r").is_none(),
+            liveness_verdict(None, "atlas-r", "r").is_none(),
             "a runner error must not be read as a dead container"
         );
     }
