@@ -249,7 +249,7 @@ install_agent() {
         warn "Check which with:  $BIN_NAME agent status"
         warn "A join code is single-use and expires. To retry just the join:"
         warn "    $BIN_NAME agent install --join <code>@<host>"
-        return
+        return 1
     fi
     # NOT silenced. `agent install` deliberately reports two things the
     # operator can only act on if they see them: that enable-linger failed, so
@@ -270,7 +270,7 @@ install_agent() {
         warn "is usable right now — the website will find it. Nothing else to do."
         warn "To point that agent at this newly installed binary, stop it and run:"
         warn "    $BIN_NAME agent install"
-        return
+        return 0
     fi
     warn "To run the agent by hand:"
     warn "    $BIN_NAME agent run"
@@ -280,6 +280,7 @@ install_agent() {
     else
         warn "    journalctl --user -u atlasctl-agent -n 50"
     fi
+    return 1
 }
 
 check_docker() {
@@ -577,11 +578,29 @@ main() {
 
     check_docker
     check_sparkrun
-    install_agent "$dir/$BIN_NAME" "$join" "$grant_control" "$same_version"
+    agent_ok=1
+    install_agent "$dir/$BIN_NAME" "$join" "$grant_control" "$same_version" || agent_ok=0
 
-    info "done. Try:"
-    info "    $BIN_NAME list"
-    info "    $BIN_NAME run qwen3.6-35b-a3b-fp8-mtp"
+    # `atlasctl` only resolves if its directory is on PATH. Printing the bare
+    # name to someone we warned about PATH a few lines ago is a command that
+    # fails the moment they paste it, which reads as a broken install.
+    case ":$PATH:" in
+        *":$dir:"*) try="$BIN_NAME" ;;
+        *) try="$dir/$BIN_NAME" ;;
+    esac
+
+    # Do not congratulate a failed run. The old code printed "done. Try:"
+    # unconditionally, so an operator whose agent had NOT started read a
+    # failure and a success in the same breath and believed the cheerful one.
+    if [ "$agent_ok" = 1 ]; then
+        info "done. Try:"
+    else
+        warn "atlasctl is installed, but the agent step above did not succeed."
+        warn "Fix that first — the website cannot use this machine until it does."
+        warn "Then try:"
+    fi
+    info "    $try list"
+    info "    $try run qwen3.6-35b-a3b-fp8-mtp"
 }
 
 main "$@"

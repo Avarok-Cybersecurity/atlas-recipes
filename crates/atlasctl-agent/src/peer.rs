@@ -42,3 +42,29 @@ mod pair_tests;
 
 /// Port the peer channel listens on.
 pub const DEFAULT_PEER_PORT: u16 = 34334;
+
+/// Whether this process's peer listener has ever come up, and on which port.
+///
+/// `0` means "not yet". Written once the listener binds, read by
+/// `atlasctl agent status` through the agent's own status reply, so an operator
+/// can see the one thing that otherwise only shows up as a "Connection refused"
+/// on a DIFFERENT machine: this agent is running, but cannot accept peers.
+static LISTENING_ON: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+/// Record that the peer listener is accepting on `port`.
+pub fn mark_listener_up(port: u16) {
+    LISTENING_ON.store(port, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The port the peer listener is accepting on, or `None` if it is not up.
+///
+/// Not a probe: a probe from inside this process would also succeed against
+/// somebody ELSE's listener on the same port, which is precisely the case this
+/// is meant to distinguish.
+#[must_use]
+pub fn listening_on() -> Option<u16> {
+    match LISTENING_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => None,
+        p => Some(p),
+    }
+}
