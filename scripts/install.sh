@@ -347,6 +347,30 @@ do_uninstall() {
     exit 0
 }
 
+# Which file actually gets read when the operator opens a new terminal.
+#
+# This used to say `~/.profile` to everybody. macOS has defaulted to zsh since
+# Catalina and **zsh never reads ~/.profile** -- so the one instruction printed
+# to a Mac user, on the platform we ship a binary for and tell people to curl
+# from, silently did nothing. They reopen the terminal, `atlasctl` is still not
+# found, and the installer said it succeeded.
+#
+# Keyed off $SHELL (the login shell), not the shell running this script: the
+# installer is piped into `sh`, so $0 says nothing about what the operator uses.
+# fish is named rather than guessed at, because `export PATH=...` is not fish
+# syntax and would fail if pasted.
+rc_file() {
+    case "${SHELL:-}" in
+        */zsh)  echo "$HOME/.zshrc" ;;
+        # Bash reads ~/.bashrc for interactive non-login shells (the Linux
+        # terminal case) but ~/.bash_profile for login shells, which is what
+        # Terminal.app opens on macOS.
+        */bash) [ "$(uname -s)" = "Darwin" ] && echo "$HOME/.bash_profile" || echo "$HOME/.bashrc" ;;
+        */fish) echo "fish" ;;
+        *)      echo "$HOME/.profile" ;;
+    esac
+}
+
 # Put the downloaded binary in place and report which of the two things
 # happened: echoes "yes" when the installed copy was KEPT, and nothing when it
 # was replaced. All operator-facing text goes to stderr through `info`, so that
@@ -477,8 +501,13 @@ main() {
     case ":$PATH:" in
         *":$dir:"*) ;;
         *)
+            rc=$(rc_file)
             warn "$dir is not on your PATH. Add it, e.g.:"
-            warn "    echo 'export PATH=\"\$PATH:$dir\"' >> ~/.profile"
+            if [ "$rc" = "fish" ]; then
+                warn "    fish_add_path $dir"
+            else
+                warn "    echo 'export PATH=\"\$PATH:$dir\"' >> $rc"
+            fi
             ;;
     esac
 
