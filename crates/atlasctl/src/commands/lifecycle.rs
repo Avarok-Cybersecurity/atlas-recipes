@@ -180,11 +180,34 @@ fn logs_with(runner: &dyn ProcessRunner, args: &LogsArgs) -> Result<()> {
         "--format".into(),
         "{{.Names}}".into(),
     ])?;
+    let mut name = name;
     if probe.success() && probe.stdout.trim().is_empty() {
-        bail!(
-            "no container for `{}` on this machine — it has not been started here. `atlasctl status` lists what is running",
-            args.recipe
-        );
+        // The exact name missed. Ask the LABEL before concluding nothing is
+        // running, for the reason `containers_for_recipe` documents: a cluster
+        // launch appends `-rank{n}`, and a registry-qualified name produces
+        // `atlas-@registry/X`, which docker cannot even hold. `stop` was fixed
+        // for exactly these two cases and `logs` was not -- so `run X --rank 0`
+        // printed "started atlas-X-rank0" and, on the very next line,
+        // "logs: atlasctl logs X --follow", a command that then denied the
+        // container existed.
+        let found = containers_for_recipe(runner, &args.recipe)?;
+        match found.len() {
+            0 => bail!(
+                "no container for `{}` on this machine — it has not been started here. `atlasctl status` lists what is running",
+                args.recipe
+            ),
+            1 => name = found.into_iter().next().unwrap_or_default(),
+            // Several ranks on this box. Naming one for the operator would be a
+            // guess about which one they meant, and the ranks do not log the
+            // same thing; say what is there instead.
+            _ => bail!(
+                "`{}` is running as {} containers on this machine: {}. \
+                 Read one with:  docker logs --tail 200 -f <name>",
+                args.recipe,
+                found.len(),
+                found.join(", ")
+            ),
+        }
     }
 
     let mut argv = vec![

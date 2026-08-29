@@ -208,6 +208,7 @@ mod absent_tests {
     fn logs_for_a_recipe_never_started_here_says_so_and_never_streams() {
         let r = RecordingRunner::new();
         r.push_result(out(0, "\n", "")); // ps -a matched nothing
+        r.push_result(out(0, "\n", "")); // ...and neither did the label lookup
         let e = logs_with(
             &r,
             &LogsArgs {
@@ -223,7 +224,16 @@ mod absent_tests {
             msg.contains("atlasctl status"),
             "points somewhere useful: {msg}"
         );
-        assert_eq!(r.calls().len(), 1, "must not have run `docker logs` at all");
+        // Asserted directly rather than by counting calls. The count was 1 when
+        // this only guessed a name; it now also asks the LABEL before concluding
+        // nothing is running, because a rank launch is `atlas-q-rank0` and the
+        // guess never finds it. "Did not stream" is the actual claim, and saying
+        // it outright survives that lookup being added.
+        assert!(
+            !r.calls().iter().any(|c| c.contains(&"logs".to_string())),
+            "must not have run `docker logs` at all: {:?}",
+            r.calls()
+        );
     }
 
     #[test]
@@ -275,5 +285,100 @@ mod daemon_down {
             stderr: String::new(),
         });
         stop_all_with(&r).expect("an answered-but-empty listing is genuinely idle");
+    }
+}
+
+/// `logs` used to guess the container name, so it could not find the two
+/// launches whose names it does not spell.
+mod logs_finds_what_run_started {
+    use super::super::*;
+    use atlasctl_core::io::RecordingRunner;
+    use atlasctl_core::io::process::Output;
+
+    fn args(recipe: &str) -> LogsArgs {
+        LogsArgs {
+            recipe: recipe.to_owned(),
+            follow: false,
+            tail: 10,
+        }
+    }
+
+    /// The case the CLI itself creates. `run X --rank 0` prints
+    /// "started atlas-X-rank0" and then "logs: atlasctl logs X --follow"
+    /// (run.rs:195) -- a command that guessed `atlas-X` and denied the
+    /// container existed, one line after saying it had started.
+    #[test]
+    fn a_rank_container_is_found_by_label_after_the_name_guess_misses() {
+        let r = RecordingRunner::new();
+        // exact-name probe: nothing
+        r.push_result(Output {
+            status: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
+        // label lookup: the rank container run actually created
+        r.push_result(Output {
+            status: 0,
+            stdout: "atlas-x-rank0\n".into(),
+            stderr: String::new(),
+        });
+        // `docker logs` itself
+        r.push_result(Output {
+            status: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
+
+        logs_with(&r, &args("x")).expect("must stream the rank container");
+        let last = r.calls().last().cloned().unwrap_or_default();
+        assert!(
+            last.contains(&"atlas-x-rank0".to_string()),
+            "must read the container the label found, got: {last:?}"
+        );
+    }
+
+    /// Several ranks on one box: naming one would be a guess about which the
+    /// operator meant, and the ranks do not log the same thing.
+    #[test]
+    fn several_ranks_are_listed_rather_than_chosen_between() {
+        let r = RecordingRunner::new();
+        r.push_result(Output {
+            status: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
+        r.push_result(Output {
+            status: 0,
+            stdout: "atlas-x-rank0\natlas-x-rank1\n".into(),
+            stderr: String::new(),
+        });
+        let err = logs_with(&r, &args("x")).expect_err("must refuse to pick one");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("atlas-x-rank0") && msg.contains("atlas-x-rank1"),
+            "got: {msg}"
+        );
+        assert!(
+            msg.contains("docker logs"),
+            "must say how to read one: {msg}"
+        );
+    }
+
+    /// Nothing running under that name at all keeps the original message.
+    #[test]
+    fn genuinely_absent_still_says_it_was_never_started_here() {
+        let r = RecordingRunner::new();
+        r.push_result(Output {
+            status: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
+        r.push_result(Output {
+            status: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
+        let err = logs_with(&r, &args("x")).expect_err("must refuse");
+        assert!(format!("{err:#}").contains("has not been started here"));
     }
 }
