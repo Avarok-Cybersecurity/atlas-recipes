@@ -6,7 +6,9 @@ use super::{Launcher, Preview, Started};
 use atlasctl_core::chain::UserConfig;
 use atlasctl_core::docker::collective::NcclRoce;
 use atlasctl_core::docker::profile::{DeviceProfile, LaunchProfile};
-use atlasctl_core::docker::translate::{LABEL_MANAGED, LaunchContext, Placement, translate};
+use atlasctl_core::docker::translate::{
+    LABEL_MANAGED, LABEL_RECIPE, LaunchContext, Placement, translate,
+};
 use atlasctl_core::host::HostSnapshot;
 use atlasctl_core::io::ProcessRunner;
 use atlasctl_core::{Recipe, ScalarValue};
@@ -137,9 +139,64 @@ impl Launcher for DockerLauncher {
     }
 
     fn stop(&self, recipe: &str) -> Result<(), AgentError> {
+        // By LABEL, not by name. A solo launch is `atlas-{recipe}`, but a rank of
+        // a cluster is `atlas-{recipe}-rank{n}` -- so stopping by name found the
+        // solo container and never a rank. That is the state an operator is left
+        // in when the head agent restarts while a cluster runs: the driver's
+        // record is memory-only, `StopCluster` answers "this agent did not start
+        // a cluster", and this path -- the only other one -- could not see the
+        // containers either. Both GPUs held, no button that works, `docker rm -f`
+        // on every machine by hand.
+        //
+        // The label is already on every container this agent starts, put there
+        // by the launch plan for exactly this kind of question.
+        let listed = self
+            .runner
+            .run(&[
+                "docker".into(),
+                "ps".into(),
+                "-q".into(),
+                "--filter".into(),
+                format!("label={LABEL_RECIPE}={recipe}"),
+            ])
+            .map_err(|e| AgentError::LaunchFailed {
+                detail: format!("{e:#}"),
+            })?;
+        if !listed.success() {
+            return Err(AgentError::LaunchFailed {
+                detail: listed.stderr.trim().to_string(),
+            });
+        }
+        let ids: Vec<String> = listed
+            .stdout
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_owned)
+            .collect();
+        if ids.is_empty() {
+            // Nothing labelled. Fall back to the name so a container started by
+            // an older agent, before this label existed, is still stoppable.
+            let out = self
+                .runner
+                .run(&["docker".into(), "stop".into(), format!("atlas-{recipe}")])
+                .map_err(|e| AgentError::LaunchFailed {
+                    detail: format!("{e:#}"),
+                })?;
+            return if out.success() {
+                Ok(())
+            } else {
+                Err(AgentError::LaunchFailed {
+                    detail: out.stderr.trim().to_string(),
+                })
+            };
+        }
+
+        let mut argv: Vec<String> = vec!["docker".into(), "stop".into()];
+        argv.extend(ids);
         let out = self
             .runner
-            .run(&["docker".into(), "stop".into(), format!("atlas-{recipe}")])
+            .run(&argv)
             .map_err(|e| AgentError::LaunchFailed {
                 detail: format!("{e:#}"),
             })?;

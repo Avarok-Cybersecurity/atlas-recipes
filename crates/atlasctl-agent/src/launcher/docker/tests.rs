@@ -143,11 +143,47 @@ fn an_override_reaches_the_executed_command() {
     assert!(run.windows(2).any(|w| w == ["--port", "9100"]));
 }
 
+/// Nothing labelled: fall back to our own name, and never a wider pattern.
+///
+/// A container started by an older agent predates the recipe label, and must
+/// still be stoppable -- but the fallback is an exact name, so an unrelated
+/// container can never be caught by it.
 #[test]
-fn stop_targets_only_our_own_container_name() {
+fn stop_falls_back_to_our_own_container_name_when_nothing_is_labelled() {
     let runner = Arc::new(RecordingRunner::new());
     launcher(runner.clone()).stop("r").expect("stops");
-    assert_eq!(runner.calls(), [["docker", "stop", "atlas-r"]]);
+    let calls = runner.calls();
+    assert!(
+        calls[0].iter().any(|a| a.contains("io.atlasctl.recipe=r")),
+        "must ask docker by OUR label first: {calls:?}"
+    );
+    assert_eq!(
+        calls.last().expect("a stop"),
+        &["docker", "stop", "atlas-r"],
+        "and fall back to the exact name, not a pattern: {calls:?}"
+    );
+}
+
+/// A cluster rank is `atlas-{recipe}-rank{n}`, so stopping by NAME never found
+/// one. That is the state after a head agent restarts mid-cluster: the driver's
+/// record is memory-only and gone, `StopCluster` says it never started one, and
+/// this path was the only other way to reach the containers. Both GPUs held,
+/// no button that works.
+#[test]
+fn stop_reaches_rank_containers_a_name_match_would_miss() {
+    let runner = Arc::new(RecordingRunner::new());
+    runner.push_result(Output {
+        status: 0,
+        stdout: "abc123\ndef456\n".into(),
+        stderr: String::new(),
+    });
+    launcher(runner.clone()).stop("r").expect("stops");
+    let calls = runner.calls();
+    assert_eq!(
+        calls.last().expect("a stop"),
+        &["docker", "stop", "abc123", "def456"],
+        "every labelled container must be stopped, ranks included: {calls:?}"
+    );
 }
 
 #[test]
