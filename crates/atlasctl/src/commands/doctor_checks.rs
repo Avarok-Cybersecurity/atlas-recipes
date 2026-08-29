@@ -148,8 +148,17 @@ pub fn agent(listening: bool, port: u16) -> Finding {
     if listening {
         Finding::ok("agent", &format!("listening on 127.0.0.1:{port}"))
     } else {
+        // Names the port it asked about, and says the flag.
+        //
+        // `agent install --port` is first-class (cli.rs:113), and this check
+        // only ever probes the default. An operator who installed on another
+        // port -- or with `--no-browser`, which binds none -- read a flat
+        // "not running" about an agent that was running fine. `agent status`
+        // was fixed for exactly this (`agentinfo::status_advice`, whose comment
+        // records that the old advice sent people to start a SECOND agent that
+        // then failed to bind); doctor was not.
         Finding {
-            line: format!("{:<9} not running", "agent:"),
+            line: format!("{:<9} not running on 127.0.0.1:{port}", "agent:"),
             problem: false,
         }
     }
@@ -205,6 +214,36 @@ pub fn unreadable_interfaces(why: &str) -> Finding {
 
 #[cfg(test)]
 mod tests {
+    // Placed first because it is the regression this module keeps getting:
+    // a check that reports on a port it chose, without saying which.
+
+    /// A machine with an agent on a non-default port must not be told there is
+    /// no agent, full stop.
+    ///
+    /// `doctor` probes `DEFAULT_PORT` and nothing else, so for `agent install
+    /// --port 9000` -- or `--no-browser`, which binds no browser port at all --
+    /// `listening` is false while the agent is perfectly healthy. The finding
+    /// cannot know that, but it CAN say which port it asked about, which is the
+    /// difference between a wrong answer and an incomplete one.
+    #[test]
+    fn a_not_running_agent_says_which_port_was_probed() {
+        let f = agent(false, 34333);
+        assert!(
+            f.line.contains("34333"),
+            "the not-running line must name the port it probed, got: {}",
+            f.line
+        );
+        assert!(!f.problem, "no agent is not a fault on an unconfigured box");
+
+        // And it tracks the argument rather than hardcoding the default.
+        let f = agent(false, 9000);
+        assert!(
+            f.line.contains("9000") && !f.line.contains("34333"),
+            "got: {}",
+            f.line
+        );
+    }
+
     use super::*;
 
     #[test]
