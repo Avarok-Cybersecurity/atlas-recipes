@@ -86,6 +86,34 @@ attached to it — and is kept afterwards only as a recovery path. Delete it, an
 revoke `CARGO_REGISTRY_TOKEN`, once `release.yml` has published cleanly at least
 once.
 
+### A release left hidden
+
+A release is created as a **prerelease** and promoted once its assets are
+attached, so that `releases/latest` — which `install.sh` resolves — keeps
+serving the previous, complete release while the matrix builds. If the run dies
+between those two points, the new release stays hidden.
+
+That is the safer of the two failures: installs go on working. It is also loud,
+because `verify-published` asserts the end state and fails the run.
+
+**The recovery dispatch does not un-hide it, deliberately.** Re-running
+`release.yml` with a `tag` input uploads assets but leaves `cut=false`, so it
+neither hides nor promotes — that guard is what stops a recovery of an OLD tag
+dragging `releases/latest` backwards onto it. The trade is that a stuck release
+needs one manual step:
+
+```sh
+id=$(gh api repos/:owner/:repo/releases/tags/vX.Y.Z --jq .id)
+gh api -X PATCH repos/:owner/:repo/releases/$id -F prerelease=false -f make_latest=true
+```
+
+Do that only when the release genuinely has its assets — check first, because
+un-hiding an empty one recreates the 404 the hiding exists to prevent:
+
+```sh
+gh api repos/:owner/:repo/releases/tags/vX.Y.Z --jq '.assets|length'
+```
+
 ## Version history baseline
 
 `v0.1.0` is tagged at the commit the bootstrap workflow published from
