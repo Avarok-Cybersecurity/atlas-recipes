@@ -72,6 +72,39 @@ atlasctl run <recipe> --rank 1 --world-size 2 --master-addr 10.10.10.1
 A multi-node recipe refuses to launch on a single node rather than quietly
 serving something smaller than the recipe describes.
 
+## Ports
+
+Two, and they fail independently, which is why they are worth telling apart.
+
+| port | bound on | who talks to it |
+|---|---|---|
+| 34333 | loopback only | the website, on this machine |
+| 34334 | all interfaces | other machines — pairing, joining, and cluster work |
+
+34333 never leaves the machine, so nothing in a firewall applies to it.
+
+**34334 has to be reachable between machines.** If it is blocked, or something
+else is holding it, everything local keeps working — the website still finds
+this machine and still offers to add another — and the failure appears on the
+OTHER machine, as:
+
+```
+joining the fleet at 192.168.68.67:34334…
+error: ... Connection refused
+```
+
+`atlasctl doctor` reports both, separately:
+
+```
+agent:    ok (listening on 127.0.0.1:34333)
+peers:    ok (accepting on 34334)
+```
+
+A `peers:` line that is not listening means this machine cannot be joined,
+however healthy the rest of the output looks. The agent retries that port, so
+the usual cause is another `atlasctl agent` already running here — and the
+usual fix is to use that one rather than start a second.
+
 ## Where recipes come from
 
 **Recipes are compiled into `atlasctl`.** A fresh install performs no network
