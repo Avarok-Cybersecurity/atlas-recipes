@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.6.0](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.5.0...v0.6.0) (2026-08-29)
+
+
+### Features
+
+* **doctor:** report the listener other machines actually dial ([#155](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/155)) ([3caab9f](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/3caab9fe3480ebd7487b0e9b5d1f714b8b5258fb))
+* **recipes:** a recipe for Qwen3.8-Flash-Next ([#120](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/120)) ([3d2db11](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/3d2db1180d7d29732554fa4a48ca2a17e8a3feb7))
+
+
+### Bug Fixes
+
+* **agent:** launches use the blocking pool, not a runtime worker ([#149](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/149)) ([1eaf484](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/1eaf48418e7332f742151acc3c2ae35ee320c452))
+* **cache:** a directory is not a downloaded model ([#150](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/150)) ([b83b327](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/b83b32744c7eb59ddc09f9e32f4f272c615103db))
+* **cache:** a nested weight file is still a weight file ([#154](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/154)) ([1ff0854](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/1ff085413a8002ad7925859e1427b0546781233f))
+* **join:** say so when minting a code nothing can accept ([#157](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/157)) ([da3fba1](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/da3fba18061bc874357adb84031a7ee067c8779e))
+* **join:** stop blaming the code when nothing answered ([#156](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/156)) ([eb54864](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/eb5486468e4de7d0ba0b848a3c26bec4018e088b))
+* **onboarding:** stop contradicting the operator ([#151](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/151)) ([fad9e17](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/fad9e1755ba5b9a6f8dfd86fbf85c8e65288178b))
+* **release:** don't publish a release before its assets exist ([#148](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/148)) ([0b7b426](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/0b7b4262bac1e0f5de256a918cfb373789e14b5c))
+
 ## [0.5.0](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.4.1...v0.5.0) (2026-08-29)
 
 
