@@ -479,13 +479,5 @@ fn the_unload_is_allowed_to_fail() {
     }
 }
 
-/// systemd needs none of this — `enable --now` is idempotent and restarts a
-/// live unit with the new binary. Adding a teardown there would stop an agent
-/// that did not need stopping.
-#[test]
-fn systemd_needs_no_pre_step() {
-    let p = plan(ServiceKind::Systemd, &agent(), Path::new("/home/x"), 1000);
-    assert!(p.pre_activate.is_empty(), "{:?}", p.pre_activate);
-}
-
+mod systemd;
 mod windows;

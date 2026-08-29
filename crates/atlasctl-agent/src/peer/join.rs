@@ -44,9 +44,24 @@ pub async fn dial_and_pair(
 ) -> Result<Paired> {
     let cfg = client_config(identity, PinnedPeerVerifier::pairing(pins))?;
     let connector = tokio_rustls::TlsConnector::from(Arc::new(cfg));
-    let tcp = tokio::net::TcpStream::connect(addr)
-        .await
-        .with_context(|| format!("connecting to {addr}"))?;
+    // The same 5s bound `link::dial` uses. Without it a routed-but-DROPped
+    // address stalls at the OS default (~2 minutes) per address, and the hint
+    // lists are multi-address BY DESIGN -- a DGX offers its RoCE fabric first,
+    // which a laptop cannot reach. The operator saw "joining the fleet at
+    // 10.10.10.x..." and silence, well past the code's own 120s TTL, so even
+    // success could arrive after the code it was using had expired.
+    let tcp = tokio::time::timeout(
+        crate::peer::link::DIAL_TIMEOUT,
+        tokio::net::TcpStream::connect(addr),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "{addr} did not answer within {:?}",
+            crate::peer::link::DIAL_TIMEOUT
+        )
+    })?
+    .with_context(|| format!("connecting to {addr}"))?;
     let name = rustls::pki_types::ServerName::try_from("peer.atlas.invalid")
         .context("building a server name")?
         .to_owned();

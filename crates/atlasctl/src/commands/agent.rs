@@ -174,8 +174,23 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     // previewer and the pairing driver dial another machine, and neither can be
     // constructed without a reactor that already exists.
     let rt = tokio::runtime::Builder::new_multi_thread()
-        // Two workers is ample: this serves one local browser, not a fleet.
-        .worker_threads(2)
+        // Two was "ample: this serves one local browser, not a fleet" -- true of
+        // the REQUEST rate and false of the work. `Session::handle` and the peer
+        // channel's serve_frames shell out to docker synchronously, on the
+        // runtime, and a first launch pulls a multi-GB image: that holds a worker
+        // for minutes. With two, a second concurrent operation -- another tab, a
+        // relayed launch, a rank's Prepare -- took the other one, and the WHOLE
+        // agent stalled: vitals, the peer listener, every socket. Other machines
+        // then marked this one unreachable mid-launch, which is the opposite of
+        // what a launch should do to a fleet view.
+        //
+        // The real fix is for those calls not to block the runtime at all, but
+        // `Session` borrows from the agent state, so it is neither `'static` for
+        // `spawn_blocking` nor safe to `block_in_place` while current-thread
+        // tests drive this path. Widening the pool does not make blocking calls
+        // correct; it makes one long pull cost a fraction of the agent instead of
+        // all of it. Eight idle worker threads cost a few hundred KB of stack.
+        .worker_threads(8)
         .enable_all()
         .build()
         .context("starting the async runtime")?;

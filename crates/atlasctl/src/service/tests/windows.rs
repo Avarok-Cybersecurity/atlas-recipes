@@ -219,7 +219,7 @@ fn a_failed_registration_fails_the_install_and_names_itself() {
 
 #[cfg(target_os = "windows")]
 #[test]
-fn uninstall_unregisters_the_task_before_deleting_its_definition() {
+fn uninstall_stops_the_task_then_unregisters_it_then_deletes_its_definition() {
     let fs = Files::default();
     let r = Recorder::new();
     let path = uninstall(&fs, &r, &home(), 0).expect("uninstalls");
@@ -227,11 +227,21 @@ fn uninstall_unregisters_the_task_before_deleting_its_definition() {
         path,
         home().join("AppData\\Local\\atlasctl\\atlasctl-agent.xml")
     );
-    assert!(
-        r.calls()[0].contains("Unregister-ScheduledTask"),
-        "{:?}",
-        r.calls()
-    );
+    let calls = r.calls();
+    // STOP first. Unregistering a task does not end its running instance, so
+    // without this the uninstall reported success while the old agent kept the
+    // ports, its token and its pins until logoff -- and `agent run` then refused
+    // the busy port with no supervisor left to stop it through.
+    let stop = calls
+        .iter()
+        .position(|c| c.contains("Stop-ScheduledTask"))
+        .unwrap_or_else(|| panic!("no stop before unregister: {calls:?}"));
+    let unregister = calls
+        .iter()
+        .position(|c| c.contains("Unregister-ScheduledTask"))
+        .unwrap_or_else(|| panic!("nothing unregistered the task: {calls:?}"));
+    assert!(stop < unregister, "stop must precede unregister: {calls:?}");
+    // And the definition goes last: it is the evidence for a failed teardown.
     assert_eq!(*fs.removed.lock().expect("lock"), vec![path]);
 }
 

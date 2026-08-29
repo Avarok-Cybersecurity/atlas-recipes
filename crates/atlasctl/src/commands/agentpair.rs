@@ -25,7 +25,7 @@ use anyhow::{Context, Result};
 /// If the identity cannot be loaded or the peer port cannot be bound.
 pub fn pair(args: &crate::cli::AgentPairArgs) -> Result<()> {
     use atlasctl_agent::identity::{Identity, PinStore};
-    use atlasctl_agent::pairing::{CODE_TTL_SECS, PairingCode};
+    use atlasctl_agent::pairing::{CODE_TTL_SECS, MAX_ATTEMPTS, PairingCode};
     use atlasctl_agent::peer::pair::{Role, run};
     use atlasctl_agent::peer::tls::{PinnedPeerVerifier, peer_identity, server_config};
     use atlasctl_protocol::fleet::DisplayName;
@@ -65,33 +65,75 @@ pub fn pair(args: &crate::cli::AgentPairArgs) -> Result<()> {
         code.as_str()
     );
     println!();
-    println!("  This code is good for {CODE_TTL_SECS} seconds and for one attempt.");
+    println!("  This code is good for {CODE_TTL_SECS} seconds and for {MAX_ATTEMPTS} attempts.");
     println!("  Waiting…");
 
     let paired = runtime.block_on(async {
         let cfg = server_config(&identity, PinnedPeerVerifier::pairing(pins.clone()))?;
         let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(cfg));
 
+        // One connection used to be the entire budget: ANY error below -- a
+        // failed TLS handshake, a client that connects and hangs up, or a FORMER
+        // peer's five-second poll loop, which is plausible precisely here because
+        // this command runs while the local agent is stopped on a machine that
+        // may well have been paired before -- ended the command. The operator,
+        // still typing `peer add` on the far machine, then had to re-run this and
+        // carry a NEW code back across the room.
+        //
+        // A connection that does not pair is now skipped instead, up to the same
+        // MAX_ATTEMPTS the daemon's join window charges. The cap is the point:
+        // uncapped, this is an unbounded guessing window for anyone on the LAN,
+        // and the TTL alone would not close it.
         let accept = async {
-            let (tcp, _) = listener.accept().await?;
-            let mut tls = acceptor.accept(tcp).await.context("TLS handshake")?;
-            let (_, conn) = tls.get_ref();
-            let cert = conn
-                .peer_certificates()
-                .and_then(<[_]>::first)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("the other machine sent no certificate"))?;
-            let (peer_id, _) = peer_identity(&cert)?;
-            let binding = atlasctl_agent::pairing::binding_from_server(conn)?;
-            run(
-                &mut tls,
-                Role::Responder,
-                &identity,
-                peer_id,
-                code.as_str(),
-                binding,
-            )
-            .await
+            let mut spent: u8 = 0;
+            loop {
+                let attempt = async {
+                    let (tcp, _) = listener.accept().await?;
+                    let mut tls = acceptor
+                        .clone()
+                        .accept(tcp)
+                        .await
+                        .context("TLS handshake")?;
+                    let (_, conn) = tls.get_ref();
+                    let cert = conn
+                        .peer_certificates()
+                        .and_then(<[_]>::first)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("the other machine sent no certificate"))?;
+                    let (peer_id, _) = peer_identity(&cert)?;
+                    let binding = atlasctl_agent::pairing::binding_from_server(conn)?;
+                    run(
+                        &mut tls,
+                        Role::Responder,
+                        &identity,
+                        peer_id,
+                        code.as_str(),
+                        binding,
+                    )
+                    .await
+                }
+                .await;
+
+                match attempt {
+                    Ok(p) => break Ok(p),
+                    Err(e) => {
+                        spent += 1;
+                        if spent >= MAX_ATTEMPTS {
+                            break Err(e).context(format!(
+                                "{MAX_ATTEMPTS} connections failed to pair; the code is spent. \
+                                 Run `atlasctl agent pair` again for a fresh one."
+                            ));
+                        }
+                        // Named, not swallowed: if a stale peer is eating the
+                        // window, its address is the only clue the operator gets.
+                        eprintln!(
+                            "  a connection did not pair ({e}); still waiting \
+                             ({} of {MAX_ATTEMPTS} attempts used)",
+                            spent
+                        );
+                    }
+                }
+            }
         };
 
         // The code expires on its own, so an unattended terminal does not leave

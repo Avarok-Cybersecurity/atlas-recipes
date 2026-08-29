@@ -172,9 +172,25 @@ pub(super) fn scheduled_task(agent: &AgentInvocation, home: &Path) -> ServicePla
              exit 1"
         )),
         best_effort: Vec::new(),
-        deactivate: vec![ps(&format!(
-            "Unregister-ScheduledTask -TaskName '{SERVICE_NAME}' -Confirm:$false"
-        ))],
+        deactivate: vec![
+            // STOP first. Unregistering a task does not end its running
+            // instance -- the same fact `pre_activate` above exists for -- so
+            // uninstall printed "agent service removed" while the old agent kept
+            // holding the browser and peer ports until logoff, still serving its
+            // token and its pins. The user then cannot even start a new one:
+            // `agent run` refuses the busy port, and the supervisor that could
+            // have stopped it is the thing they just removed.
+            //
+            // `SilentlyContinue`: a task that is registered but not running is
+            // the normal case for an uninstall after a reboot, and failing there
+            // would leave the task registered forever.
+            ps(&format!(
+                "Stop-ScheduledTask -TaskName '{SERVICE_NAME}' -ErrorAction SilentlyContinue"
+            )),
+            ps(&format!(
+                "Unregister-ScheduledTask -TaskName '{SERVICE_NAME}' -Confirm:$false"
+            )),
+        ],
     }
 }
 

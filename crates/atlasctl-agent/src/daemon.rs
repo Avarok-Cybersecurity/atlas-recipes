@@ -45,6 +45,7 @@ pub const PEER_POLL_INTERVAL: Duration = Duration::from_secs(5);
 // The vitals and prune timers live in `daemon/housekeeping.rs`. They are
 // timers over local state; this file is the machine-to-machine half.
 mod housekeeping;
+mod join;
 mod peer_serve;
 
 #[cfg(test)]
@@ -184,9 +185,36 @@ fn spawn_peer_listener(
         };
         eprintln!("peer channel on 0.0.0.0:{port}");
 
+        // 0 means "the last accept succeeded", which is also what makes the
+        // first failure of a run the one that gets printed.
+        let mut backoff_ms: u64 = 0;
         loop {
-            let Ok((tcp, _)) = listener.accept().await else {
-                continue;
+            let (tcp, _) = match listener.accept().await {
+                Ok(v) => {
+                    backoff_ms = 0;
+                    v
+                }
+                Err(e) => {
+                    // Backoff, not a bare `continue`. Under fd exhaustion
+                    // (EMFILE -- plausible while this same process is pulling a
+                    // multi-GB image) `accept` fails IMMEDIATELY and forever, so
+                    // retrying with no pause burns 100% of a core silently,
+                    // inside a service that bounds memory but not CPU.
+                    //
+                    // The backoff DOUBLES, and only the first failure of a run
+                    // is printed. A fixed 10ms pause plus a line each time is
+                    // ~100 journal entries a second for as long as the condition
+                    // lasts -- trading a CPU spin for a log flood, which under
+                    // journald's rate limiting means dropping everyone else's
+                    // messages too. One line names the condition; the ramp to a
+                    // second keeps the loop responsive when it clears.
+                    if backoff_ms == 0 {
+                        eprintln!("peer listener: accept failed: {e}");
+                    }
+                    backoff_ms = (backoff_ms * 2).clamp(10, 1000);
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                    continue;
+                }
             };
             let acceptor = acceptor.clone();
             let fleet = Arc::clone(&fleet);
@@ -195,9 +223,18 @@ fn spawn_peer_listener(
             let identity = Arc::clone(&identity);
             let serve = Arc::clone(&serve);
             tokio::spawn(async move {
-                let Ok(mut tls) = acceptor.accept(tcp).await else {
-                    // An unpaired caller failing the handshake is the system
-                    // working, not an incident worth logging.
+                // BOUNDED. Neither of the two short phases below may run
+                // forever: this handler is a spawned task holding an fd, and a
+                // caller that connects and simply stops talking would hold both
+                // until the process exits. That is reachable by anyone who can
+                // route to this port, needs no credentials, and leaves nothing
+                // in a log. Only these phases are bounded -- a PINNED peer's
+                // link below is long-lived on purpose and gets no deadline.
+                let Ok(Ok(mut tls)) =
+                    tokio::time::timeout(join::HANDSHAKE_TIMEOUT, acceptor.accept(tcp)).await
+                else {
+                    // An unpaired caller failing (or stalling) the handshake is
+                    // the system working, not an incident worth logging.
                     return;
                 };
 
@@ -208,7 +245,15 @@ fn spawn_peer_listener(
                 let peer = peer_of(&tls);
                 let pinned = peer.is_some_and(|id| pins.is_pinned(id).unwrap_or(false));
                 if !pinned {
-                    serve_join(&mut tls, &identity, &pins, &joining, &fleet).await;
+                    // A pairing ceremony is four frames between two machines on
+                    // a LAN; thirty seconds is far past generous. Without this a
+                    // stranger who completes the handshake and then goes quiet
+                    // sits in `read_frame` forever.
+                    let _ = tokio::time::timeout(
+                        join::JOIN_TIMEOUT,
+                        join::serve_join(&mut tls, &identity, &pins, &joining, &fleet),
+                    )
+                    .await;
                     return;
                 }
                 let Some(sender) = peer else {
@@ -230,113 +275,6 @@ fn peer_of<S>(
     let (_, conn) = tls.get_ref();
     let cert = conn.peer_certificates().and_then(<[_]>::first)?;
     crate::peer::tls::peer_identity(cert).ok().map(|(id, _)| id)
-}
-
-/// Serve a machine that is not pinned: it may pair, and nothing else.
-///
-/// Reached only inside a join window, because that is what let it complete a
-/// handshake at all. A failure here is ordinary — a mistyped digit, a dropped
-/// connection — and is charged against the window's attempt budget rather than
-/// logged as an incident.
-async fn serve_join<S>(
-    tls: &mut tokio_rustls::server::TlsStream<S>,
-    identity: &crate::identity::Identity,
-    pins: &crate::identity::PinStore,
-    joining: &crate::joining::JoinWindow,
-    fleet: &crate::fleet::LocalFleet,
-) where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
-    // Charges a guess up front. Every path out of this function below is
-    // therefore already accounted for, including the two that return without
-    // running a ceremony at all — previously those were free retries.
-    let Some(code) = joining.begin_attempt() else {
-        // The window closed between the handshake and here.
-        return;
-    };
-    let Some(peer) = peer_of(tls) else {
-        return;
-    };
-    let binding = {
-        let (_, conn) = tls.get_ref();
-        match crate::pairing::binding_from_server(conn) {
-            Ok(b) => b,
-            Err(_) => return,
-        }
-    };
-
-    // The failure arm is deliberately empty: `begin_attempt` already charged
-    // this guess, so there is nothing left to record when the ceremony fails.
-    if let Ok(paired) = crate::peer::pair::run(
-        tls,
-        crate::peer::pair::Role::Responder,
-        identity,
-        peer,
-        &code,
-        binding,
-    )
-    .await
-    {
-        // Single use: the invitation is spent whether or not the pin
-        // write below succeeds, because the code has now been seen on the
-        // wire by whoever answered.
-        //
-        // Losing this race means another ceremony already spent the
-        // invitation. Both peers hold a valid code, so neither is
-        // necessarily hostile — but "one invitation, one machine" is the
-        // property, and admitting the loser would quietly break it.
-        let Some(consumed) = joining.consume() else {
-            eprintln!(
-                "refusing {}: that invitation was already used by another machine. \
-                     Mint a fresh one to add this node.",
-                paired.node.short()
-            );
-            return;
-        };
-        if let Err(e) = crate::fleet::record_pairing(
-            pins,
-            paired.node,
-            &paired.public_key,
-            atlasctl_protocol::fleet::DisplayName::new(&paired.name),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs()),
-            None,
-            // The grant the human chose when they minted this invitation,
-            // written with the pin so consent and trust land atomically.
-            consumed.allow_control,
-        ) {
-            // Announcing a pairing whose pin never reached disk is how a
-            // fleet ends up with one side believing it is paired and the
-            // other rejecting it on the next connection, with nothing
-            // anywhere saying why.
-            eprintln!(
-                "pairing with {} completed but could not be recorded: {e:#}. \
-                     The peer believes it is paired; this machine does not.",
-                paired.node.short()
-            );
-            return;
-        }
-        let _ = fleet;
-        // The words, not just the name. The machine that DIALLED shows these to
-        // its operator and asks them to compare — and until now this side
-        // printed nothing to compare against, so the comparison was one-sided
-        // and the question the other dialog asked could not be answered.
-        //
-        // This is a log line rather than a prompt because this side is
-        // typically headless and unattended: the ceremony is authorised by the
-        // invitation, which a human minted here minutes ago. The words let
-        // someone who wants to check, check.
-        eprintln!(
-            "paired with {} ({}) — verification words: {}",
-            // Sanitised: the name is the joining peer's own claim, and this
-            // line goes into the journal, where a control sequence is just as
-            // effective at rewriting what a reader sees.
-            atlasctl_protocol::fleet::DisplayName::new(&paired.name).as_str(),
-            paired.node.short(),
-            paired.verification
-        );
-    }
 }
 
 /// Ask each paired peer how it is.

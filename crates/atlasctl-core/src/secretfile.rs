@@ -37,6 +37,45 @@ use std::path::Path;
 /// # Errors
 /// If the file cannot be created or written.
 pub fn write(path: &Path, bytes: &[u8]) -> Result<()> {
+    // Written to a sibling temp file and RENAMED over the target, never
+    // truncate-then-write. `peers.json` goes through here, and truncate-first
+    // means a crash, a full disk or a kill between the two leaves a torn file --
+    // after which every `load()` fails to parse and the agent fails closed on
+    // EVERY peer at once. Rename is atomic on both platforms (Windows replaces
+    // an existing target), so a reader sees the old file or the new one.
+    //
+    // ⚠ This makes each write indivisible; it does NOT serialise two writers.
+    // The daemon and a separate `atlasctl peer remove` still read-modify-write
+    // the whole file, so an interleaving can lose one side's change -- including
+    // un-revoking a peer that was just removed. Closing that needs a lock file
+    // (or routing CLI mutations through the running daemon) and is a bigger
+    // change than this one.
+    // Resolve a symlink to its target FIRST. The previous truncate-then-write
+    // opened `path` and wrote THROUGH a symlink, so a stowed/dotfiles setup that
+    // links `agent.key` or `peers.json` elsewhere kept working. A rename would
+    // replace the link itself with a regular file -- silently destroying that
+    // arrangement, and, worse for a rotation, leaving the OLD secret live at the
+    // real target, which is the one thing rotating exists to prevent.
+    let path = &std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+
+    let dir = path.parent().unwrap_or(Path::new("."));
+    // Unique PER CALL, not per process. A pid-only suffix is not unique inside
+    // the daemon: `peers.json` is written from the address-poll loop, from a
+    // browser session's unpair, and from a join window's pin write, all on the
+    // same multi-threaded runtime. Two of those sharing one temp name is the
+    // torn file this function exists to prevent, arrived at from inside a single
+    // process -- and the loser's cleanup could delete the winner's temp before
+    // its rename. The counter makes each attempt its own file.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let tmp = dir.join(format!(
+        ".{}.tmp{}.{}",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("secret"),
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+
     #[cfg(unix)]
     {
         use std::io::Write;
@@ -46,17 +85,73 @@ pub fn write(path: &Path, bytes: &[u8]) -> Result<()> {
             .create(true)
             .truncate(true)
             .mode(0o600)
-            .open(path)
-            .with_context(|| format!("creating {}", path.display()))?;
+            .open(&tmp)
+            .with_context(|| format!("creating {}", tmp.display()))?;
         f.write_all(bytes)
-            .with_context(|| format!("writing {}", path.display()))?;
+            .with_context(|| format!("writing {}", tmp.display()))?;
+        // Durable before it is visible: a rename that beats the data to disk
+        // would survive a power cut as a correctly-named empty file.
+        f.sync_all()
+            .with_context(|| format!("flushing {}", tmp.display()))?;
+
+        // Carry the EXISTING file's mode over, rather than always landing 0600.
+        // `write` and `verify` are split on purpose in this module: write does
+        // not police permissions, verify detects them. A fresh 0600 on every
+        // write would silently re-privatise a secret someone had widened, and
+        // erase the only evidence that other accounts could read it -- which is
+        // exactly what `rewriting_over_a_widened_file_is_caught` pins.
+        if let Ok(meta) = std::fs::metadata(path) {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = meta.permissions().mode() & 0o7777;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))
+                .with_context(|| format!("carrying the mode of {}", path.display()))?;
+        }
     }
     #[cfg(windows)]
     {
         // Refused before the bytes exist, not after: a secret written to a
-        // share and then reported is a secret that was on the share.
+        // share and then reported is a secret that was on the share. The temp
+        // file is a sibling, so checking the destination covers both.
         verify_location(path)?;
-        std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))?;
+        std::fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
+    }
+
+    // The DIRECTORY entry too, not just the bytes. Without this the rename can
+    // be undone by a power cut and a write that reported success -- a rotated
+    // token, a revoked pin -- silently rolls back to the previous contents.
+    // Best-effort: not every filesystem lets you open a directory for sync, and
+    // failing the write over an unsyncable parent would be worse than the risk.
+    // Windows can REFUSE a replace-by-rename that unix performs unconditionally:
+    // `MoveFileEx` fails with a sharing violation while another thread or process
+    // holds the target, which includes the instant another writer is mid-replace
+    // on it. The concurrency test above found exactly that on a Windows runner --
+    // so without this retry the atomic write trades a torn file for a spurious
+    // failure, which for a pin write is not obviously the better trade. Unix
+    // renames atomically and never takes this path.
+    let mut waited_ms = 0u64;
+    let renamed = loop {
+        match std::fs::rename(&tmp, path) {
+            Ok(()) => break Ok(()),
+            // 200ms total, in 5ms steps: far longer than a competing rename, far
+            // shorter than anything a caller would notice.
+            Err(_) if cfg!(windows) && waited_ms < 200 => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                waited_ms += 5;
+            }
+            Err(e) => break Err(e),
+        }
+    };
+    if let Err(e) = renamed {
+        // Do not leave the temp file behind to be mistaken for state, or to
+        // accumulate one per crashed process.
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("replacing {}", path.display()));
+    }
+    #[cfg(unix)]
+    {
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
     }
     Ok(())
 }
@@ -185,6 +280,80 @@ mod tests {
         write(&p, b"hunter2").expect("writes");
         verify(&p).expect("must accept its own output");
         assert_eq!(std::fs::read(&p).unwrap(), b"hunter2");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Two writers in ONE process must not share a temp file. Inside the daemon
+    /// `peers.json` is written from the address-poll loop, a browser unpair and a
+    /// join window's pin write, on the same multi-threaded runtime; with a
+    /// pid-only temp name they truncate each other and one renames the mixed
+    /// bytes into place -- the torn file this function exists to prevent,
+    /// reachable without a second process at all.
+    #[test]
+    fn concurrent_writers_in_one_process_do_not_share_a_temp_file() {
+        let d = tmp("concurrent");
+        let p = d.join("peers.json");
+        let a = format!("{{\"a\":\"{}\"}}", "a".repeat(60_000));
+        let b = format!("{{\"b\":\"{}\"}}", "b".repeat(90_000));
+        let target = &p;
+        std::thread::scope(|s| {
+            for body in [a.as_bytes(), b.as_bytes()] {
+                s.spawn(move || {
+                    for _ in 0..25 {
+                        write(target, body).expect("writes");
+                    }
+                });
+            }
+        });
+        // Whoever landed last, the file must be EXACTLY one of the two -- never
+        // a prefix, a mixture, or a length in between.
+        let got = std::fs::read(&p).expect("reads");
+        assert!(
+            got == a.as_bytes() || got == b.as_bytes(),
+            "torn file: {} bytes, expected {} or {}",
+            got.len(),
+            a.len(),
+            b.len()
+        );
+        let strays: Vec<_> = std::fs::read_dir(&d)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(strays.is_empty(), "left temp files behind: {strays:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The reason this write goes through a temp file: `peers.json` is
+    /// rewritten whole on every pin change, and a truncate-then-write left a
+    /// torn file if anything interrupted it -- after which every load fails to
+    /// parse and the agent fails closed on EVERY peer at once. A reader must see
+    /// the old bytes or the new ones, never a prefix.
+    #[test]
+    fn a_replaced_secret_is_never_seen_half_written() {
+        let d = tmp("atomic");
+        let p = d.join("peers.json");
+        write(&p, b"{\"peers\":[\"first\"]}").expect("writes");
+        // A much larger second write: a truncating writer would leave the file
+        // observably shorter than either version at some point.
+        let big = format!("{{\"peers\":[\"{}\"]}}", "x".repeat(200_000));
+        write(&p, big.as_bytes()).expect("writes");
+        let got = std::fs::read(&p).expect("reads");
+        assert_eq!(
+            got.len(),
+            big.len(),
+            "the file is exactly one of the versions"
+        );
+
+        // And no temp file is left lying around to be mistaken for state.
+        let strays: Vec<_> = std::fs::read_dir(&d)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(strays.is_empty(), "left temp files behind: {strays:?}");
         let _ = std::fs::remove_dir_all(&d);
     }
 

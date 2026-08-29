@@ -254,7 +254,36 @@ fn systemd(agent: &AgentInvocation, home: &Path) -> ServicePlan {
             sc(&["enable", "--now", &unit]),
             sc(&["restart", &unit]),
         ],
-        verify: sc(&["is-active", &unit]),
+        // A shell, deliberately, and consistent with the Windows plan two
+        // functions down, which hands PowerShell a script the same way. The
+        // runner's "argv, never a command string" property is about the RUNNER
+        // not interpreting what it is given -- it still passes three inert
+        // arguments -- and everything interpolated below is a compile-time
+        // constant. Doing the wait in Rust instead would put a three-second
+        // sleep in the install path's unit tests, and the only way around that
+        // is an injection point that exists for tests, which this repo does not
+        // allow in a production path.
+        //
+        // Delayed, then CONFIRMED, for the reason the Windows plan spells out.
+        // `is-active` ran the instant `restart` returned, and for a Type=simple
+        // unit that is "active" as soon as ExecStart is SPAWNED -- while the
+        // agent has yet to check its config dir, load its token, probe docker or
+        // bind its port. Every failure this check exists to catch (a directory it
+        // cannot write, a port already taken) happens after that read, so the
+        // install printed "agent installed and started" and the operator went off
+        // to pair a browser against a five-second crash loop.
+        //
+        // Two seconds covers the agent's startup; the second look one second
+        // later is what distinguishes "up" from "up so far" -- a single delayed
+        // read would still bless a unit on its way down.
+        verify: vec![
+            "sh".to_owned(),
+            "-c".to_owned(),
+            format!(
+                "sleep 2; systemctl --user is-active --quiet {unit} || exit 1; \
+                 sleep 1; systemctl --user is-active --quiet {unit}"
+            ),
+        ],
         // A headless box logs nobody in, so without lingering the service stops
         // the moment the installing session ends. It is also exactly the call
         // that is unavailable in a container, so it cannot be required.
@@ -327,10 +356,20 @@ fn launchd(agent: &AgentInvocation, home: &Path, uid: u32) -> ServicePlan {
         ]],
         // `launchctl print` exits non-zero when the label is not loaded, which
         // is the same question `is-active` answers on systemd.
+        //
+        // ⚠ Weaker than the Linux and Windows checks, knowingly. `print` exits 0
+        // whenever the label is LOADED, so a KeepAlive crash loop -- an agent
+        // dying and being restarted every second -- reads as healthy, and the
+        // "installed, but it is NOT running" branch cannot fire on macOS. The
+        // check that would work is `state = running` from this same output (or a
+        // `pid = ` line), and it is not made here because a wrong verify string
+        // would fail the install for every Mac user and there is no macOS runner
+        // in this repo to prove it against. Sleep first so at least an agent that
+        // exits before launchd even records it is not blessed.
         verify: vec![
-            "launchctl".to_owned(),
-            "print".to_owned(),
-            format!("{target}/{LAUNCHD_LABEL}"),
+            "sh".to_owned(),
+            "-c".to_owned(),
+            format!("sleep 2; launchctl print {target}/{LAUNCHD_LABEL}"),
         ],
         best_effort: Vec::new(),
         deactivate: vec![vec![
