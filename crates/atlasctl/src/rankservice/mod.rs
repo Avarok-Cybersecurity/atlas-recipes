@@ -484,4 +484,6 @@ pub(crate) fn is_ours(container: &str) -> bool {
 }
 
 #[cfg(test)]
+mod commit_tests;
+#[cfg(test)]
 mod tests;
