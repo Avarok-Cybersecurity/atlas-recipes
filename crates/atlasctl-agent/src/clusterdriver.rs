@@ -55,6 +55,18 @@ struct Target {
     name: DisplayName,
 }
 
+/// What supervision found, when it found something.
+///
+/// Carries the machines as well as the sentence, so the caller can raise it
+/// where an operator will see it rather than only writing it to the head's
+/// stderr.
+pub struct Torn {
+    /// The machines that stopped answering.
+    pub nodes: Vec<NodeId>,
+    /// One sentence, already safe to render.
+    pub why: String,
+}
+
 /// A cluster that started, kept so it can be stopped again.
 ///
 /// The containers are recorded rather than looked up later: a rank's container
@@ -393,7 +405,7 @@ impl ClusterControl for ClusterDriver {
         }
     }
 
-    fn supervise(&self) -> Option<String> {
+    fn supervise(&self) -> Option<Torn> {
         // Read the roster under the lock, then release it: asking a peer
         // whether it is alive dials the network, and holding the lock across
         // that would block a stop the operator asked for.
@@ -425,7 +437,7 @@ impl ClusterControl for ClusterDriver {
                     .unwrap_or(false),
             };
             if !alive {
-                dead.push(t.name.to_string());
+                dead.push((t.assignment.node, t.name.to_string()));
             }
         }
         if dead.is_empty() {
@@ -433,11 +445,21 @@ impl ClusterControl for ClusterDriver {
         }
 
         let _ = self.stop_cluster();
-        Some(format!(
-            "{} stopped, so the cluster was torn down. A half cluster waits at a \
-             rendezvous that will never complete while its survivors hold their GPUs.",
-            dead.join(" and ")
-        ))
+        let names: Vec<String> = dead.iter().map(|(_, n)| n.clone()).collect();
+        Some(Torn {
+            // The machines are returned, not just their names, so the caller can
+            // raise this against the node in the fleet view. Previously this
+            // returned prose that went to `eprintln!` on the head's own process
+            // and nowhere else: the browser went on showing a running cluster
+            // whose endpoint had quietly died, and the Stop button then answered
+            // "this agent did not start a cluster".
+            nodes: dead.iter().map(|(id, _)| *id).collect(),
+            why: format!(
+                "{} stopped, so the cluster was torn down. A half cluster waits at a \
+                 rendezvous that will never complete while its survivors hold their GPUs.",
+                names.join(" and ")
+            ),
+        })
     }
 
     fn stop_cluster(&self) -> Result<Vec<RankStarted>, String> {

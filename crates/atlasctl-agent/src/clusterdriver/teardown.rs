@@ -197,8 +197,18 @@ fn a_rank_that_dies_after_commit_tears_the_cluster_down() {
 
     // Now rank 2 dies.
     d.kill_for_test(node_id(2));
-    let why = d.supervise().expect("a dead rank must be noticed");
-    assert!(why.contains("spark-2"), "must name what died: {why}");
+    let torn = d.supervise().expect("a dead rank must be noticed");
+    assert!(
+        torn.why.contains("spark-2"),
+        "must name what died: {}",
+        torn.why
+    );
+    // The machines travel with the sentence, so the caller can raise this
+    // against a node rather than only printing it on the head's stderr.
+    assert!(
+        !torn.nodes.is_empty(),
+        "supervision must say WHICH machine, not only that something died"
+    );
 
     let c = calls(&log);
     assert!(
