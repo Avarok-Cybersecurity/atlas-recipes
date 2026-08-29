@@ -300,6 +300,24 @@ impl ClusterControl for ClusterDriver {
                     container,
                     // Only rank 0 serves the API. A worker's URL would not
                     // answer, and offering one would cost the operator time.
+                    //
+                    // ⚠ KNOWN, and not fixable here. `master_addr` is the
+                    // RENDEZVOUS address -- deliberately the fastest link every
+                    // worker SHARES, which on a Spark pair is the point-to-point
+                    // RoCE fabric (10.10.10.x). That is the right choice for the
+                    // ranks talking to each other and the wrong one for the
+                    // human: the operator's laptop is not on that fabric, so the
+                    // one URL this product hands them times out while the
+                    // container serves perfectly.
+                    //
+                    // Swapping in `preferred_address` does not fix it -- that
+                    // also ranks by link class and picks the same fabric. The
+                    // address that works is the one the BROWSER reached this
+                    // agent on, which is known at the HTTP layer and not here.
+                    // Fixing it properly means the endpoint travelling as a port
+                    // plus a machine identity and the page composing the URL
+                    // from its own connection, which is a protocol and UI change
+                    // rather than a line in this function.
                     endpoint: (t.assignment.rank == 0)
                         .then(|| format!("http://{}:{}", t.assignment.master_addr, pending.port)),
                 }),
