@@ -200,6 +200,29 @@ impl ClusterControl for ClusterDriver {
         head: NodeId,
         settings: &BTreeMap<String, SettingValue>,
     ) -> Result<(String, Vec<RankPrepare>, bool), String> {
+        // Refuse before touching a single machine. Nothing used to stop a second
+        // cluster being prepared while one was running, and committing it was
+        // destructive in both directions: with the SAME recipe each rank's
+        // `docker rm -f` silently killed the live cluster mid-service, and with
+        // a different one both ran, contending for the GPUs, while the second
+        // commit overwrote the record of the first -- leaving cluster A with no
+        // Stop button that knew about it.
+        //
+        // Deliberately NOT `RefusalReason::AlreadyRunning`, whose text is "… is
+        // already running on this node": that variant is rank-scoped and the
+        // wrong thing to say about a cluster spanning machines. It belongs on the
+        // rank path, where it is still unused.
+        {
+            let held = self.running.lock().expect("running lock poisoned");
+            if let Some(r) = held.as_ref() {
+                let names: Vec<String> = r.started.iter().map(|s| s.name.to_string()).collect();
+                return Err(format!(
+                    "a cluster is already running on {}; stop it before starting another",
+                    names.join(", ")
+                ));
+            }
+        }
+
         let epoch = new_epoch();
         let pending = self.resolve(recipe, nodes, head, settings, epoch.clone())?;
 
