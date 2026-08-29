@@ -69,8 +69,14 @@ pub trait RankTransport: Send + Sync {
     /// If the peer cannot be reached.
     fn alive(&self, node: NodeId, addr: SocketAddr, container: &str) -> Result<bool>;
 
-    /// Stop a container this rank started. Failures are the driver's to ignore.
-    fn stop(&self, node: NodeId, addr: SocketAddr, container: &str);
+    /// Stop a container this rank started.
+    ///
+    /// # Errors
+    /// If the peer cannot be reached, or refuses. This used to return `()` and
+    /// swallow both, so `stop_cluster` reported every rank stopped while an
+    /// unreachable machine kept its container -- and its GPU. A fleet view that
+    /// cannot be trusted about what is running is worse than no fleet view.
+    fn stop(&self, node: NodeId, addr: SocketAddr, container: &str) -> Result<()>;
 
     /// Mark a rank dead, so a test can exercise supervision.
     #[cfg(test)]

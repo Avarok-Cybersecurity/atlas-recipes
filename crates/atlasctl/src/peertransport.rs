@@ -137,14 +137,14 @@ impl RankTransport for PeerTransport {
         ))
     }
 
-    fn stop(&self, node: NodeId, addr: SocketAddr, container: &str) {
-        let _ = self.blocking(cluster::stop_rank(
+    fn stop(&self, node: NodeId, addr: SocketAddr, container: &str) -> anyhow::Result<()> {
+        self.blocking(cluster::stop_rank(
             &self.identity,
             self.pins.clone(),
             addr,
             node,
             &self.intro,
             container,
-        ));
+        ))
     }
 }

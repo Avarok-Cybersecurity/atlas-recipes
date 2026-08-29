@@ -210,8 +210,14 @@ impl RankTransport for FixtureTransport {
         }
         Ok(!self.dead.get(&node).copied().unwrap_or(false))
     }
-    fn stop(&self, node: NodeId, _: SocketAddr, container: &str) {
+    fn stop(&self, node: NodeId, _: SocketAddr, container: &str) -> anyhow::Result<()> {
         self.note(format!("{}.stop({container})", node.short()));
+        // A killed rank is one this transport cannot reach, which is exactly the
+        // case that used to be reported as a successful stop.
+        if self.killed.lock().expect("killed lock").contains(&node) {
+            anyhow::bail!("{} is unreachable", node.short());
+        }
+        Ok(())
     }
     fn kill_for_test(&self, node: NodeId) {
         self.killed.lock().expect("killed lock").insert(node);

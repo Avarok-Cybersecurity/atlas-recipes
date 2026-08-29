@@ -40,61 +40,6 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// One rank, resolved to somewhere reachable.
-///
-/// Built before any rank is asked anything, so a machine that has left the
-/// fleet or has no usable link fails the whole attempt while it is still free
-/// to fail — rather than half way through, with reservations already held.
-struct Target {
-    assignment: crate::cluster::RankAssignment,
-    /// Where to reach it, or `None` when it is this machine.
-    ///
-    /// Recorded rather than re-derived, so commit dials the address prepare
-    /// used instead of re-resolving and possibly reaching a different machine.
-    addr: Option<SocketAddr>,
-    name: DisplayName,
-}
-
-/// What supervision found, when it found something.
-///
-/// Carries the machines as well as the sentence, so the caller can raise it
-/// where an operator will see it rather than only writing it to the head's
-/// stderr.
-pub struct Torn {
-    /// The machines that stopped answering.
-    pub nodes: Vec<NodeId>,
-    /// One sentence, already safe to render.
-    pub why: String,
-}
-
-/// A cluster that started, kept so it can be stopped again.
-///
-/// The containers are recorded rather than looked up later: a rank's container
-/// is named by that machine, and rediscovering it would mean trusting a name
-/// match instead of what the commit actually returned.
-struct Running {
-    targets: Vec<Target>,
-    started: Vec<RankStarted>,
-}
-
-impl Target {
-    /// Enough of a target to ask whether its rank is alive.
-    fn clone_shallow(&self) -> Self {
-        Self {
-            assignment: self.assignment.clone(),
-            addr: self.addr,
-            name: self.name.clone(),
-        }
-    }
-}
-
-/// A prepare that has been accepted and is waiting to be committed.
-struct Pending {
-    epoch: String,
-    port: u16,
-    targets: Vec<Target>,
-}
-
 /// Plans a cluster and drives it across the fleet.
 pub struct ClusterDriver {
     fleet: Arc<dyn FleetView>,
@@ -212,18 +157,14 @@ impl ClusterControl for ClusterDriver {
         head: NodeId,
         settings: &BTreeMap<String, SettingValue>,
     ) -> Result<(String, Vec<RankPrepare>, bool), String> {
-        // Refuse before touching a single machine. Nothing used to stop a second
-        // cluster being prepared while one was running, and committing it was
-        // destructive in both directions: with the SAME recipe each rank's
-        // `docker rm -f` silently killed the live cluster mid-service, and with
-        // a different one both ran, contending for the GPUs, while the second
-        // commit overwrote the record of the first -- leaving cluster A with no
-        // Stop button that knew about it.
+        // Refuse before touching a single machine. Committing a second cluster
+        // was destructive both ways: the same recipe had each rank `docker rm -f`
+        // the live one mid-service, and a different one left both running while
+        // the second commit overwrote the record of the first.
         //
-        // Deliberately NOT `RefusalReason::AlreadyRunning`, whose text is "… is
-        // already running on this node": that variant is rank-scoped and the
-        // wrong thing to say about a cluster spanning machines. It belongs on the
-        // rank path, where it is still unused.
+        // Not `RefusalReason::AlreadyRunning`: its text says "on this node",
+        // which is wrong for a cluster spanning machines. That variant belongs
+        // on the rank path, where it is still unused.
         {
             let held = self.running.lock().expect("running lock poisoned");
             if let Some(r) = held.as_ref() {
@@ -445,6 +386,14 @@ impl ClusterControl for ClusterDriver {
         }
 
         let _ = self.stop_cluster();
+        // Clear the record even if that stop failed. `stop_cluster` keeps it on
+        // failure so an operator can retry, and `prepare` refuses while it
+        // exists -- together those would wedge every future launch here, since
+        // the rank being torn down is by definition unreachable and its stop
+        // always fails. Supervision is not an operator's Stop: it has decided
+        // the cluster is over and nobody will retry it. The alert below names
+        // the machine still holding a container.
+        *self.running.lock().expect("running lock poisoned") = None;
         let names: Vec<String> = dead.iter().map(|(_, n)| n.clone()).collect();
         Some(Torn {
             // The machines are returned, not just their names, so the caller can
@@ -463,64 +412,60 @@ impl ClusterControl for ClusterDriver {
     }
 
     fn stop_cluster(&self) -> Result<Vec<RankStarted>, String> {
+        // Read, do not TAKE. Removing the record before attempting a stop meant
+        // a reported failure could not be retried: Stop again answered "this
+        // agent did not start a cluster" while the rank was still holding a GPU.
         let running = self
             .running
             .lock()
             .expect("running lock poisoned")
-            .take()
+            .clone()
             .ok_or_else(|| "this agent did not start a cluster".to_owned())?;
 
         // Every rank is attempted even after one fails: a rank left running
         // holds a whole GPU, so giving up on the first failure would be the
         // most expensive possible response to it.
         let mut failures = Vec::new();
+        let mut still_running = Vec::new();
         for r in &running.started {
             let Some(t) = running.targets.iter().find(|t| t.assignment.node == r.node) else {
                 continue;
             };
-            match t.addr {
-                None => {
-                    if let Err(e) = self.rank.stop(&r.container) {
-                        failures.push(format!("{}: {e:#}", t.name));
-                    }
-                }
-                Some(addr) => self.transport.stop(t.assignment.node, addr, &r.container),
+            let outcome = match t.addr {
+                None => self.rank.stop(&r.container).map_err(|e| format!("{e:#}")),
+                // Remote failures count now. This arm returned `()`, so an
+                // unreachable peer contributed nothing and the operator was told
+                // every rank had stopped.
+                Some(addr) => self
+                    .transport
+                    .stop(t.assignment.node, addr, &r.container)
+                    .map_err(|e| format!("{e:#}")),
+            };
+            if let Err(e) = outcome {
+                failures.push(format!("{}: {e}", t.name));
+                still_running.push(r.clone());
             }
         }
+
+        let mut held = self.running.lock().expect("running lock poisoned");
         if failures.is_empty() {
+            *held = None;
             Ok(running.started)
         } else {
+            // Keep exactly what is still up, so a retry targets that and not the
+            // ranks already stopped -- which would fail on a container that is
+            // gone and look like a new problem.
+            *held = Some(Running {
+                started: still_running,
+                ..running.clone()
+            });
             Err(format!("could not stop {}", failures.join("; ")))
         }
     }
 }
 
-#[cfg(test)]
-impl ClusterDriver {
-    /// Mark a rank's container dead, so supervision has something to find.
-    pub(crate) fn kill_for_test(&self, node: NodeId) {
-        self.transport.kill_for_test(node);
-    }
-}
-
-impl ClusterDriver {
-    /// Stop the ranks that already started, so a failed commit leaves nothing
-    /// running. Failures are ignored for the same reason rollback ignores them:
-    /// the operator needs the original error, not this one.
-    fn stop_started(&self, started: &[RankStarted], targets: &[&Target]) {
-        for r in started {
-            let Some(t) = targets.iter().find(|t| t.assignment.node == r.node) else {
-                continue;
-            };
-            match t.addr {
-                None => {
-                    let _ = self.rank.stop(&r.container);
-                }
-                Some(addr) => self.transport.stop(t.assignment.node, addr, &r.container),
-            }
-        }
-    }
-}
+mod types;
+pub(crate) use types::*;
 
 #[cfg(test)]
 mod cases;

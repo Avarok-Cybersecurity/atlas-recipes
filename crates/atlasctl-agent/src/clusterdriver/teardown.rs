@@ -252,6 +252,71 @@ fn a_second_cluster_is_refused_while_one_is_running() {
     );
 }
 
+/// A stop that could not reach a machine must SAY so, and must stay retryable.
+///
+/// Two bugs in one story. `RankTransport::stop` returned `()`, so a peer the
+/// driver could not reach contributed nothing to the failure list and the
+/// operator was told every rank had stopped -- while that machine kept its
+/// container and its GPU. And the running record was TAKEN before any stop was
+/// attempted, so even a reported failure could not be retried: pressing Stop
+/// again answered "this agent did not start a cluster".
+#[test]
+fn a_stop_that_could_not_reach_a_peer_is_reported_and_can_be_retried() {
+    let log = new_log();
+    let (d, _) = driver(ready_rank(&log), transport(&log));
+    let (epoch, _, _) = d
+        .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .expect("prepares");
+    d.commit(&epoch).expect("commits");
+
+    // spark-2 becomes unreachable -- the machine, not the container.
+    d.kill_for_test(node_id(2));
+
+    let err = d
+        .stop_cluster()
+        .expect_err("an unreachable peer must not be reported as stopped");
+    assert!(err.contains("spark-2"), "must name the machine: {err}");
+
+    // And the record survives, so the operator can press Stop again rather than
+    // being told there was never a cluster.
+    let again = d.stop_cluster();
+    assert!(
+        again.is_err(),
+        "the unreachable rank is still up, so a retry must still fail: {again:?}"
+    );
+    assert!(
+        again.unwrap_err().contains("spark-2"),
+        "and must still name the same machine"
+    );
+}
+
+/// After supervision tears a cluster down, a NEW cluster must still start.
+///
+/// Emergent, not present in either change alone. Stop now keeps the running
+/// record when it cannot reach a machine, so an operator can retry; prepare now
+/// refuses while a record exists, so a second cluster cannot destroy a first.
+/// Supervision hits both at once -- the rank it tears down is by definition one
+/// that stopped answering, so its stop fails, the record survives, and every
+/// later launch is refused with "a cluster is already running" the operator
+/// cannot clear, because Stop keeps failing against a machine that is gone.
+#[test]
+fn a_supervised_teardown_does_not_block_the_next_cluster() {
+    let log = new_log();
+    let (d, _) = driver(ready_rank(&log), transport(&log));
+    let (epoch, _, _) = d
+        .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .expect("prepares");
+    d.commit(&epoch).expect("commits");
+
+    // The machine goes away: its liveness probe AND its stop both fail.
+    d.kill_for_test(node_id(2));
+    d.supervise().expect("a dead rank must be noticed");
+
+    // The operator starts again. This must not be refused.
+    d.prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .expect("a torn-down cluster must not block the next one");
+}
+
 /// Supervising when nothing is running must not reach for the network.
 #[test]
 fn supervising_an_idle_agent_does_nothing() {
