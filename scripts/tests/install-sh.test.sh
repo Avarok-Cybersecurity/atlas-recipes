@@ -236,6 +236,36 @@ check "fish is identified, not guessed" "fish"             "$(rc /usr/bin/fish L
 check "unknown shell falls back"        "/h/.profile"      "$(rc /bin/dash Linux)"
 check "empty SHELL falls back"          "/h/.profile"      "$(rc '' Linux)"
 
+# --- path_advice --------------------------------------------------------------
+# rc_file is tested in isolation above; this pins its CONTRACT with the only
+# caller. The "fish" return is a sentinel, not a path, and the caller has to
+# recognise it -- an agreement that previously lived in two places with nothing
+# checking they still agreed.
+
+adv() {
+    ( . "$WORK/lib.sh"; _os="$2"; SHELL="$1" HOME="${3:-/h}"
+      # shellcheck disable=SC2317  # called indirectly, by rc_file
+      uname() { echo "$_os"; }
+      path_advice "${4:-/opt/bin}" ) 2>&1 | tail -1
+}
+
+# fish gets fish syntax. `export PATH=...` is not valid fish, so emitting it
+# would hand the operator a line that fails when pasted.
+contains "fish is given fish syntax" \
+    "$(adv /usr/bin/fish Linux)" "fish_add_path"
+check "fish is NOT given an export line" "" \
+    "$(adv /usr/bin/fish Linux | grep -o 'export PATH')"
+
+# Everyone else gets the export line, aimed at the file their shell reads.
+contains "zsh is given .zshrc"        "$(adv /bin/zsh Darwin)"  ".zshrc"
+contains "bash on macos gets .bash_profile" "$(adv /bin/bash Darwin)" ".bash_profile"
+
+# A $HOME with a space must still paste. This is why both are quoted.
+contains "a spaced HOME stays quoted" \
+    "$(adv /bin/zsh Darwin '/Users/John Smith')" '>> "/Users/John Smith/.zshrc"'
+contains "a spaced dir stays quoted too" \
+    "$(adv /usr/bin/fish Linux /h '/opt/my bin')" 'fish_add_path "/opt/my bin"'
+
 # --- place_binary -------------------------------------------------------------
 # The point of these is that the FILE moved, not that a message was printed.
 # The bug they exist for printed exactly the right sentence and left the old

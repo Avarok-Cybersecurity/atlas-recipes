@@ -378,6 +378,28 @@ rc_file() {
     esac
 }
 
+# The advice itself, so the SENTINEL has a tested contract.
+#
+# `rc_file` returns the literal "fish" to mean "not a file at all, and not
+# `export` syntax either". That agreement lived across two places with nothing
+# holding them together: `rc_file` was tested in isolation and this branch was
+# inside `main`, which the test loader strips. Change the sentinel to a path
+# and the comparison here silently stops matching, handing a fish user an
+# `export PATH=...` line that fails when pasted -- exactly the defect the
+# sentinel was added to prevent, reintroduced without a failing test.
+path_advice() { # dir  -- writes the two warn lines
+    pa_rc=$(rc_file)
+    warn "$1 is not on your PATH. Add it, e.g.:"
+    if [ "$pa_rc" = "fish" ]; then
+        # Quoted, because $HOME can contain a space: an unquoted
+        # /Users/John Smith/.zshrc is a line that breaks when pasted, which is
+        # the one thing this message exists to avoid.
+        warn "    fish_add_path \"$1\""
+    else
+        warn "    echo 'export PATH=\"\$PATH:$1\"' >> \"$pa_rc\""
+    fi
+}
+
 # Put the downloaded binary in place and report which of the two things
 # happened: echoes "yes" when the installed copy was KEPT, and nothing when it
 # was replaced. All operator-facing text goes to stderr through `info`, so that
@@ -523,16 +545,7 @@ main() {
     case ":$PATH:" in
         *":$dir:"*) ;;
         *)
-            rc=$(rc_file)
-            warn "$dir is not on your PATH. Add it, e.g.:"
-            if [ "$rc" = "fish" ]; then
-                # Quoted, because $HOME can contain a space: an unquoted
-                # /Users/John Smith/.zshrc is a line that breaks when pasted,
-                # which is the one thing this message exists to avoid.
-                warn "    fish_add_path \"$dir\""
-            else
-                warn "    echo 'export PATH=\"\$PATH:$dir\"' >> \"$rc\""
-            fi
+            path_advice "$dir"
             ;;
     esac
 
