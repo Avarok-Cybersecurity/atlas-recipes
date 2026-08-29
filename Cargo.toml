@@ -63,6 +63,7 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 include = ["src/**/*.rs", "recipes/**/*.yaml", "LICENSE", "README.md"]
+build = "build.rs"
 
 [dependencies]
 include_dir.workspace = true
