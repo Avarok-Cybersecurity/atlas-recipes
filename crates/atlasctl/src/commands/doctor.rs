@@ -163,7 +163,6 @@ fn disk_finding(at_cache: Option<(&str, u64)>, at_cwd: Option<u64>) -> Finding {
 }
 
 /// Where the agent keeps its identity, its pins and its browser token.
-
 fn check_config_dir() -> Finding {
     match crate::hostinfo::usable_config_dir() {
         Ok(dir) => doctor_checks::config_dir(ConfigDirState::Writable(dir.display().to_string())),
