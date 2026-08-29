@@ -56,7 +56,24 @@ pub fn write(path: &Path, bytes: &[u8]) -> Result<()> {
     // replace the link itself with a regular file -- silently destroying that
     // arrangement, and, worse for a rotation, leaving the OLD secret live at the
     // real target, which is the one thing rotating exists to prevent.
-    let path = &std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    //
+    // Only when it IS one. Canonicalising unconditionally looked harmless and is
+    // not: on Windows, resolving a path that another thread is concurrently
+    // replacing returns the deleted-file namespace, so `write` failed with
+    // "peers.json resolves to C:\$Extend\$Deleted\…" -- a spurious error, on
+    // the exact concurrent-pin-write path this whole function exists to make
+    // safe. `symlink_metadata` does not follow the link, so the common case now
+    // touches nothing.
+    let resolved;
+    let path = if std::fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        &resolved
+    } else {
+        path
+    };
 
     let dir = path.parent().unwrap_or(Path::new("."));
     // Unique PER CALL, not per process. A pid-only suffix is not unique inside
@@ -322,6 +339,40 @@ mod tests {
             .filter(|n| n.contains(".tmp"))
             .collect();
         assert!(strays.is_empty(), "left temp files behind: {strays:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A symlinked secret is still written THROUGH, not replaced.
+    ///
+    /// The rename would otherwise swap the link for a regular file: a
+    /// stow/dotfiles arrangement silently destroyed, and for a rotation the OLD
+    /// secret left live at the real target, which is the one thing rotating
+    /// exists to prevent. The resolution is now conditional -- canonicalising
+    /// unconditionally raced Windows' file replacement -- so this pins that the
+    /// condition still fires.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_secret_is_written_through_to_its_target() {
+        let d = tmp("symlink");
+        let real = d.join("real-store.json");
+        let link = d.join("peers.json");
+        write(&real, b"{\"old\":true}").expect("writes the target");
+        std::os::unix::fs::symlink(&real, &link).expect("links");
+
+        write(&link, b"{\"new\":true}").expect("writes through the link");
+
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .expect("link still there")
+                .file_type()
+                .is_symlink(),
+            "the symlink must survive the write, not be replaced by a file"
+        );
+        assert_eq!(
+            std::fs::read(&real).expect("reads the target"),
+            b"{\"new\":true}",
+            "the bytes must land at the real target, not beside it"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
