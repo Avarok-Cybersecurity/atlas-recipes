@@ -64,3 +64,11 @@ pub(crate) struct Pending {
     pub(crate) port: u16,
     pub(crate) targets: Vec<Target>,
 }
+
+#[cfg(test)]
+impl ClusterDriver {
+    /// Mark a rank's container dead, so supervision has something to find.
+    pub(crate) fn kill_for_test(&self, node: NodeId) {
+        self.transport.kill_for_test(node);
+    }
+}

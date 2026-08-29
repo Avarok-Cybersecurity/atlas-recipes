@@ -386,6 +386,14 @@ impl ClusterControl for ClusterDriver {
         }
 
         let _ = self.stop_cluster();
+        // Clear the record even if that stop failed. `stop_cluster` keeps it on
+        // failure so an operator can retry, and `prepare` refuses while it
+        // exists -- together those would wedge every future launch here, since
+        // the rank being torn down is by definition unreachable and its stop
+        // always fails. Supervision is not an operator's Stop: it has decided
+        // the cluster is over and nobody will retry it. The alert below names
+        // the machine still holding a container.
+        *self.running.lock().expect("running lock poisoned") = None;
         let names: Vec<String> = dead.iter().map(|(_, n)| n.clone()).collect();
         Some(Torn {
             // The machines are returned, not just their names, so the caller can
@@ -453,14 +461,6 @@ impl ClusterControl for ClusterDriver {
             });
             Err(format!("could not stop {}", failures.join("; ")))
         }
-    }
-}
-
-#[cfg(test)]
-impl ClusterDriver {
-    /// Mark a rank's container dead, so supervision has something to find.
-    pub(crate) fn kill_for_test(&self, node: NodeId) {
-        self.transport.kill_for_test(node);
     }
 }
 
