@@ -155,7 +155,25 @@ pub struct LocalFleet {
     /// This machine's own addresses, from the fabric provider.
     local_addresses: Vec<NodeAddress>,
     /// Whether this machine can run a model, and why not if it cannot.
+    ///
+    /// The value the agent computed at startup. It is the answer only until
+    /// `relaunch_probe` supplies a fresher one — see `launchability()`.
     launchability: Launchability,
+    /// Re-runs the capability probe, when the agent gave us one.
+    ///
+    /// Without this the startup answer is permanent, and the commonest reason
+    /// a machine reports "cannot launch" — its owner not being in the `docker`
+    /// group — is also the easiest to fix, and was surviving the fix. An
+    /// operator who ran `usermod -aG docker`, logged back in and reloaded the
+    /// page still saw a machine that could not run models, with no indication
+    /// that the agent needed restarting.
+    relaunch_probe: Option<Box<dyn Fn() -> Launchability + Send + Sync>>,
+    /// Last re-probe and its answer, so a fleet listing does not spawn a
+    /// process per node description.
+    launch_cache: Mutex<Option<(Instant, Launchability)>>,
+    /// How long a re-probe answer is reused. Settable so the refresh interval
+    /// is a property of the deployment rather than a constant nobody can reach.
+    launch_ttl: Duration,
     /// Coarse accelerator tag for display.
     accelerator: String,
     /// Display name for this machine.
@@ -225,6 +243,9 @@ impl LocalFleet {
             pins,
             local_addresses,
             launchability,
+            relaunch_probe: None,
+            launch_cache: Mutex::new(None),
+            launch_ttl: Self::DEFAULT_LAUNCH_TTL,
             accelerator,
             name,
             vitals: None,
@@ -287,10 +308,57 @@ impl LocalFleet {
         self
     }
 
+    /// Supply a probe that can re-answer "can this machine launch?".
+    ///
+    /// Optional so every existing construction — and every test — keeps the
+    /// startup value and stays free of processes.
+    #[must_use]
+    pub fn with_relaunch_probe(
+        mut self,
+        probe: Box<dyn Fn() -> Launchability + Send + Sync>,
+    ) -> Self {
+        self.relaunch_probe = Some(probe);
+        self
+    }
+
+    /// How long a re-probe answer is reused before asking again.
+    ///
+    /// Short enough that fixing Docker heals the page within one refresh;
+    /// long enough that listing a fleet does not run `docker info` per node.
+    pub const DEFAULT_LAUNCH_TTL: Duration = Duration::from_secs(5);
+
+    /// Override how long a re-probe answer is reused.
+    #[must_use]
+    pub const fn with_launch_ttl(mut self, ttl: Duration) -> Self {
+        self.launch_ttl = ttl;
+        self
+    }
+
+    /// This machine's launchability, re-probed if it has gone stale.
+    #[must_use]
+    pub fn launchability(&self) -> Launchability {
+        let Some(probe) = self.relaunch_probe.as_ref() else {
+            return self.launchability.clone();
+        };
+        // A poisoned lock must not make the machine look incapable, so every
+        // failure here falls back to the last good answer rather than to "no".
+        let Ok(mut cache) = self.launch_cache.lock() else {
+            return self.launchability.clone();
+        };
+        if let Some((at, ref cached)) = *cache
+            && at.elapsed() < self.launch_ttl
+        {
+            return cached.clone();
+        }
+        let fresh = probe();
+        *cache = Some((Instant::now(), fresh.clone()));
+        fresh
+    }
+
     /// Whether this machine can run a model.
     #[must_use]
     pub fn can_launch(&self) -> bool {
-        self.launchability.can_launch
+        self.launchability().can_launch
     }
 
     /// This agent's identity.
@@ -449,7 +517,7 @@ impl LocalFleet {
             is_local: true,
             pairing: PairingState::Paired,
             addresses: self.local_addresses.clone(),
-            launchability: self.launchability.clone(),
+            launchability: self.launchability(),
             agent_version: env!("CARGO_PKG_VERSION").to_owned(),
             accelerator: self.accelerator.clone(),
             os: crate::discovery::local_os(),

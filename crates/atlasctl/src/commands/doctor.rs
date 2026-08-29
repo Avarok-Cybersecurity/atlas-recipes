@@ -3,6 +3,7 @@
 //! `doctor` — check this machine for problems.
 
 use anyhow::Result;
+use atlasctl_core::docker::DockerFault;
 use atlasctl_core::io::{ProcessRunner, StdProcessRunner};
 
 use super::doctor_checks::{self, ConfigDirState, Finding};
@@ -59,19 +60,26 @@ fn check_docker() -> usize {
             println!("docker:   ok (server {})", out.stdout.trim());
             0
         }
-        Ok(_) => {
-            println!(
-                "docker:   PROBLEM — the docker CLI is present but the daemon did not answer.\n\
-                 \x20         `atlasctl run` needs a working daemon; `recipe list` and\n\
-                 \x20         `run --print` work without one."
-            );
+        // Two buckets used to serve for four causes, and the commonest one —
+        // a user outside the `docker` group — was reported as a daemon that
+        // "did not answer". doctor exists to tell someone what to do next, so
+        // it now prints the classified diagnosis and its remedy.
+        Ok(out) => {
+            let fault = DockerFault::classify(&out.stderr);
+            println!("docker:   PROBLEM — {}", fault.summary());
+            for line in fault.advice().lines() {
+                println!("\x20         {line}");
+            }
             1
         }
-        Err(_) => {
+        Err(e) => {
             println!(
-                "docker:   PROBLEM — no docker on PATH. `atlasctl run` needs docker and the\n\
-                 \x20         NVIDIA container runtime; inspection commands work without them."
+                "docker:   PROBLEM — {} ({e})",
+                DockerFault::NotInstalled.summary()
             );
+            for line in DockerFault::NotInstalled.advice().lines() {
+                println!("\x20         {line}");
+            }
             1
         }
     }
