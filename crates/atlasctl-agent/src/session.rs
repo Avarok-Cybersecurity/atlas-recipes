@@ -31,7 +31,7 @@ pub struct SessionDeps<'a> {
     /// The recipe inventory.
     pub registry: &'a RegistrySet,
     /// How launches actually happen.
-    pub launcher: &'a dyn Launcher,
+    pub launcher: std::sync::Arc<dyn Launcher>,
     /// The expected pairing token.
     pub token: &'a str,
     /// Whether this machine can run a recipe at all.
@@ -155,7 +155,7 @@ impl<'a> Session<'a> {
     }
 
     /// Handle one decoded message.
-    pub fn handle(&mut self, msg: ClientMsg) -> Vec<ServerMsg> {
+    pub async fn handle(&mut self, msg: ClientMsg) -> Vec<ServerMsg> {
         if self.phase == Phase::Closed {
             return Vec::new();
         }
@@ -221,9 +221,9 @@ impl<'a> Session<'a> {
                     settings,
                     on: _,
                 },
-            ) => self.launch(id, &recipe, &settings),
-            (Phase::Ready, ClientMsg::Stop { id, recipe, on: _ }) => self.stop(id, &recipe),
-            (Phase::Ready, ClientMsg::Status { id, on: _ }) => self.status(id),
+            ) => self.launch(id, &recipe, &settings).await,
+            (Phase::Ready, ClientMsg::Stop { id, recipe, on: _ }) => self.stop(id, &recipe).await,
+            (Phase::Ready, ClientMsg::Status { id, on: _ }) => self.status(id).await,
 
             (Phase::Ready, ClientMsg::ListNodes { id }) => self.nodes(id),
             // A watch is answered with the current fleet; the transport pushes
@@ -341,7 +341,7 @@ impl<'a> Session<'a> {
     fn control(&self) -> crate::control::LocalControl<'_> {
         crate::control::LocalControl {
             registry: self.deps.registry,
-            launcher: self.deps.launcher,
+            launcher: self.deps.launcher.clone(),
             telemetry: self.deps.telemetry,
             can_launch: &self.deps.can_launch,
             accelerator: self.deps.accelerator,

@@ -275,7 +275,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     // the checks are identical because both are the one `LocalControl`.
     let control_host = Arc::new(atlasctl_agent::control::ControlHost::new(
         crate::commands::registry_set()?,
-        Box::new(DockerLauncher::new(
+        std::sync::Arc::new(DockerLauncher::new(
             Arc::clone(&runner),
             hostinfo::snapshot()?,
             &ROOTLESS_V1,
@@ -293,7 +293,7 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
 
     let state = Arc::new(AgentState {
         registry: crate::commands::registry_set()?,
-        launcher: Box::new(DockerLauncher::new(
+        launcher: std::sync::Arc::new(DockerLauncher::new(
             Arc::clone(&runner),
             hostinfo::snapshot()?,
             &ROOTLESS_V1,

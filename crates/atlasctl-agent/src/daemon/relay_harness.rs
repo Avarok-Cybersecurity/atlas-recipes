@@ -118,7 +118,7 @@ pub(super) async fn spawn_serving(
     a: &mut TestAgent,
     port: u16,
     answer_budget: Duration,
-    launcher: Box<dyn Launcher>,
+    launcher: Arc<dyn Launcher>,
 ) -> u16 {
     let listener = tokio::net::TcpListener::bind((a.ip, port))
         .await

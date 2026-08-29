@@ -32,7 +32,7 @@ pub struct AgentState {
     /// The recipe inventory.
     pub registry: RegistrySet,
     /// How launches happen.
-    pub launcher: Box<dyn Launcher>,
+    pub launcher: Arc<dyn Launcher>,
     /// The expected pairing token.
     pub token: String,
     /// Whether this machine can run a recipe, and why not if it cannot.
@@ -173,7 +173,7 @@ async fn run_session(mut socket: ws::WebSocket, state: Arc<AgentState>) {
     let mut events = state.events.subscribe();
     let (mut session, welcome) = Session::new(SessionDeps {
         registry: &state.registry,
-        launcher: state.launcher.as_ref(),
+        launcher: state.launcher.clone(),
         token: &state.token,
         can_launch: state.can_launch.clone(),
         accelerator: &state.accelerator,
@@ -233,7 +233,7 @@ async fn run_session(mut socket: ws::WebSocket, state: Arc<AgentState>) {
         };
 
         let replies = match serde_json::from_str::<ClientMsg>(&text) {
-            Ok(msg) => handle_off_the_worker(&mut session, msg),
+            Ok(msg) => session.handle(msg).await,
             Err(e) => vec![session.on_malformed(e.to_string())],
         };
 
@@ -264,35 +264,6 @@ async fn send(socket: &mut ws::WebSocket, msg: &ServerMsg) -> Result<()> {
         .send(ws::Message::Text(text.into()))
         .await
         .context("sending a reply")
-}
-
-/// Run [`Session::handle`] without holding a runtime worker hostage.
-///
-/// `handle` is synchronous all the way down to `std::process::Command::output()`
-/// in the launcher, so a `Launch` shells out to `docker run` and does not return
-/// until the container is up — seconds, or minutes if the image still has to be
-/// pulled. Called directly from this async loop, that parks a tokio worker for
-/// the whole launch. The cost is not confined to the caller: every other
-/// websocket session shares the runtime, and so do the timers that are supposed
-/// to bound these operations, so a launch in flight delays unrelated clients and
-/// the very timeouts meant to limit it. N concurrent launches occupy N workers.
-///
-/// `block_in_place` tells tokio this thread is about to block so it can hand the
-/// remaining tasks to another worker. It borrows, which matters here: `Session`
-/// holds references (`Session<'a>`), so it can never satisfy the `'static` bound
-/// `spawn_blocking` requires without restructuring how a session owns its state.
-///
-/// The flavor check is not a test accommodation — `block_in_place` panics on a
-/// current-thread runtime by contract, so asking the runtime what it is is the
-/// only correct way to call it from a library that does not own the runtime.
-fn handle_off_the_worker(session: &mut Session<'_>, msg: ClientMsg) -> Vec<ServerMsg> {
-    use tokio::runtime::{Handle, RuntimeFlavor};
-    match Handle::try_current().map(|h| h.runtime_flavor()) {
-        Ok(RuntimeFlavor::MultiThread) => tokio::task::block_in_place(|| session.handle(msg)),
-        // A current-thread runtime has no other worker to move work to, so
-        // blocking in place is both impossible and pointless.
-        _ => session.handle(msg),
-    }
 }
 
 #[cfg(test)]

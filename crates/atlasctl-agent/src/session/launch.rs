@@ -44,13 +44,13 @@ impl Session<'_> {
         }
     }
 
-    pub(super) fn launch(
+    pub(super) async fn launch(
         &mut self,
         id: u32,
         recipe_id: &RecipeId,
         requested: &BTreeMap<String, SettingValue>,
     ) -> Vec<ServerMsg> {
-        match self.control().launch(recipe_id, requested) {
+        match self.control().launch(recipe_id, requested).await {
             Ok(started) => vec![ServerMsg::Started {
                 id,
                 recipe: recipe_id.clone(),
@@ -66,8 +66,8 @@ impl Session<'_> {
         }
     }
 
-    pub(super) fn stop(&mut self, id: u32, recipe_id: &RecipeId) -> Vec<ServerMsg> {
-        match self.control().stop(recipe_id) {
+    pub(super) async fn stop(&mut self, id: u32, recipe_id: &RecipeId) -> Vec<ServerMsg> {
+        match self.control().stop(recipe_id).await {
             Ok(()) => vec![ServerMsg::Stopped {
                 id,
                 recipe: recipe_id.clone(),
@@ -78,8 +78,8 @@ impl Session<'_> {
         }
     }
 
-    pub(super) fn status(&mut self, id: u32) -> Vec<ServerMsg> {
-        match self.control().status() {
+    pub(super) async fn status(&mut self, id: u32) -> Vec<ServerMsg> {
+        match self.control().status().await {
             Ok(running) => vec![ServerMsg::Status {
                 id,
                 running,
