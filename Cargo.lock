@@ -167,7 +167,7 @@ dependencies = [
 
 [[package]]
 name = "atlasctl-protocol"
-version = "0.5.0"
+version = "0.6.1"
 dependencies = [
  "serde",
  "serde_json",
