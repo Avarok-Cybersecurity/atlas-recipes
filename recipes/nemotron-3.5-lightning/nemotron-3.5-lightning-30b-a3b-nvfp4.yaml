@@ -1,0 +1,125 @@
+recipe_version: "2"
+model: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
+runtime: atlas
+container: avarok/atlas-gb10:latest
+max_nodes: 1
+
+metadata:
+  description: |
+    Nemotron-3.5-Lightning-30B-A3B — NVIDIA hybrid Mamba-2 + MoE +
+    Attention on a single GB10. 52 layers (6 attention, 23 SSM), 128
+    experts top-6, hidden 2688. Dimensionally identical to the
+    Nemotron-3-Nano sibling; it differs by shipping a DeepSeek-style
+    1-step MTP draft head and by wanting the OPPOSITE thinking policy.
+
+    Boot-verified on a GB10 (2026-08-13):
+      kernel audit  154 lookups, 0 unresolved, 9 expected-absent, PASS
+      target        (sm_121, nemotron-3.5-lightning-30b-a3b, nvfp4)
+      config        52 layers, 6 attn, 23 SSM, 128 experts, rotary_dim=0
+
+    THROUGHPUT AND AGENTIC NUMBERS ARE NOT YET MEASURED for this
+    checkpoint and are deliberately omitted rather than copied from the
+    Nano sibling — the two share dimensions but not the sampling or
+    thinking policy, and MTP changes the decode path. This recipe
+    documents the serve CONFIGURATION only. Fill the table in before
+    undrafting.
+
+    ── REQUIRES AN IMAGE NEWER THAN :latest ──
+    As of 2026-08-13 this recipe cannot work on the published
+    `avarok/atlas-gb10:latest`. Neither prerequisite is on atlas `main`:
+
+      atlas#487  Lightning's OWN kernel target. Without it there is no
+                 `nemotron-3.5-lightning-30b-a3b` directory and the
+                 checkpoint silently resolves to the Nano target — same
+                 dimensions, so nothing errors — inheriting Nano's
+                 `thinking_default = false`. You get a working server
+                 running the WRONG policy. Boot MUST log
+                 "Selected kernel target: (sm_121,
+                 nemotron-3.5-lightning-30b-a3b, nvfp4)".
+      atlas#462  Nemotron-H is NoPE, plus the MODEL.toml
+                 `[behavior].no_decode_graphs` key. Atlas applied rotary
+                 embedding to the whole family, killing long-context
+                 retrieval above ~52 tokens; and decode-graph replay
+                 crashes this family with CUDA 716. Boot MUST log
+                 `rotary_dim=0` and "Decode graphs disabled by
+                 MODEL.toml [behavior].no_decode_graphs".
+
+    Recommended alongside: atlas#486, which fixes tool calls being
+    delivered with empty arguments when the model writes the
+    attribute dialect (`<parameter city="X">` rather than
+    `<parameter=city>`). Lightning emits the attribute form.
+
+    ── THINKING POLICY: THE REASON THIS TARGET IS SEPARATE ──
+    Served from the target's MODEL.toml, not from this recipe:
+      thinking_default  = true    # thinking is the quality path for chat
+      thinking_in_tools = false   # and the WRONG path for tool turns
+    With thinking on and tools armed, the model emits its `<tool_call>`
+    INSIDE `<think>`, so the turn depends on a `</think>` force-close
+    landing after the arguments rather than between the name and the
+    arguments. Measured at temperature 0, same build and prompt shape:
+    "Santiago" cut early and returned a name-only call; "Kyoto" cut late
+    and returned a good one. Not thinking at all on tool turns is both
+    correct and ~4x cheaper (23 completion tokens vs 89-97).
+
+    Do NOT try to reproduce this with
+    `--default-chat-template-kwargs '{"enable_thinking":true}'`. That is
+    an EXPLICIT directive and an explicit directive OUTRANKS
+    `thinking_in_tools`, so tool turns would think anyway. That
+    workaround is exactly what motivated splitting the target.
+
+    ── MTP: SHIPPED, BUT PARKED BY THE AUTO GATE ──
+    The checkpoint carries a 1-step draft head (`num_nextn_predict_layers
+    = 1`), which is also the discriminator that separates this target
+    from Nano's. Serve-validated 2026-08-11 (C=1, 400-token story, temp
+    0): the DRAFTS are good (K2 accept p1 = 0.49-0.65) but verify is NET
+    NEGATIVE — 55.0 tok/s forced-MTP against 70.1 tok/s serial — because
+    this target has no K-token batched verify kernels. The 23 Mamba-2
+    layers run K sequential recurrent decodes and the 23 MoE layers K
+    per-token expert GEMV sweeps, so a K=2 verify costs ~2x a decode in
+    weight reads for only ~1.55 tokens. The auto gate measures this and
+    parks speculation, so serving stays at the serial rate. Leave
+    `--speculative` OFF; it is not a win on this target today.
+
+    ── SAMPLING: use_sampling_presets_for_core IS LOAD-BEARING ──
+    generation_config.json carries temperature=1.0 / top_p=0.95, the HF
+    evaluation defaults rather than a serving recipe. Without the
+    target's opt-in, core sampling falls through to those values and
+    every preset is silently ignored for any client that does not send
+    its own sampling params (opencode does not).
+
+    ── AN EMPTY SYSTEM TURN DEGRADES THIS FAMILY ──
+    The chat template always emits a system block, rendering
+    `<|im_start|>system\n<|im_end|>` when the request carries no system
+    message. That exact shape was measured to degrade the Nano sibling
+    on 2026-07-28 — identical user text, only the system block
+    differing, correct with any system text and wrong with an empty one.
+    The target supplies a `default_system_prompt` so the empty turn
+    never renders; do not strip it.
+  maintainer: avarok
+  category: agent
+  model_params: 30B
+  model_dtype: nvfp4
+  quantization: nvfp4
+  kv_dtype: bf16
+
+defaults:
+  port: 8888
+  host: 0.0.0.0
+  # KV is not the binding constraint on this model: with only 6 attention
+  # layers, util 0.80 leaves room for millions of KV tokens (a util-0.90
+  # boot measured 1407573 blocks x 16 = ~22.5M). This ceiling is set by
+  # what has been exercised, not by what fits — raise it with a needle
+  # run at the new length, the same way the Puzzle sibling is bounded.
+  max_model_len: 32768
+  max_num_seqs: 8
+  # bf16 by choice. Not yet A/B'd ON THIS CHECKPOINT — it is the
+  # conservative setting carried over from the Puzzle sibling, whose
+  # target documents fp8 KV corrupting a thinking model's long reasoning
+  # context, and Lightning is thinking-first. Given the KV headroom
+  # above, bf16 costs nothing here. Revisit with a measurement, not a
+  # guess.
+  kv_cache_dtype: bf16
+  gpu_memory_utilization: 0.80
+  scheduling_policy: slai
+  enable_prefix_caching: true
+  ssm_cache_slots: 64
