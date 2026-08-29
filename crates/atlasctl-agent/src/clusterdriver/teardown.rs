@@ -230,17 +230,6 @@ fn a_rank_that_dies_after_commit_tears_the_cluster_down() {
 /// the original with no Stop button that knew about it.
 #[test]
 fn a_second_cluster_is_refused_while_one_is_running() {
-
-/// A stop that could not reach a machine must SAY so, and must stay retryable.
-///
-/// Two bugs in one story. `RankTransport::stop` returned `()`, so a peer the
-/// driver could not reach contributed nothing to the failure list and the
-/// operator was told every rank had stopped -- while that machine kept its
-/// container and its GPU. And the running record was TAKEN before any stop was
-/// attempted, so even a reported failure could not be retried: pressing Stop
-/// again answered "this agent did not start a cluster".
-#[test]
-fn a_stop_that_could_not_reach_a_peer_is_reported_and_can_be_retried() {
     let log = new_log();
     let (d, _) = driver(ready_rank(&log), transport(&log));
     let (epoch, _, _) = d
@@ -260,6 +249,25 @@ fn a_stop_that_could_not_reach_a_peer_is_reported_and_can_be_retried() {
         calls(&log).len(),
         before,
         "the refusal must not reach any machine"
+    );
+}
+
+/// A stop that could not reach a machine must SAY so, and must stay retryable.
+///
+/// Two bugs in one story. `RankTransport::stop` returned `()`, so a peer the
+/// driver could not reach contributed nothing to the failure list and the
+/// operator was told every rank had stopped -- while that machine kept its
+/// container and its GPU. And the running record was TAKEN before any stop was
+/// attempted, so even a reported failure could not be retried: pressing Stop
+/// again answered "this agent did not start a cluster".
+#[test]
+fn a_stop_that_could_not_reach_a_peer_is_reported_and_can_be_retried() {
+    let log = new_log();
+    let (d, _) = driver(ready_rank(&log), transport(&log));
+    let (epoch, _, _) = d
+        .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .expect("prepares");
+    d.commit(&epoch).expect("commits");
 
     // spark-2 becomes unreachable -- the machine, not the container.
     d.kill_for_test(node_id(2));

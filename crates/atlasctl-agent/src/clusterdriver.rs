@@ -40,63 +40,6 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// One rank, resolved to somewhere reachable.
-///
-/// Built before any rank is asked anything, so a machine that has left the
-/// fleet or has no usable link fails the whole attempt while it is still free
-/// to fail — rather than half way through, with reservations already held.
-#[derive(Clone)]
-struct Target {
-    assignment: crate::cluster::RankAssignment,
-    /// Where to reach it, or `None` when it is this machine.
-    ///
-    /// Recorded rather than re-derived, so commit dials the address prepare
-    /// used instead of re-resolving and possibly reaching a different machine.
-    addr: Option<SocketAddr>,
-    name: DisplayName,
-}
-
-/// What supervision found, when it found something.
-///
-/// Carries the machines as well as the sentence, so the caller can raise it
-/// where an operator will see it rather than only writing it to the head's
-/// stderr.
-pub struct Torn {
-    /// The machines that stopped answering.
-    pub nodes: Vec<NodeId>,
-    /// One sentence, already safe to render.
-    pub why: String,
-}
-
-/// A cluster that started, kept so it can be stopped again.
-///
-/// The containers are recorded rather than looked up later: a rank's container
-/// is named by that machine, and rediscovering it would mean trusting a name
-/// match instead of what the commit actually returned.
-#[derive(Clone)]
-struct Running {
-    targets: Vec<Target>,
-    started: Vec<RankStarted>,
-}
-
-impl Target {
-    /// Enough of a target to ask whether its rank is alive.
-    fn clone_shallow(&self) -> Self {
-        Self {
-            assignment: self.assignment.clone(),
-            addr: self.addr,
-            name: self.name.clone(),
-        }
-    }
-}
-
-/// A prepare that has been accepted and is waiting to be committed.
-struct Pending {
-    epoch: String,
-    port: u16,
-    targets: Vec<Target>,
-}
-
 /// Plans a cluster and drives it across the fleet.
 pub struct ClusterDriver {
     fleet: Arc<dyn FleetView>,
@@ -214,18 +157,14 @@ impl ClusterControl for ClusterDriver {
         head: NodeId,
         settings: &BTreeMap<String, SettingValue>,
     ) -> Result<(String, Vec<RankPrepare>, bool), String> {
-        // Refuse before touching a single machine. Nothing used to stop a second
-        // cluster being prepared while one was running, and committing it was
-        // destructive in both directions: with the SAME recipe each rank's
-        // `docker rm -f` silently killed the live cluster mid-service, and with
-        // a different one both ran, contending for the GPUs, while the second
-        // commit overwrote the record of the first -- leaving cluster A with no
-        // Stop button that knew about it.
+        // Refuse before touching a single machine. Committing a second cluster
+        // was destructive both ways: the same recipe had each rank `docker rm -f`
+        // the live one mid-service, and a different one left both running while
+        // the second commit overwrote the record of the first.
         //
-        // Deliberately NOT `RefusalReason::AlreadyRunning`, whose text is "… is
-        // already running on this node": that variant is rank-scoped and the
-        // wrong thing to say about a cluster spanning machines. It belongs on the
-        // rank path, where it is still unused.
+        // Not `RefusalReason::AlreadyRunning`: its text says "on this node",
+        // which is wrong for a cluster spanning machines. That variant belongs
+        // on the rank path, where it is still unused.
         {
             let held = self.running.lock().expect("running lock poisoned");
             if let Some(r) = held.as_ref() {
@@ -465,11 +404,9 @@ impl ClusterControl for ClusterDriver {
     }
 
     fn stop_cluster(&self) -> Result<Vec<RankStarted>, String> {
-        // Read, do not TAKE. The record used to be removed before a single stop
-        // was attempted, so a reported failure could not be retried: pressing
-        // Stop again answered "this agent did not start a cluster" while the
-        // rank it had just failed to stop was still holding a GPU. One shot,
-        // then manual docker on every machine.
+        // Read, do not TAKE. Removing the record before attempting a stop meant
+        // a reported failure could not be retried: Stop again answered "this
+        // agent did not start a cluster" while the rank was still holding a GPU.
         let running = self
             .running
             .lock()
@@ -540,9 +477,8 @@ impl ClusterDriver {
                 None => {
                     let _ = self.rank.stop(&r.container);
                 }
-                // Best effort here, deliberately: this is the supervision
-                // teardown, which already knows something is wrong and has no
-                // operator waiting on a return value.
+                // Best effort: supervision already knows something is wrong
+                // and has no operator waiting on a return value.
                 Some(addr) => {
                     let _ = self.transport.stop(t.assignment.node, addr, &r.container);
                 }
@@ -550,6 +486,9 @@ impl ClusterDriver {
         }
     }
 }
+
+mod types;
+pub(crate) use types::*;
 
 #[cfg(test)]
 mod cases;
