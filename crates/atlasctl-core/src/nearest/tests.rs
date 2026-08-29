@@ -91,3 +91,54 @@ fn the_message_tail_is_empty_when_there_is_nothing_to_suggest() {
         ". Did you mean a, b?"
     );
 }
+
+/// A name the operator did not finish typing must be offered.
+///
+/// This is the case edit distance cannot reach: `qwen3.8-flash-next` is SIX
+/// edits from `qwen3.8-flash-next-nvfp4`, past any threshold that is not also
+/// offering nonsense — and it is the obvious thing to type, because it is what
+/// the model is called. Before this, that typed exactly right returned nothing
+/// at all.
+#[test]
+fn an_unfinished_name_finds_the_recipe_it_is_the_front_of() {
+    let got = super::nearest(
+        "qwen3.8-flash-next",
+        ["qwen3.8-flash-next-nvfp4", "qwen3.6-27b-fp8"],
+    );
+    assert_eq!(got, vec!["qwen3.8-flash-next-nvfp4".to_string()]);
+}
+
+/// Prefix matches come FIRST, because a name half-typed is a stronger signal
+/// than a name mistyped.
+#[test]
+fn a_prefix_outranks_a_mere_typo() {
+    let got = super::nearest("qwen3.6-27b", ["qwen3.6-27b-fp8", "qwen3.6-27c"]);
+    assert_eq!(
+        got.first().map(String::as_str),
+        Some("qwen3.6-27b-fp8"),
+        "{got:?}"
+    );
+}
+
+/// Two characters must not confidently offer three recipes.
+///
+/// The guard is the whole reason this is length-gated: without it every short
+/// string becomes a prefix of something, and the suggestion stops meaning
+/// anything.
+#[test]
+fn a_couple_of_characters_is_not_treated_as_a_name() {
+    let got = super::nearest("qw", ["qwen3.8-flash-next-nvfp4", "qwen3.6-27b-fp8"]);
+    assert!(
+        !got.contains(&"qwen3.8-flash-next-nvfp4".to_string()),
+        "a two-character stub must not claim a 24-character name: {got:?}"
+    );
+}
+
+/// An exact name is not "a prefix of itself" — it resolves, and never reaches
+/// this path. Pinned so the `name.len() > typed.len()` guard cannot be dropped
+/// as redundant.
+#[test]
+fn an_exact_name_is_not_suggested_against_itself() {
+    let got = super::nearest("qwen3.6-27b-fp8", ["qwen3.6-27b-fp8"]);
+    assert_eq!(got, vec!["qwen3.6-27b-fp8".to_string()], "{got:?}");
+}
