@@ -111,6 +111,13 @@ pub struct PeerWork {
     pub control: Arc<crate::control::ControlHost>,
 }
 
+/// How long to wait before trying the peer port again.
+///
+/// Short enough that an operator who frees the port sees the channel come up
+/// while they are still looking, long enough that a genuinely occupied port
+/// does not spin.
+const PEER_BIND_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
+
 pub fn spawn_peer_work(w: PeerWork) {
     spawn_peer_listener(
         Arc::clone(&w.fleet),
@@ -153,6 +160,9 @@ fn spawn_peer_listener(
         answer_budget: crate::peer::control::RELAY_ANSWER_BUDGET,
     });
     tokio::spawn(async move {
+        // Set once the first bind failure has been reported, so the retry loop
+        // does not repeat itself forever.
+        let mut bind_reported = false;
         // Pinned peers always; a stranger only while a human has a join code
         // outstanding. Decided during the handshake, so for all the time nobody
         // is onboarding an unpaired agent reaches no further than rustls'
@@ -173,17 +183,51 @@ fn spawn_peer_listener(
             }
         };
         let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(cfg));
-        let listener = match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!(
-                    "{}",
-                    crate::peer::bindfail::peer_bind_failure(port, e.kind(), &e.to_string())
-                );
-                return;
+        // Keep trying, rather than giving up for the life of the process.
+        //
+        // This used to `return` on the first bind failure, and the consequence
+        // was invisible: the browser channel is a SEPARATE listener, so the
+        // agent went on looking completely healthy while being unable to accept
+        // a single peer. The machine still advertised itself, still minted join
+        // codes, and the operator learned about it on the OTHER machine — after
+        // installing there — as a bare "Connection refused" against an address
+        // this agent told them to use.
+        //
+        // Almost every cause is transient: an agent started by hand in another
+        // terminal, a previous unit not yet reaped, a port in TIME_WAIT. Waiting
+        // for it costs nothing and turns a permanent, silent failure into a
+        // delay that resolves itself.
+        let listener = loop {
+            match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
+                Ok(l) => break l,
+                Err(e) => {
+                    // Printed once per distinct failure, not once per attempt: a
+                    // line every 5 seconds forever is how a log stops being read.
+                    if !std::mem::replace(&mut bind_reported, true) {
+                        eprintln!(
+                            "{}",
+                            crate::peer::bindfail::peer_bind_failure(
+                                port,
+                                e.kind(),
+                                &e.to_string()
+                            )
+                        );
+                        eprintln!(
+                            "peer channel: retrying every {}s until it is free; \
+                             this agent cannot accept peers until then",
+                            PEER_BIND_RETRY.as_secs()
+                        );
+                    }
+                    tokio::time::sleep(PEER_BIND_RETRY).await;
+                }
             }
         };
-        eprintln!("peer channel on 0.0.0.0:{port}");
+        if bind_reported {
+            eprintln!("peer channel on 0.0.0.0:{port} (recovered)");
+        } else {
+            eprintln!("peer channel on 0.0.0.0:{port}");
+        }
+        crate::peer::mark_listener_up(port);
 
         // 0 means "the last accept succeeded", which is also what makes the
         // first failure of a run the one that gets printed.

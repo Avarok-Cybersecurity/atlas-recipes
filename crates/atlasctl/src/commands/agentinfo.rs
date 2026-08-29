@@ -100,6 +100,14 @@ pub fn status(args: &AgentStatusArgs) -> Result<()> {
     match std::net::TcpStream::connect(&addr) {
         Ok(_) => {
             println!("agent: running (listening on {addr})");
+            // The browser channel and the peer channel are SEPARATE listeners,
+            // and the peer one can be down while this one is up. Nothing used to
+            // say so, so the first sign was a "Connection refused" on a
+            // different machine — after installing there — against an address
+            // this agent had handed out in a join command.
+            for line in peer_channel_line(atlasctl_agent::peer::DEFAULT_PEER_PORT) {
+                println!("{line}");
+            }
             Ok(())
         }
         Err(e) => {
@@ -120,6 +128,29 @@ pub fn status(args: &AgentStatusArgs) -> Result<()> {
             }
             bail!("no agent is listening on {addr}")
         }
+    }
+}
+
+/// What to say about the peer channel: the listener that accepts other machines.
+///
+/// Reported separately from the browser channel because they are separate
+/// listeners with separate failure modes. A machine can serve its own browser
+/// perfectly while being unable to accept a single peer — which is exactly the
+/// state that produces a "Connection refused" for somebody following a join
+/// command this machine printed.
+fn peer_channel_line(port: u16) -> Vec<String> {
+    use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    if TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok() {
+        vec![format!("peer channel: accepting on {port}")]
+    } else {
+        vec![
+            format!("peer channel: NOT listening on {port}"),
+            "  Other machines cannot join or reach this one. The agent itself is".to_string(),
+            "  fine — this is a second listener, and it retries, so the usual".to_string(),
+            "  cause is that something else still holds the port.".to_string(),
+            "  See why with the agent's log; it names the reason once.".to_string(),
+        ]
     }
 }
 

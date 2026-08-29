@@ -1,0 +1,102 @@
+recipe_version: "2"
+model: Inferact/Qwen3.8-Flash-Next-NVFP4
+runtime: atlas
+container: avarok/atlas-gb10:5be3fc1
+max_nodes: 1
+
+metadata:
+  description: |
+    Qwen3.8-Flash-Next (NVFP4) — a 48-layer hybrid (36 GDN linear-attention +
+    12 full-attention) MoE with 512 experts, top-10, and QSA sparse attention.
+
+    ⚠ REQUIRES AN ENGINE THAT HAS THE `qwen3.8-flash-next` KERNEL TARGET, and
+    `container:` above therefore PINS A DIGEST-STABLE TAG rather than `:latest`,
+    which every sibling recipe uses. That deviation is deliberate.
+
+    `avarok/atlas-gb10:5be3fc1` is built from main at 5be3fc1 and is the image
+    this recipe was verified against: 26 kernel targets including
+    `gb10/qwen3.8-flash-next/nvfp4` built for sm_121f, and a four-model matrix
+    at 49/49 with this checkpoint answering 10/10 coherence probes.
+
+    `:latest` is NOT used because 27 other recipes share it. Publishing a new
+    `:latest` would migrate all of them onto a build verified against four of
+    their models, to fix a problem only this recipe has. Pinning keeps the
+    blast radius at one recipe and makes what shipped reproducible.
+
+    Return this to `:latest` once a published `:latest` both carries Flash-Next
+    and has been verified across the recipes that depend on it. Until then, if
+    `atlasctl run` fails at load, the image is the first thing to check.
+
+    ★ THERE ARE TWO PUBLISHED CONVERSIONS AND THEY ARE NOT THE SAME WEIGHTS.
+    This recipe names `Inferact/…` deliberately. It ships the per-layer n-gram
+    embedding table as 128 BF16 tensors in one file; the other public conversion
+    ships it as 128 F8_E4M3 shards across ten files with a single global scale.
+    The engine REFUSES the FP8 layout at load, on purpose: the gather kernel
+    wired to that consumer reads BF16, so it would stride twice as far as a row
+    and apply no scale — loading it would produce fluent, wrong output rather
+    than an error. Point this recipe at the FP8 conversion and you get a clear
+    refusal; that refusal is the feature.
+
+    KV CACHE IS BF16 AND THAT IS NOT A TUNING KNOB. QSA's selection gather
+    copies raw NHD rows out of the paged cache, so a quantized cache has nothing
+    it can copy and the decode path refuses. The model's own MODEL.toml now
+    carries `default_kv_dtype = "bf16"`, so the bare command works; it is pinned
+    here as well so that reading this file tells you the truth about the
+    deployment without having to go and read the kernel target.
+
+    PROVENANCE — what below is measured, and what is not.
+
+    Measured 2026-08-29 on dgx1 (GB10, 121.7 GB), engine at integration
+    `22f1dbbc93`, this checkpoint (21 shards, 222 587 tensors), served with NO
+    flags beyond `--max-seq-len 2048`:
+
+      - loads and serves; 78.1 GB pre-KV of a 109.5 GB budget at 90% util,
+        10.4 GB reserve, KV cache 13.8 GB (37 755 blocks x 12 layers)
+      - 20 requests: 19.3 tok/s mean (10.8–21.2), TTFT 1079 ms mean (415–3862)
+      - 10/10 on a coherence set (capitals, arithmetic, RGB, leap year,
+        photosynthesis, antonym), greedy
+
+    NOT measured, and therefore not pinned here:
+
+      - any context above 2048. `max_model_len` below is deliberately modest.
+        The checkpoint's config declares 262144 positions, but nobody has run
+        this model at length on this engine, so treat a larger window as
+        untested rather than supported.
+      - `max_batch_size` above 1, prefix caching, speculative decode, and every
+        SSM cache geometry. The sibling 27B recipes pin those from a measured
+        gate run; there is no such run for this model yet, so they are ABSENT
+        here rather than copied. Copying a neighbour's tuning is how a recipe
+        acquires numbers nobody has ever observed.
+      - quality beyond the coherence floor above. Ten unambiguous questions
+        prove the embedding table and the decode path are wired correctly. They
+        are not a benchmark and must not be quoted as one.
+
+    In short: this recipe is a correct, conservative way to RUN the model. It is
+    not a performance profile, and it should gain one only from a gate run.
+
+  maintainer: Atlas
+  category: chat
+  model_params: 48 layers (36 GDN linear-attn + 12 full attention), MoE 512 experts top-10
+  model_dtype: nvfp4
+  quantization: NVFP4 (BF16 n-gram embedding table)
+  kv_dtype: bf16
+  updated: "2026-08-29"
+
+defaults:
+  host: 0.0.0.0
+  port: 8888
+  # Deliberately modest: 2048 is the only length this model has been served at
+  # on this engine. Raise it at run time (`--max-model-len …`) rather than
+  # editing this file, and treat the result as untested.
+  max_model_len: 2048
+  # One at a time. Batching is unmeasured for this checkpoint, and the memory
+  # picture above has ~10 GB of headroom, not a lot.
+  max_batch_size: 1
+  # 0.85, not the 0.90 the measurement above ran at. This box has frozen hard at
+  # 0.90 before and needed a power cycle, and the usual headroom lever -- fp8 KV
+  # -- is the one thing this model cannot use. 78.1 GB pre-KV + 10.4 GB reserve
+  # is 88.5 GB, comfortably inside 0.85 x 121.7 = 103.4 GB, so the lower number
+  # costs KV blocks and nothing else.
+  gpu_memory_utilization: 0.85
+  # Required by QSA, not a preference — see the note above.
+  kv_cache_dtype: bf16

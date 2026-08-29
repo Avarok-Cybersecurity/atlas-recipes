@@ -127,17 +127,36 @@ pub fn run(args: &RunArgs) -> Result<()> {
     let brings_own_weights = plan.docker.command.iter().any(|a| a == "--model-from-path");
     if !brings_own_weights
         && let Some(dir) = hfcache::hub_dir(Path::new(&host.hf_cache_dir), &recipe.model)
-        && !dir.exists()
     {
-        bail!(
-            "`{}` needs the model `{}`, which is not in {}.\n\
-                 The launch runs offline, so it cannot download it. Fetch it first:\n\
-                   hf download {}",
-            args.recipe,
-            recipe.model,
-            host.hf_cache_dir,
-            recipe.model
-        );
+        match hfcache::cache_state(&dir) {
+            hfcache::CacheState::Weights => {}
+            hfcache::CacheState::Absent => bail!(
+                "`{}` needs the model `{}`, which is not in {}.\n\
+                     The launch runs offline, so it cannot download it. Fetch it first:\n\
+                       hf download {}",
+                args.recipe,
+                recipe.model,
+                host.hf_cache_dir,
+                recipe.model
+            ),
+            // Distinct from Absent on purpose. `hf download` is the same fix,
+            // but "it is not there" is the wrong thing to tell someone who can
+            // SEE the directory: they check, find it, and conclude the tool is
+            // broken. Naming the state — present, but no weights — is what makes
+            // the instruction believable.
+            hfcache::CacheState::MetadataOnly => bail!(
+                "`{}` needs the model `{}`. Its cache directory exists in {}, but \
+                 holds no weight files — only metadata, which is what an \
+                 interrupted or metadata-only download leaves behind.\n\
+                     The launch runs offline, so it cannot fetch the rest. \
+                 Complete it with:\n\
+                       hf download {}",
+                args.recipe,
+                recipe.model,
+                host.hf_cache_dir,
+                recipe.model
+            ),
+        }
     }
 
     let runner = StdProcessRunner;

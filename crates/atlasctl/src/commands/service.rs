@@ -52,9 +52,24 @@ pub fn install(args: &crate::cli::AgentInstallArgs) -> Result<()> {
         // operator ends up pairing a browser against a five-second crash loop.
         println!("agent installed, but it is NOT running");
         println!("  the unit is enabled and the supervisor accepted it, so this is");
-        println!("  the agent exiting at startup. The usual cause is the port:");
-        println!("    an agent started by hand still holds {}.", args.port);
-        println!("  See why with:");
+        println!("  the agent exiting at startup.");
+        // Ask, do not assert. This used to state "the usual cause is the port"
+        // unconditionally -- and a real install then printed the ACTUAL cause a
+        // few lines later (a config directory owned by another uid). Two
+        // confident, contradictory explanations is worse than one honest "I
+        // cannot see why": the operator acts on the first, nothing changes, and
+        // they stop trusting the second.
+        match startup_obstacle(args.port) {
+            Some(why) => {
+                for line in why.lines() {
+                    println!("  {line}");
+                }
+            }
+            None => {
+                println!("  This installer could not see why from here — the log can:");
+            }
+        }
+        println!("  See the log with:");
         match done.kind {
             // `journalctl` does not exist on macOS, and it was the only thing
             // offered here — so the one diagnostic an operator was handed
@@ -226,4 +241,38 @@ pub(crate) fn uid_of(home: &std::path::Path) -> u32 {
 #[cfg(not(unix))]
 pub(crate) fn uid_of(_home: &std::path::Path) -> u32 {
     0
+}
+
+/// The reason an agent would exit at startup, when it is one this process can
+/// actually check.
+///
+/// Both checks are observations, not guesses: the config directory is inspected,
+/// and the port is probed by connecting to it. `None` means neither is wrong,
+/// which is a useful answer — it tells the operator to go and read the log
+/// rather than chase a cause that was never there.
+fn startup_obstacle(port: u16) -> Option<String> {
+    if let Ok(dir) = crate::configdir::resolve()
+        && let Some(why) = crate::configdir::diagnose(&dir)
+    {
+        return Some(format!(
+            "The reason is this node's config directory:\n{why}"
+        ));
+    }
+    if port_is_taken(port) {
+        return Some(format!(
+            "Something is already listening on {port}, so the agent cannot bind it.\n             The usual cause is an agent started by hand in another terminal.\n             Stop it, or install on a different port with `--port`."
+        ));
+    }
+    None
+}
+
+/// Whether something already answers on the loopback port.
+///
+/// A connect, not a bind: binding to test would race the agent the supervisor is
+/// starting right now and could report the port taken by the very process being
+/// installed.
+fn port_is_taken(port: u16) -> bool {
+    use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok()
 }
