@@ -42,6 +42,10 @@ metadata:
     batched verify path is bounded by the verify row cap over gamma-sized
     rows per sequence, so above that width the served engine is the base
     engine. The gate records that convergence rather than hiding it.
+  maintainer: Atlas
+  category: interactive
+  quantization: NVFP4 (compressed-tensors, mixed precision)
+  updated: "2026-08-29"
   tags:
     - qwen3.8
     - nvfp4
