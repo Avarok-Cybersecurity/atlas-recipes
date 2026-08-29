@@ -158,8 +158,17 @@ pub(super) fn scheduled_task(agent: &AgentInvocation, home: &Path) -> ServicePla
         // an agent that dies after a second would be seen alive on the way
         // past. So the first sighting only starts a second look a second
         // later, and both have to agree.
+        //
+        // THIRTY seconds, not ten. Ten was enough on a warm machine and not on
+        // a cold CI runner, where the agent has to start, read its config dir,
+        // load a token and probe docker before it reports Running -- and where
+        // probing for a docker that is not there is itself slow. The install
+        // then announced "installed, but it is NOT running" for an agent that
+        // was merely still starting, which is the exact false alarm this poll
+        // was written to prevent. The only cost of the larger deadline is that a
+        // genuinely dead agent takes longer to be called dead.
         verify: ps(&format!(
-            "$deadline = (Get-Date).AddSeconds(10); \
+            "$deadline = (Get-Date).AddSeconds(30); \
              $running = {{ (Get-ScheduledTask -TaskName '{SERVICE_NAME}' \
                  -ErrorAction SilentlyContinue).State -eq 'Running' }}; \
              do {{ \
