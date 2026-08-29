@@ -57,8 +57,15 @@ detect_target() {
 }
 
 # Verify a downloaded archive against the release's SHA256SUMS.
-# The SHA256 of a file, or "" when it cannot be read. One implementation, used
-# both by the download check and by `binary_differs` below.
+# The SHA256 of a file, or "" when it cannot be read -- used by
+# `binary_differs` to decide whether an upgrade is needed.
+#
+# `verify_checksum` deliberately does NOT share this: it must DIE when no
+# hasher exists, because installing an unverified binary is worse than not
+# installing, whereas this returns "" and lets the caller treat "cannot hash"
+# as "assume it differs" and reinstall -- the safe direction there. Two
+# failure semantics, so two implementations. (The comment here previously
+# claimed one shared implementation, which was simply untrue.)
 sha256_of() {
     [ -r "$1" ] || return 0
     if command -v sha256sum >/dev/null 2>&1; then
@@ -456,7 +463,22 @@ main() {
         shift
     done
     [ -z "$join" ] || info "will join the fleet at ${join#*@} once installed"
-    [ -z "$grant_control" ] || info "and will let that fleet run models on this machine"
+    # Announced only WITH a join, because it only happens with a join.
+    # `--grant-control` is meaningful solely alongside `--join`: the grant is
+    # written into this machine's pin of the inviter, so with no inviter there
+    # is nothing to write it into, and `install_agent` correspondingly forwards
+    # the flag on the join path alone. Printing the promise unconditionally told
+    # an operator who passed the flag without a join that their machine was now
+    # remotely drivable when nothing of the sort had been arranged -- a consent
+    # decision reported as made when it was silently dropped.
+    if [ -n "$grant_control" ]; then
+        if [ -n "$join" ]; then
+            info "and will let that fleet run models on this machine"
+        else
+            warn "--grant-control does nothing without --join, so it is being ignored."
+            warn "It grants control to the fleet you are JOINING; there is none here."
+        fi
+    fi
 
     need uname
     need tar
@@ -504,9 +526,12 @@ main() {
             rc=$(rc_file)
             warn "$dir is not on your PATH. Add it, e.g.:"
             if [ "$rc" = "fish" ]; then
-                warn "    fish_add_path $dir"
+                # Quoted, because $HOME can contain a space: an unquoted
+                # /Users/John Smith/.zshrc is a line that breaks when pasted,
+                # which is the one thing this message exists to avoid.
+                warn "    fish_add_path \"$dir\""
             else
-                warn "    echo 'export PATH=\"\$PATH:$dir\"' >> $rc"
+                warn "    echo 'export PATH=\"\$PATH:$dir\"' >> \"$rc\""
             fi
             ;;
     esac

@@ -283,18 +283,38 @@ case "$1" in
   --version) echo "atlasctl 9.9.9" ;;
   agent) case "$2" in
       status)  [ -n "${RUNNING:-}" ] && exit 0 || exit 1 ;;
-      install) echo "[fake] agent install ran" ;;
+      # The whole argv, not a fixed string. Echoing a constant made the
+    # forwarding of --join and --grant-control invisible: a mutation deleting
+    # both still passed every test here.
+    install) echo "[fake] agent install ran: $*" ;;
     esac ;;
 esac
 EOF
 chmod +x "$WORK/fake-atlasctl"
 
-agent_run() { # same_version join running supervised
+agent_run() { # same_version join running supervised [grant]
     ( . "$WORK/lib.sh"
       # shellcheck disable=SC2317  # both stubs are called by install_agent
       if [ "$4" = yes ]; then service_installed() { return 0; }; else service_installed() { return 1; }; fi
-      RUNNING="$3" install_agent "$WORK/fake-atlasctl" "$2" "" "$1" ) 2>&1
+      # $5 reaches install_agent as its $3. Nothing passed one before, so
+      # `${3:+"$3"}` -- the grant-control forwarding -- was never executed by
+      # any test, which is how a dropped flag shipped.
+      RUNNING="$3" install_agent "$WORK/fake-atlasctl" "$2" "${5:-}" "$1" ) 2>&1
 }
+
+# The flags actually reach the binary. Asserted on the fake's full argv,
+# because a constant string cannot distinguish "forwarded" from "dropped".
+contains "a join forwards --join to the agent" \
+    "$(agent_run yes '12345678@10.0.0.1' 1 yes)" "agent install --join 12345678@10.0.0.1"
+
+contains "a join forwards --grant-control too" \
+    "$(agent_run yes '12345678@10.0.0.1' 1 yes --grant-control)" \
+    "--join 12345678@10.0.0.1 --grant-control"
+
+# ...and does NOT invent one on the path that has no inviter. `--grant-control`
+# is meaningful only with `--join`, so the no-join path must not forward it.
+check "no join means no --grant-control on the command line" "" \
+    "$(agent_run '' '' '' no --grant-control | grep -o '\-\-grant-control' | head -1)"
 
 contains "a fresh install installs the service" \
     "$(agent_run '' '' '' no)" "[fake] agent install ran"
