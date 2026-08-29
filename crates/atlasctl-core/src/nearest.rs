@@ -14,6 +14,12 @@
 /// A quarter of the longer of the two names: floored at 2 so a short name still
 /// catches a near miss, and capped at 5 so an unrelated string prints nothing
 /// rather than three wrong guesses.
+/// How much of a name must be typed before a prefix counts as "meant".
+///
+/// Four is enough that `qwen` does not offer three arbitrary recipes while
+/// `qwen3.8-flash-next` finds the one it is the front of.
+const PREFIX_MIN: usize = 4;
+
 const fn max_edits(len: usize) -> usize {
     match len / 4 {
         0 | 1 => 2,
@@ -63,6 +69,18 @@ where
         .into_iter()
         .filter_map(|c| {
             let name = c.as_ref();
+            // An incomplete name is not a typo, and edit distance rejects the
+            // case that happens most: the family without the quant suffix.
+            // `qwen3.8-flash-next` is six edits from `qwen3.8-flash-next-nvfp4`
+            // — past any sane typo threshold — and is the obvious thing to type,
+            // because it is what the model is called. Rank those first: the
+            // operator knows the name, they just did not finish it.
+            //
+            // Length-gated so a stray couple of characters cannot list three
+            // arbitrary recipes with confidence.
+            if typed_len >= PREFIX_MIN && name.len() > typed.len() && name.starts_with(typed) {
+                return Some((0, name.to_string()));
+            }
             let d = edit_distance(typed, name);
             (d <= max_edits(typed_len.max(name.chars().count()))).then(|| (d, name.to_string()))
         })
