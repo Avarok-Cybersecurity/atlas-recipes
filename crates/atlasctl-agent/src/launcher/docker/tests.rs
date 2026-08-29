@@ -7,6 +7,27 @@ use atlasctl_core::io::RecordingRunner;
 use atlasctl_core::io::process::Output;
 use atlasctl_core::recipe::Provenance;
 
+/// A cache root that really holds `org/m`'s weights.
+///
+/// The launcher refuses to start a recipe whose model is missing from the cache,
+/// because the launch runs offline and the container would otherwise fail after
+/// the image pull with nothing useful on screen. These tests are about the
+/// docker command rather than the cache, so they need one that satisfies that
+/// guard — and building it here, rather than weakening the guard for tests,
+/// keeps the production path honest.
+fn cache_with_model() -> &'static std::path::Path {
+    static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let root =
+            std::env::temp_dir().join(format!("atlasctl-launch-cache-{}", std::process::id()));
+        let snap = root.join("hub/models--org--m/snapshots/deadbeef");
+        std::fs::create_dir_all(&snap).expect("mkdir cache");
+        std::fs::write(snap.join("config.json"), b"{}").expect("write config");
+        std::fs::write(snap.join("model.safetensors"), b"weights").expect("write weights");
+        root
+    })
+}
+
 fn host() -> HostSnapshot {
     HostSnapshot {
         posix_user: Some(PosixUser {
@@ -14,7 +35,7 @@ fn host() -> HostSnapshot {
             gid: 1000,
         }),
         home: "/home/spark".into(),
-        hf_cache_dir: "/home/spark/.cache/huggingface".into(),
+        hf_cache_dir: cache_with_model().display().to_string(),
         env: BTreeMap::new(),
     }
 }
@@ -227,4 +248,73 @@ fn docker_being_unavailable_is_reported_as_such() {
         matches!(err, AgentError::DockerUnavailable { .. }),
         "{err:?}"
     );
+}
+
+/// A model that is not in the cache is refused BEFORE docker is invoked.
+///
+/// The launch runs offline, so an absent model cannot be fetched; without this
+/// the container starts, fails inside on the Hub library's own cache-miss, and
+/// exits — and a browser operator sees only that it stopped. The assertion that
+/// the runner recorded nothing is the point: refusing late would still "fail",
+/// just uselessly.
+#[test]
+fn a_model_missing_from_the_cache_is_refused_without_running_docker() {
+    let runner = Arc::new(RecordingRunner::new());
+    let mut h = host();
+    h.hf_cache_dir = std::env::temp_dir()
+        .join(format!("atlasctl-empty-cache-{}", std::process::id()))
+        .display()
+        .to_string();
+    let l = DockerLauncher::new(runner.clone(), h, &ROOTLESS_V1, Box::new(NvidiaDevices));
+
+    let err = l
+        .launch(&recipe(), &BTreeMap::new())
+        .expect_err("an absent model must be refused");
+    let AgentError::LaunchFailed { detail } = err else {
+        panic!("expected LaunchFailed, got {err:?}");
+    };
+    assert!(detail.contains("org/m"), "must name the model: {detail}");
+    assert!(
+        detail.contains("hf download"),
+        "must say how to fix it: {detail}"
+    );
+    assert!(
+        runner.calls().is_empty(),
+        "docker must not be invoked at all, got {:?}",
+        runner.calls()
+    );
+}
+
+/// A cache directory that exists but holds no weights is refused, and says so.
+///
+/// `Path::exists` on the model directory is not enough: an interrupted or
+/// metadata-only download leaves `refs/`, `snapshots/` and a `config.json`
+/// behind. Telling that operator the model is "not there" when they can see the
+/// directory reads as a broken tool, so the message names the real state.
+#[test]
+fn a_metadata_only_cache_entry_is_refused_and_named_as_such() {
+    let runner = Arc::new(RecordingRunner::new());
+    let root = std::env::temp_dir().join(format!("atlasctl-meta-cache-{}", std::process::id()));
+    let snap = root.join("hub/models--org--m/snapshots/deadbeef");
+    std::fs::create_dir_all(&snap).expect("mkdir");
+    std::fs::write(snap.join("config.json"), b"{}").expect("write config");
+    // Deliberately no weight file.
+
+    let mut h = host();
+    h.hf_cache_dir = root.display().to_string();
+    let l = DockerLauncher::new(runner.clone(), h, &ROOTLESS_V1, Box::new(NvidiaDevices));
+
+    let err = l
+        .launch(&recipe(), &BTreeMap::new())
+        .expect_err("a weightless cache entry must be refused");
+    let AgentError::LaunchFailed { detail } = err else {
+        panic!("expected LaunchFailed, got {err:?}");
+    };
+    assert!(
+        detail.contains("no weight files"),
+        "must name the real state rather than claiming absence: {detail}"
+    );
+    assert!(runner.calls().is_empty(), "docker must not be invoked");
+
+    std::fs::remove_dir_all(&root).ok();
 }

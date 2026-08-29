@@ -102,6 +102,44 @@ impl Launcher for DockerLauncher {
         let plan = self.plan(recipe, overrides)?;
         let name = plan.docker.name.clone();
 
+        // The same guard `atlasctl run` applies, because this path has an
+        // operator too — they are just in a browser instead of a terminal, and
+        // they get LESS to work with, not more: the launch runs offline, so a
+        // missing model fails inside a container that has already exited, and
+        // all the browser can show is that it stopped.
+        //
+        // Skipped when the recipe brings its own weights (`--model-from-path`),
+        // since then the Hub cache is never consulted.
+        if !plan.docker.command.iter().any(|a| a == "--model-from-path")
+            && let Some(dir) = atlasctl_core::hfcache::hub_dir(
+                std::path::Path::new(&self.host.hf_cache_dir),
+                &recipe.model,
+            )
+        {
+            use atlasctl_core::hfcache::CacheState;
+            let detail = match atlasctl_core::hfcache::cache_state(&dir) {
+                CacheState::Weights => None,
+                CacheState::Absent => Some(format!(
+                    "the model `{}` is not in this machine's HuggingFace cache ({}). \
+                     The launch runs offline, so it cannot download it — fetch it \
+                     first with `hf download {}`.",
+                    recipe.model, self.host.hf_cache_dir, recipe.model
+                )),
+                // Named separately: telling someone it is "not there" when they
+                // can see the directory reads as a broken tool, and they stop
+                // trusting the instruction that follows.
+                CacheState::MetadataOnly => Some(format!(
+                    "the model `{}` has a cache directory in {} but no weight \
+                     files — what an interrupted or metadata-only download \
+                     leaves behind. Complete it with `hf download {}`.",
+                    recipe.model, self.host.hf_cache_dir, recipe.model
+                )),
+            };
+            if let Some(detail) = detail {
+                return Err(AgentError::LaunchFailed { detail });
+            }
+        }
+
         // Clear a previous container of the same name. Failure is expected when
         // nothing is there; the launch below is what has to succeed.
         let _ = self
