@@ -305,6 +305,17 @@ fn bind_failure(port: u16, agent_running: bool) -> String {
         // would have asserted "your agent is running" while the real holder,
         // another `agent pair`, went unnamed. A check that cannot distinguish
         // two causes should name both, not pick one.
+        // Deliberately does NOT name `agent status` as the way to tell them
+        // apart. That command probes the same BROWSER port this branch was
+        // just refused on (`agentinfo::status`, and `AgentStatusArgs::port`
+        // defaults to `DEFAULT_PORT`), so on the very machine this text
+        // describes -- an agent installed `--no-browser`, which binds no
+        // browser port at all -- it answers "not running" and then advises
+        // starting a second agent. That is the outcome `status_advice`'s own
+        // comments exist to prevent, and no `--port` value makes it answer.
+        //
+        // So name the FACT the operator already knows instead of a command
+        // that cannot see it: did you install an agent on this machine?
         format!(
             "could not bind the peer port {port}. Either this machine's agent \
              holds it — it binds the same port, and one installed with \
@@ -312,11 +323,11 @@ fn bind_failure(port: u16, agent_running: bool) -> String {
              probe above — or another `atlasctl agent pair` is already \
              waiting.\n\
              \n\
-             Check with:  {} agent status\n\
-             If it is the agent, add machines through its join window instead: \
-             open the control page on the machine you are adding this one FROM \
-             and use \"Show me how\".",
-            env!("CARGO_BIN_NAME")
+             If you installed an agent on THIS machine, it is almost certainly \
+             the agent: add machines through its join window instead — open \
+             the control page on the machine you are adding this one FROM and \
+             use \"Show me how\". If you did not, look for the other \
+             `atlasctl agent pair`."
         )
     }
 }
@@ -348,9 +359,19 @@ mod tests {
             msg.contains("--no-browser"),
             "must also name the agent that did not answer the probe: {msg}"
         );
+        // NOT `agent status`: it probes the same browser port this branch was
+        // refused on, so on a `--no-browser` machine it says "not running" and
+        // sends the operator to start a second agent. An earlier version of
+        // this test asserted the string was PRESENT, which pinned the wrong
+        // claim -- it proved the text mentioned a command, not that the command
+        // could answer.
         assert!(
-            msg.contains("agent status"),
-            "and must give the command that distinguishes them: {msg}"
+            !msg.contains("agent status"),
+            "must not name a command that probes the port that just failed: {msg}"
+        );
+        assert!(
+            msg.contains("installed an agent on THIS machine"),
+            "must name the fact the operator already knows: {msg}"
         );
     }
 
