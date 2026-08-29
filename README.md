@@ -72,6 +72,32 @@ atlasctl run <recipe> --rank 1 --world-size 2 --master-addr 10.10.10.1
 A multi-node recipe refuses to launch on a single node rather than quietly
 serving something smaller than the recipe describes.
 
+## When a model does not start
+
+Launches run detached and with `--rm`, so a container that fails at load is
+removed and takes its logs with it. `atlasctl run` notices and says so rather
+than reporting a container that has already gone as started — but by then the
+reason is unrecoverable.
+
+Re-run keeping the container, and the logs survive:
+
+```sh
+atlasctl run <recipe> --no-rm
+atlasctl logs <recipe>
+```
+
+The usual causes, in the order they are worth checking:
+
+| symptom | cause |
+|---|---|
+| exits within seconds, no output | the image has no kernel target for that checkpoint |
+| refuses the KV dtype at load | the recipe's `kv_cache_dtype` is not one this model supports |
+| exits during weight load | not enough memory — lower `gpu_memory_utilization` or `max_model_len` |
+
+`atlasctl run <recipe> --print` shows the exact `docker run` without executing
+it, which is worth reading before trusting it, and is what to paste into a bug
+report.
+
 ## Ports
 
 Two, and they fail independently, which is why they are worth telling apart.
