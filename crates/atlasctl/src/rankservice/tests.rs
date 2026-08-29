@@ -176,6 +176,49 @@ fn a_second_clusters_prepare_is_refused_while_one_is_held() {
     assert!(reason.contains("abort that launch"), "{reason}");
 }
 
+/// A reservation whose head went away must not hold this machine forever.
+///
+/// The failure it prevents: an operator prepares, then the tab closes or the
+/// head agent restarts before commit or abort. Nothing on this machine ever
+/// released the hold, so every later cluster launch was refused -- and the
+/// refusal said "abort that launch, or wait for it to finish", when abort
+/// needs the epoch that went away with the head and it never finished. On a
+/// fleet that bricks every machine at once until each agent is restarted by
+/// hand.
+#[test]
+fn a_reservation_whose_head_vanished_lapses_and_the_refusal_says_when() {
+    let runner = Arc::new(RecordingRunner::new());
+    let svc = service(&runner, Ok(()));
+    let a = agreeing(&svc, 1);
+
+    assert_eq!(svc.prepare("abandoned", &a), PrepareReply::Prepared);
+
+    // While it is fresh, another cluster is still refused -- and now the
+    // refusal states how long waiting would take, which is the only reason
+    // telling someone to wait is fair.
+    let PrepareReply::Refused { reason } = svc.prepare("other", &a) else {
+        panic!("a fresh reservation must still block another cluster");
+    };
+    assert!(reason.contains("already reserved"), "{reason}");
+    assert!(
+        reason.contains("lapse"),
+        "the refusal must say waiting works: {reason}"
+    );
+
+    // Age it past the TTL, exactly as an abandoned head would.
+    {
+        let mut held = svc.reserved.lock().expect("reservation lock poisoned");
+        let r = held.as_mut().expect("still reserved");
+        r.made = std::time::Instant::now()
+            - (super::RESERVATION_TTL + std::time::Duration::from_secs(1));
+    }
+    assert_eq!(
+        svc.prepare("other", &a),
+        PrepareReply::Prepared,
+        "a lapsed reservation must not keep refusing new clusters"
+    );
+}
+
 /// A retried prepare after a dropped connection is ordinary, not a second
 /// cluster.
 #[test]

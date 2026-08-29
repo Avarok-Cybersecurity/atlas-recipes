@@ -326,11 +326,19 @@ pub enum RefusalReason {
     /// What they actually need to do is abandon the other launch.
     #[error(
         "this node is already reserved for a launch of {recipe}; \
-         abort that launch, or wait for it to finish, before starting another"
+         abort that launch, or wait {expires_in_s}s for the reservation to \
+         lapse, before starting another"
     )]
     Reserved {
         /// Which recipe the outstanding reservation is for.
         recipe: String,
+        /// Seconds until this machine will release the hold on its own.
+        ///
+        /// Named in the message because the old text said "wait for it to
+        /// finish" of something that never finished: a reservation whose head
+        /// went away was permanent, and abort needs the epoch that went away
+        /// with it. Telling an operator to wait is only fair if waiting works.
+        expires_in_s: u64,
     },
     /// The rendezvous address is on a link this node is not attached to.
     ///
