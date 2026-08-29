@@ -118,8 +118,19 @@ fn check_sparkrun() -> usize {
     1
 }
 
-/// Where the agent keeps its identity, its pins and its browser token.
 /// Free space where docker and the model cache live.
+///
+/// Measured at the HF cache, not at the current directory. It used to read
+/// `Path::new(".")`, which answers about whatever volume the operator happened
+/// to `cd` into: on a box whose models live on a separate mount, doctor printed
+/// `disk: ok` while `run` immediately warned, and run from a small partition it
+/// failed a healthy machine -- which `disk_unknown`'s own doc says must not
+/// happen. `run` has always measured `host.hf_cache_dir` (run.rs:96); this now
+/// asks the same question of the same volume.
+///
+/// Falls back to `.` when the cache directory does not exist yet, which is the
+/// ordinary state of a machine that has never pulled a model. Reporting
+/// "unknown" there would be a regression from a usable answer to none.
 ///
 /// Read with `df -Pk`: POSIX output is one line per filesystem with a fixed
 /// column order, which `df` without `-P` does not guarantee — a long device
@@ -129,12 +140,29 @@ fn check_sparkrun() -> usize {
 /// unreadable `df` says nothing about whether there is room, and doctor now
 /// exits non-zero on a problem, so guessing here would fail a healthy box.
 fn check_disk() -> Finding {
-    match atlasctl_core::platform::free_bytes(std::path::Path::new(".")) {
-        Some(bytes) => doctor_checks::disk_space(bytes, "."),
-        None => doctor_checks::disk_unknown(),
+    let cache = crate::hostinfo::snapshot().ok().map(|h| h.hf_cache_dir);
+    let at_cache = cache
+        .as_deref()
+        .and_then(|d| atlasctl_core::platform::free_bytes(std::path::Path::new(d)));
+    let at_cwd = atlasctl_core::platform::free_bytes(std::path::Path::new("."));
+    disk_finding(cache.as_deref().zip(at_cache), at_cwd)
+}
+
+/// Which measurement to report, given what could be read.
+///
+/// Split from the I/O so the ORDER is testable: preferring the cache is the
+/// whole point of the fix, and falling back to `.` rather than to "unknown"
+/// is what keeps a machine that has never pulled a model from losing a usable
+/// answer. Both are one-line mistakes to make and invisible without a test.
+fn disk_finding(at_cache: Option<(&str, u64)>, at_cwd: Option<u64>) -> Finding {
+    match (at_cache, at_cwd) {
+        (Some((dir, bytes)), _) => doctor_checks::disk_space(bytes, dir),
+        (None, Some(bytes)) => doctor_checks::disk_space(bytes, "."),
+        (None, None) => doctor_checks::disk_unknown(),
     }
 }
 
+/// Where the agent keeps its identity, its pins and its browser token.
 fn check_config_dir() -> Finding {
     match crate::hostinfo::usable_config_dir() {
         Ok(dir) => doctor_checks::config_dir(ConfigDirState::Writable(dir.display().to_string())),
@@ -178,5 +206,38 @@ fn check_reachable() -> Finding {
             doctor_checks::reachable(&addrs)
         }
         Err(e) => doctor_checks::unreadable_interfaces(&format!("{e:#}")),
+    }
+}
+
+#[cfg(test)]
+mod disk_tests {
+    use super::*;
+
+    const PLENTY: u64 = 500 * 1024 * 1024 * 1024;
+
+    /// The cache volume wins when it can be read, and the line SAYS which
+    /// volume it measured — the old code reported `.` and meant it.
+    #[test]
+    fn the_model_cache_is_preferred_and_named() {
+        let f = disk_finding(Some(("/mnt/models", PLENTY)), Some(1));
+        assert!(f.line.contains("/mnt/models"), "got: {}", f.line);
+        assert!(!f.line.contains(" on ."), "got: {}", f.line);
+    }
+
+    /// A machine that has never pulled a model has no cache directory, and
+    /// answering "unknown" there would be a regression from a usable answer.
+    #[test]
+    fn an_unreadable_cache_falls_back_to_the_cwd_not_to_unknown() {
+        let f = disk_finding(None, Some(PLENTY));
+        assert!(f.line.contains('.'), "got: {}", f.line);
+        assert!(!f.problem, "plenty of space is not a fault");
+    }
+
+    /// Only when NEITHER can be read is it unknown — reported as ok, because
+    /// an unreadable `df` says nothing about whether there is room.
+    #[test]
+    fn unknown_only_when_nothing_could_be_measured() {
+        let f = disk_finding(None, None);
+        assert!(!f.problem, "an unmeasurable box must not be failed");
     }
 }

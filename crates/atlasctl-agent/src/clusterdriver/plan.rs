@@ -175,4 +175,12 @@ impl ClusterDriver {
 /// Not a silent fallback: it is the serving runtime's own default, it is only
 /// reached once both layers above have been asked, and it only ever decorates
 /// a URL shown to a human — nothing is launched from it.
-const DEFAULT_SERVE_PORT: u16 = 8000;
+///
+/// It was 8000, and the engine has never defaulted to 8000. `serve_port`'s own
+/// doc above describes the resulting symptom precisely -- "the endpoint told
+/// them `:8000` while the model served on `:8888`" -- and fixed it for layer 2
+/// while this layer went on reproducing it whenever the recipe pins no port.
+/// A comment asserting a value is the runtime's default is not a check, so
+/// `the_fallback_port_is_the_engines_own_default` now asserts it against
+/// `vendor/serve-options.v1.json`, which is reflected out of the engine's clap.
+pub(super) const DEFAULT_SERVE_PORT: u16 = 8888;
