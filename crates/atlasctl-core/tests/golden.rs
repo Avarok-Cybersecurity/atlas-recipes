@@ -105,6 +105,40 @@ fn render(recipe: &Recipe) -> String {
     out
 }
 
+/// Every recipe in the corpus must parse.
+///
+/// Nothing asserted this, and three separate things conspire to hide a recipe
+/// that does not: the golden test below SKIPS it (`let Ok(recipe) = … else
+/// continue`), `atlasctl list` omits it, and `show` is the only command that
+/// says why. So a malformed recipe is invisible — CI green, the listing one
+/// short, and no message anywhere.
+///
+/// That is not hypothetical. An open pull request has sat for six weeks adding
+/// three recipes whose `defaults.env` is a map where the schema requires
+/// scalars. They render nothing, list nowhere, and every check passes.
+///
+/// Skipping an unparseable recipe is right for the golden test — it has nothing
+/// to render — but only because THIS test refuses to let one exist.
+#[test]
+fn every_recipe_in_the_corpus_parses() {
+    let mut bad = Vec::new();
+    for e in atlas_recipes_data::all() {
+        let prov = Provenance::Builtin {
+            path: e.path.to_string(),
+        };
+        if let Err(err) = Recipe::parse(e.name, e.yaml, prov) {
+            bad.push(format!("{}: {err:#}", e.path));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "{} recipe(s) in the corpus do not parse, so they ship as files that \
+         nothing can load:\n  {}",
+        bad.len(),
+        bad.join("\n  ")
+    );
+}
+
 #[test]
 fn rendered_commands_match_their_goldens() {
     let dir = golden_dir();
