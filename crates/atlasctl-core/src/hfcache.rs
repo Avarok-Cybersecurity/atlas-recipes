@@ -137,24 +137,29 @@ mod tests {
 
     /// Build a cache entry: `files` are created under a snapshot directory,
     /// each as a real file unless its name is prefixed `dangling:`.
+    /// Build a cache entry holding `files` as real files under one snapshot.
     fn entry(root: &Path, model: &str, files: &[&str]) -> PathBuf {
         let dir = hub_dir(root, model).expect("hub id");
         let snap = dir.join("snapshots").join("deadbeef");
         std::fs::create_dir_all(&snap).expect("mkdir");
         std::fs::create_dir_all(dir.join("blobs")).expect("mkdir blobs");
         for f in files {
-            match f.strip_prefix("dangling:") {
-                Some(name) => {
-                    // A weight whose blob was reclaimed — the state a partial
-                    // cache cleanup leaves behind.
-                    #[cfg(unix)]
-                    std::os::unix::fs::symlink(dir.join("blobs/gone"), snap.join(name))
-                        .expect("symlink");
-                }
-                None => std::fs::write(snap.join(f), b"x").expect("write"),
-            }
+            std::fs::write(snap.join(f), b"x").expect("write");
         }
         dir
+    }
+
+    /// Add a weight whose blob is missing — the state a partial cache cleanup
+    /// leaves behind.
+    ///
+    /// Unix-only, and kept OUT of `entry` on purpose: expressing it as a
+    /// magic filename prefix meant the Windows build had a bound name it could
+    /// not use, which `#![deny(warnings)]` rejects. A separate function is
+    /// gated as a whole, so there is nothing left over to be unused.
+    #[cfg(unix)]
+    fn add_dangling_weight(dir: &Path, name: &str) {
+        let snap = dir.join("snapshots").join("deadbeef");
+        std::os::unix::fs::symlink(dir.join("blobs/gone"), snap.join(name)).expect("symlink");
     }
 
     #[test]
@@ -191,11 +196,8 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("atlasctl-hf-dangle-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
 
-        let d = entry(
-            &tmp,
-            "org/reclaimed",
-            &["config.json", "dangling:model.safetensors"],
-        );
+        let d = entry(&tmp, "org/reclaimed", &["config.json"]);
+        add_dangling_weight(&d, "model.safetensors");
         assert_eq!(cache_state(&d), CacheState::MetadataOnly);
 
         std::fs::remove_dir_all(&tmp).ok();
