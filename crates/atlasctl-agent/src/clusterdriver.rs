@@ -464,29 +464,6 @@ impl ClusterControl for ClusterDriver {
     }
 }
 
-impl ClusterDriver {
-    /// Stop the ranks that already started, so a failed commit leaves nothing
-    /// running. Failures are ignored for the same reason rollback ignores them:
-    /// the operator needs the original error, not this one.
-    fn stop_started(&self, started: &[RankStarted], targets: &[&Target]) {
-        for r in started {
-            let Some(t) = targets.iter().find(|t| t.assignment.node == r.node) else {
-                continue;
-            };
-            match t.addr {
-                None => {
-                    let _ = self.rank.stop(&r.container);
-                }
-                // Best effort: supervision already knows something is wrong
-                // and has no operator waiting on a return value.
-                Some(addr) => {
-                    let _ = self.transport.stop(t.assignment.node, addr, &r.container);
-                }
-            }
-        }
-    }
-}
-
 mod types;
 pub(crate) use types::*;
 
