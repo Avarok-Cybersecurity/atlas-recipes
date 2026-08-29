@@ -173,8 +173,26 @@ pub fn logs(args: &LogsArgs) -> Result<()> {
     // TYPED misses exactly the case the label lookup was added for: `logs
     // @registry/q` would query `label=…=@registry/q` against a label of `q`.
     // `stop` has always passed the resolved name for this reason.
-    let resolved = known_recipe(&args.recipe)?;
-    logs_with(&StdProcessRunner, args, &resolved)
+    match known_recipe(&args.recipe) {
+        Ok(resolved) => logs_with(&StdProcessRunner, args, &resolved),
+        // The catalogue could not answer. `stop` has always fallen back to the
+        // label here, for the reason `containers_for_recipe` states: the label
+        // "survives a registry being removed". `logs` propagated the error
+        // instead, so the one property the label lookup exists for was
+        // unreachable from it -- an unreadable registries.yaml stranded the
+        // logs of a container this fleet is running.
+        //
+        // The typed name is the only handle left, and it is what the label
+        // would carry for an unqualified recipe. If nothing is running under
+        // it, the resolve error stands, so a TYPO still gets its "did you
+        // mean".
+        Err(unresolved) => {
+            if containers_for_recipe(&StdProcessRunner, &args.recipe, true)?.is_empty() {
+                return Err(unresolved);
+            }
+            logs_with(&StdProcessRunner, args, &args.recipe)
+        }
+    }
 }
 
 /// `logs`, with the runner injected so the not-started path is testable.
@@ -209,7 +227,21 @@ fn logs_with(runner: &dyn ProcessRunner, args: &LogsArgs, resolved: &str) -> Res
         // printed "started atlas-X-rank0" and, on the very next line,
         // "logs: atlasctl logs X --follow", a command that then denied the
         // container existed.
-        let found = containers_for_recipe(runner, resolved, true)?;
+        // Running first, then widen. Asking with `-a` straight away made two
+        // things worse: the multi-match arm counted a crashed rank alongside a
+        // live one and bailed where the old code streamed the live one, and it
+        // said "is running" about a container that had exited. Containers do
+        // survive exit -- `run --no-rm` keeps them, which is the whole reason
+        // reading their logs matters.
+        let mut found = containers_for_recipe(runner, resolved, false)?;
+        let mut any_running = !found.is_empty();
+        if found.len() != 1 {
+            let with_exited = containers_for_recipe(runner, resolved, true)?;
+            if found.is_empty() || with_exited.len() > found.len() {
+                found = with_exited;
+                any_running = false;
+            }
+        }
         match found.len() {
             0 => bail!(
                 "no container for `{}` on this machine — it has not been started here. `atlasctl status` lists what is running",
@@ -219,11 +251,15 @@ fn logs_with(runner: &dyn ProcessRunner, args: &LogsArgs, resolved: &str) -> Res
             // Several ranks on this box. Naming one for the operator would be a
             // guess about which one they meant, and the ranks do not log the
             // same thing; say what is there instead.
+            // "has", not "is running as": with exited containers in the list
+            // the second claim is simply false, and the operator is most
+            // likely here BECAUSE one of them died.
             _ => bail!(
-                "`{}` is running as {} containers on this machine: {}. \
+                "`{}` has {} containers on this machine{}: {}. \
                  Read one with:  docker logs --tail 200 -f <name>",
                 args.recipe,
                 found.len(),
+                if any_running { "" } else { " (none running)" },
                 found.join(", ")
             ),
         }

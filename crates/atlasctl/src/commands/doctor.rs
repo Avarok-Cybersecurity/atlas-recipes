@@ -149,10 +149,31 @@ fn check_disk() -> Finding {
     // It also makes the `.` fallback real. It was previously unreachable for the
     // same reason: `free_bytes` almost never returns `None`, so the commit that
     // added it claimed a fallback that could not happen.
+    // The nearest EXISTING ancestor of the cache, not the cwd.
+    //
+    // Falling back to `.` was wrong in the direction this file forbids: on a
+    // machine that has never pulled a model -- "the ordinary state" -- it
+    // measured whatever volume the operator happened to `cd` into, and
+    // `disk_space` fails below an absolute floor. Run from a small partition,
+    // doctor then FAILS a healthy box, which is exactly the regression the doc
+    // above records.
+    //
+    // Walking up gives the filesystem that WOULD hold the cache, which is the
+    // question being asked, and labelling it with the ancestor keeps the number
+    // and the path describing the same volume.
     let cache = crate::hostinfo::snapshot()
         .ok()
         .map(|h| h.hf_cache_dir)
-        .filter(|d| std::path::Path::new(d).exists());
+        .map(|d| {
+            let mut probe = std::path::PathBuf::from(&d);
+            while !probe.exists() {
+                match probe.parent() {
+                    Some(up) => probe = up.to_path_buf(),
+                    None => break,
+                }
+            }
+            probe.display().to_string()
+        });
     let at_cache = cache
         .as_deref()
         .and_then(|d| atlasctl_core::platform::free_bytes(std::path::Path::new(d)));

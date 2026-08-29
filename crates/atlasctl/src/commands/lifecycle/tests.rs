@@ -377,37 +377,45 @@ mod logs_finds_what_run_started {
         );
     }
 
-    /// A CRASHED container still has logs, and reading them is the likeliest
-    /// reason to run this command at all.
+    /// A CRASHED container is found, and only by widening.
     ///
-    /// The exact-name probe uses `ps -a` deliberately. The label fallback did
-    /// not, so it could only ever find a container that was still running —
-    /// fixing the rank case for healthy containers and not for the ones anyone
-    /// actually needs to read.
+    /// The lookup asks for RUNNING containers first and widens to `-a` only if that
+    /// does not land on exactly one. Asking with `-a` up front counted a dead rank
+    /// alongside a live one, which both made the multi-match message claim "is
+    /// running" about a corpse and bailed where the old code streamed the live one.
     #[test]
-    fn the_label_query_includes_exited_containers() {
+    fn a_crashed_container_is_found_by_widening_to_exited() {
         let r = RecordingRunner::new();
-        r.push_result(Output {
+        let empty = || Output {
             status: 0,
             stdout: String::new(),
             stderr: String::new(),
-        });
+        };
+        r.push_result(empty()); // exact name: nothing
+        r.push_result(empty()); // label, running only: nothing
         r.push_result(Output {
             status: 0,
             stdout: "atlas-x-rank0\n".into(),
             stderr: String::new(),
-        });
-        r.push_result(Output {
-            status: 0,
-            stdout: String::new(),
-            stderr: String::new(),
-        });
+        }); // label, widened to -a
+        r.push_result(empty()); // docker logs
 
-        logs_with(&r, &args("x"), "x").expect("must stream");
-        let label_call = &r.calls()[1];
+        logs_with(&r, &args("x"), "x").expect("must stream the crashed container");
+
+        let running_first = &r.calls()[1];
         assert!(
-            label_call.contains(&"-a".to_string()),
-            "the label lookup must include exited containers: {label_call:?}"
+            !running_first.contains(&"-a".to_string()),
+            "the first label query must be running-only: {running_first:?}"
+        );
+        let widened = &r.calls()[2];
+        assert!(
+            widened.contains(&"-a".to_string()),
+            "must widen to exited when nothing is running: {widened:?}"
+        );
+        let streamed = r.calls().last().cloned().unwrap_or_default();
+        assert!(
+            streamed.contains(&"atlas-x-rank0".to_string()),
+            "must read the container the widened query found: {streamed:?}"
         );
     }
 
