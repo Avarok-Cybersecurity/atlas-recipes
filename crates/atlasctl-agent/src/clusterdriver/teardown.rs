@@ -211,6 +211,37 @@ fn a_rank_that_dies_after_commit_tears_the_cluster_down() {
     );
 }
 
+/// A second cluster must be refused while one is running.
+///
+/// Nothing used to stop it, and committing was destructive in both directions:
+/// with the SAME recipe each rank's `docker rm -f` silently killed the live
+/// cluster mid-service, and with a different one both ran, contending for the
+/// GPUs, while the second commit overwrote the record of the first -- leaving
+/// the original with no Stop button that knew about it.
+#[test]
+fn a_second_cluster_is_refused_while_one_is_running() {
+    let log = new_log();
+    let (d, _) = driver(ready_rank(&log), transport(&log));
+    let (epoch, _, _) = d
+        .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .expect("prepares");
+    d.commit(&epoch).expect("commits");
+
+    let before = calls(&log).len();
+    let err = d
+        .prepare(&recipe(), &all_three(), node_id(1), &BTreeMap::new())
+        .expect_err("a second cluster must be refused while one runs");
+    assert!(err.contains("already running"), "{err}");
+    assert!(err.contains("stop it"), "must say what to do: {err}");
+    // And it must refuse BEFORE touching a machine: a refusal that has already
+    // dialled three peers has already done the damage it was avoiding.
+    assert_eq!(
+        calls(&log).len(),
+        before,
+        "the refusal must not reach any machine"
+    );
+}
+
 /// Supervising when nothing is running must not reach for the network.
 #[test]
 fn supervising_an_idle_agent_does_nothing() {
