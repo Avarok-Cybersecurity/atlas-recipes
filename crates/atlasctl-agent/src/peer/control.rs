@@ -156,7 +156,6 @@ pub struct ControlDriver {
     pins: PinStore,
     fleet: Arc<crate::fleet::LocalFleet>,
     peer_port: u16,
-    runtime: tokio::runtime::Handle,
 }
 
 impl std::fmt::Debug for ControlDriver {
@@ -173,40 +172,38 @@ impl ControlDriver {
         pins: PinStore,
         fleet: Arc<crate::fleet::LocalFleet>,
         peer_port: u16,
-        runtime: tokio::runtime::Handle,
     ) -> Self {
         Self {
             identity,
             pins,
             fleet,
             peer_port,
-            runtime,
         }
-    }
-
-    /// Run one peer call to completion.
-    ///
-    /// `block_on` alone would deadlock: this runs inside a task on the very
-    /// runtime it would block. `block_in_place` moves this thread out of the
-    /// async pool first, which is only sound on a multi-threaded runtime —
-    /// and that is what the agent builds.
-    fn blocking<F: std::future::Future>(&self, fut: F) -> F::Output {
-        tokio::task::block_in_place(|| self.runtime.block_on(fut))
     }
 }
 
 impl crate::session::ControlRelay for ControlDriver {
-    fn control(
-        &self,
+    fn control<'a>(
+        &'a self,
         target: NodeId,
         req: ControlReq,
-    ) -> Result<(ControlRep, Option<NodeId>), atlasctl_protocol::msg::AgentError> {
-        use atlasctl_protocol::msg::AgentError;
-        let route = self.fleet.plan_control_route(target, self.peer_port)?;
-        let intro = SelfIntro::new(self.fleet.can_launch(), "");
-        match route {
-            crate::fleet::routing::ControlRoute::Direct { addr } => self
-                .blocking(send_control(
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        (ControlRep, Option<NodeId>),
+                        atlasctl_protocol::msg::AgentError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            use atlasctl_protocol::msg::AgentError;
+            let route = self.fleet.plan_control_route(target, self.peer_port)?;
+            let intro = SelfIntro::new(self.fleet.can_launch(), "");
+            match route {
+                crate::fleet::routing::ControlRoute::Direct { addr } => send_control(
                     &self.identity,
                     self.pins.clone(),
                     addr,
@@ -216,7 +213,8 @@ impl crate::session::ControlRelay for ControlDriver {
                     // The terminal answer budget is the same whichever leg
                     // writes the frame: it bounds the TARGET's execution.
                     RELAY_ANSWER_BUDGET,
-                ))
+                )
+                .await
                 .map(|rep| (rep, None))
                 // A pinned target we could not reach directly: no relay was
                 // asked, so the operator's fix is waking the target.
@@ -224,8 +222,7 @@ impl crate::session::ControlRelay for ControlDriver {
                     node: target,
                     reason: format!("could not reach it directly: {e:#}"),
                 }),
-            crate::fleet::routing::ControlRoute::Via { relay, addr } => self
-                .blocking(send_control_to(
+                crate::fleet::routing::ControlRoute::Via { relay, addr } => send_control_to(
                     &self.identity,
                     self.pins.clone(),
                     addr,
@@ -233,14 +230,16 @@ impl crate::session::ControlRelay for ControlDriver {
                     target,
                     &intro,
                     &req,
-                ))
+                )
+                .await
                 .map(|rep| (rep, Some(relay)))
                 .map_err(|e| AgentError::RelayRefused {
                     node: target,
                     via: Some(relay),
                     detail: format!("could not ask {} to forward: {e:#}", relay.short()),
                 }),
-        }
+            }
+        })
     }
 }
 

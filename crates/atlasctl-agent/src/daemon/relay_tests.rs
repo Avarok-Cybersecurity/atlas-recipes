@@ -84,6 +84,7 @@ async fn a_vouched_launch_rides_the_relay_end_to_end() {
                 settings: BTreeMap::new(),
             },
         )
+        .await
         .expect("routable");
     assert!(
         matches!(rep, ControlRep::Started { .. }),
@@ -112,6 +113,7 @@ async fn a_vouched_launch_rides_the_relay_end_to_end() {
     // launcher-managed launch; nothing in `ControlReq` can name a container.
     let (rep, _) = d
         .control(target.id(), ControlReq::Stop { recipe: recipe() })
+        .await
         .expect("routable");
     assert!(matches!(rep, ControlRep::Stopped { .. }));
     assert!(
@@ -165,6 +167,7 @@ async fn a_fabricated_vouch_writes_no_pin_and_is_refused_at_the_relay() {
     // Control toward it goes to the (honest) relay, which does not pin it.
     let (rep, via) = driver(&origin, port)
         .control(phantom, status())
+        .await
         .expect("the route exists; the relay answers");
     assert_eq!(via, Some(relay.id()));
     match rep {
@@ -234,6 +237,7 @@ async fn a_hostile_claimed_address_is_never_dialled_by_anyone() {
 
     let (rep, via) = driver(&origin, port)
         .control(target.id(), status())
+        .await
         .expect("routable");
     assert!(matches!(rep, ControlRep::Status { .. }), "got {rep:?}");
     assert_eq!(via, Some(relay.id()));
@@ -270,6 +274,7 @@ async fn a_liveness_lie_comes_back_as_the_relays_own_refusal() {
     let started = std::time::Instant::now();
     let (rep, via) = driver(&origin, port)
         .control(ghost.id(), status())
+        .await
         .expect("the relay answers, even when its leg fails");
     assert!(
         started.elapsed() < crate::peer::control::ORIGIN_ANSWER_BUDGET,
@@ -342,6 +347,7 @@ async fn the_relay_emits_only_a_terminal_frame_at_the_target() {
 
     let (rep, _) = driver(&origin, port)
         .control(target.id(), status())
+        .await
         .expect("routable");
     assert!(matches!(rep, ControlRep::Status { .. }), "got {rep:?}");
 
@@ -398,6 +404,7 @@ async fn a_relay_the_origin_cannot_dial_is_named_in_the_refusal() {
 
     let err = driver(&origin, dead)
         .control(ghost.id(), status())
+        .await
         .expect_err("nothing is listening; the dial cannot succeed");
     match err {
         AgentError::RelayRefused { node, via, detail } => {

@@ -318,7 +318,6 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
             atlasctl_agent::identity::PinStore::new(&config_dir),
             Arc::clone(&fleet),
             atlasctl_agent::peer::DEFAULT_PEER_PORT,
-            rt.handle().clone(),
         ))),
         events: events.clone(),
     });

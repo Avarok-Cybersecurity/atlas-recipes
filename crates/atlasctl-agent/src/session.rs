@@ -164,8 +164,11 @@ impl<'a> Session<'a> {
         // misattribution the provenance fields exist to prevent. Only once
         // authenticated, so an unauthenticated socket still learns nothing.
         // Every arm below therefore handles only this machine's own verbs.
+        // Hoisted out of the `if let` chain: a let-chain cannot hold an
+        // `.await`, and `route_remote` now awaits the relay rather than
+        // blocking a worker while the peer answers.
         if self.phase == Phase::Ready
-            && let Some(replies) = self.route_remote(&msg)
+            && let Some(replies) = self.route_remote(&msg).await
         {
             return replies;
         }

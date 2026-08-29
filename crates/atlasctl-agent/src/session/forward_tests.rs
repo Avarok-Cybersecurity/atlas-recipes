@@ -130,13 +130,20 @@ impl FakeRelay {
 }
 
 impl ControlRelay for FakeRelay {
-    fn control(
-        &self,
+    fn control<'a>(
+        &'a self,
         target: NodeId,
         req: ControlReq,
-    ) -> Result<(ControlRep, Option<NodeId>), AgentError> {
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<(ControlRep, Option<NodeId>), AgentError>>
+                + Send
+                + 'a,
+        >,
+    > {
         self.calls.lock().expect("lock").push((target, req.clone()));
-        (self.answer)(&req)
+        let answered = (self.answer)(&req);
+        Box::pin(async move { answered })
     }
 }
 

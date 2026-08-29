@@ -233,7 +233,6 @@ pub(super) fn driver(a: &TestAgent, port: u16) -> crate::peer::control::ControlD
         a.pins.clone(),
         Arc::clone(&a.fleet),
         port,
-        tokio::runtime::Handle::current(),
     )
 }
 
