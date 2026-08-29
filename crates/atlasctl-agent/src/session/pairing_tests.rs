@@ -436,12 +436,22 @@ impl FleetView for WirelessFleet {
     fn nodes(&self) -> Vec<NodeDescriptor> {
         vec![self.0.clone()]
     }
-    fn pair(&self, _node: NodeId, _code: &str) -> anyhow::Result<PairOutcome> {
-        anyhow::bail!("not used")
+    fn pair<'a>(
+        &'a self,
+        _node: NodeId,
+        _code: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<PairOutcome>> + Send + 'a>>
+    {
+        Box::pin(async move { anyhow::bail!("not used") })
     }
 
-    fn pair_at(&self, _target: &str, _code: &str) -> anyhow::Result<PairOutcome> {
-        anyhow::bail!("not used")
+    fn pair_at<'a>(
+        &'a self,
+        _target: &'a str,
+        _code: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<PairOutcome>> + Send + 'a>>
+    {
+        Box::pin(async move { anyhow::bail!("not used") })
     }
     fn trust(&self, _outcome: &PairOutcome, _allow_control: bool) -> anyhow::Result<()> {
         Ok(())

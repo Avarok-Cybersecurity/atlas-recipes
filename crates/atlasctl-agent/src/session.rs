@@ -233,9 +233,11 @@ impl<'a> Session<'a> {
             // subsequent changes. Accepting the subscription here rather than in
             // the socket layer keeps the authorization decision in one place.
             (Phase::Ready, ClientMsg::WatchFleet { id, vitals: _ }) => self.nodes(id),
-            (Phase::Ready, ClientMsg::PairPeer { id, node, code }) => self.pair(id, node, &code),
+            (Phase::Ready, ClientMsg::PairPeer { id, node, code }) => {
+                self.pair(id, node, &code).await
+            }
             (Phase::Ready, ClientMsg::PairPeerAt { id, target, code }) => {
-                self.pair_at(id, &target, &code)
+                self.pair_at(id, &target, &code).await
             }
             (
                 Phase::Ready,

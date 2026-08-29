@@ -52,7 +52,11 @@ pub trait FleetView: Send + Sync {
     ///
     /// # Errors
     /// If the peer is unknown, unreachable, or the ceremony fails.
-    fn pair(&self, node: NodeId, code: &str) -> Result<PairOutcome>;
+    fn pair<'a>(
+        &'a self,
+        node: NodeId,
+        code: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<PairOutcome>> + Send + 'a>>;
 
     /// Run the ceremony against an address the operator typed.
     ///
@@ -65,7 +69,11 @@ pub trait FleetView: Send + Sync {
     ///
     /// # Errors
     /// If the target does not resolve, is unreachable, or the ceremony fails.
-    fn pair_at(&self, target: &str, code: &str) -> Result<PairOutcome>;
+    fn pair_at<'a>(
+        &'a self,
+        target: &'a str,
+        code: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<PairOutcome>> + Send + 'a>>;
 
     /// Write the pin for an exchange a human has accepted.
     ///
@@ -102,7 +110,18 @@ pub trait PeerPairing: Send + Sync {
     ///
     /// # Errors
     /// If the machine cannot be reached or the ceremony fails.
-    fn pair(&self, addr: std::net::SocketAddr, code: &str) -> Result<crate::peer::pair::Paired>;
+    ///
+    /// Returns a boxed future rather than being an `async fn`: this trait is
+    /// used as `dyn PeerPairing`, and an `async fn` in a trait is not
+    /// dyn-compatible. Boxing is what lets the implementation await the
+    /// ceremony instead of blocking a runtime worker to run it.
+    fn pair<'a>(
+        &'a self,
+        addr: std::net::SocketAddr,
+        code: &'a str,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<crate::peer::pair::Paired>> + Send + 'a>,
+    >;
 }
 
 /// A completed exchange, not yet trusted.

@@ -62,12 +62,22 @@ impl FleetView for RecordingFleet {
         Vec::new()
     }
 
-    fn pair(&self, _node: NodeId, _code: &str) -> anyhow::Result<PairOutcome> {
-        self.exchange()
+    fn pair<'a>(
+        &'a self,
+        _node: NodeId,
+        _code: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<PairOutcome>> + Send + 'a>>
+    {
+        Box::pin(async move { self.exchange() })
     }
 
-    fn pair_at(&self, _target: &str, _code: &str) -> anyhow::Result<PairOutcome> {
-        self.exchange()
+    fn pair_at<'a>(
+        &'a self,
+        _target: &'a str,
+        _code: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<PairOutcome>> + Send + 'a>>
+    {
+        Box::pin(async move { self.exchange() })
     }
 
     fn trust(&self, outcome: &PairOutcome, allow_control: bool) -> anyhow::Result<()> {

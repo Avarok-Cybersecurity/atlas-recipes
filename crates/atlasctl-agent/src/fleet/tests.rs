@@ -312,24 +312,26 @@ fn an_authenticated_report_outranks_a_beacon_that_disagrees() {
     );
 }
 
-#[test]
-fn pairing_refuses_a_code_of_the_wrong_shape_without_touching_the_network() {
+#[tokio::test]
+async fn pairing_refuses_a_code_of_the_wrong_shape_without_touching_the_network() {
     let t = Tmp::new("shape");
     let f = fleet_at(&t.0);
     let node = NodeId::from_bytes([5; 32]);
     f.observe(beacon(node, "spark-43fa", true));
     let err = f
         .pair(node, "12")
+        .await
         .expect_err("a two-digit code is not a code");
     assert!(err.to_string().contains("digits"));
 }
 
-#[test]
-fn pairing_a_node_that_was_never_seen_is_refused() {
+#[tokio::test]
+async fn pairing_a_node_that_was_never_seen_is_refused() {
     let t = Tmp::new("unseen");
     let f = fleet_at(&t.0);
     let err = f
         .pair(NodeId::from_bytes([4; 32]), "12345678")
+        .await
         .expect_err("cannot pair with something that is not there");
     assert!(err.to_string().contains("not visible"));
 }

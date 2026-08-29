@@ -19,7 +19,6 @@ use std::sync::Arc;
 pub struct RuntimePeerPairing {
     identity: Arc<Identity>,
     pins: PinStore,
-    runtime: tokio::runtime::Handle,
 }
 
 impl std::fmt::Debug for RuntimePeerPairing {
@@ -31,29 +30,25 @@ impl std::fmt::Debug for RuntimePeerPairing {
 impl RuntimePeerPairing {
     /// Build one.
     #[must_use]
-    pub fn new(identity: Arc<Identity>, pins: PinStore, runtime: tokio::runtime::Handle) -> Self {
-        Self {
-            identity,
-            pins,
-            runtime,
-        }
+    pub fn new(identity: Arc<Identity>, pins: PinStore) -> Self {
+        Self { identity, pins }
     }
 }
 
 impl PeerPairing for RuntimePeerPairing {
-    fn pair(&self, addr: SocketAddr, code: &str) -> Result<Paired> {
-        // `block_on` alone would deadlock: this runs inside a task on the very
-        // runtime it would block. `block_in_place` moves this thread out of the
-        // async pool first, which is sound on the multi-threaded runtime the
-        // agent builds. Same reasoning as PeerTransport::blocking.
-        tokio::task::block_in_place(|| {
-            self.runtime
-                .block_on(atlasctl_agent::peer::join::dial_and_pair(
-                    &self.identity,
-                    self.pins.clone(),
-                    addr,
-                    code,
-                ))
-        })
+    fn pair<'a>(
+        &'a self,
+        addr: SocketAddr,
+        code: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Paired>> + Send + 'a>> {
+        // Awaited, not blocked: this runs inside a task on the agent's runtime,
+        // and a ceremony is a network round trip. Holding a worker for it would
+        // stall every other session and the timers meant to bound them.
+        Box::pin(atlasctl_agent::peer::join::dial_and_pair(
+            &self.identity,
+            self.pins.clone(),
+            addr,
+            code,
+        ))
     }
 }

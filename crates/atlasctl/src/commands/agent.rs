@@ -24,19 +24,31 @@ impl atlasctl_agent::fleet::FleetView for FleetHandle {
         self.0.nodes()
     }
 
-    fn pair(
-        &self,
+    fn pair<'a>(
+        &'a self,
         node: atlasctl_protocol::fleet::NodeId,
-        code: &str,
-    ) -> anyhow::Result<atlasctl_agent::fleet::PairOutcome> {
+        code: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = anyhow::Result<atlasctl_agent::fleet::PairOutcome>>
+                + Send
+                + 'a,
+        >,
+    > {
         self.0.pair(node, code)
     }
 
-    fn pair_at(
-        &self,
-        target: &str,
-        code: &str,
-    ) -> anyhow::Result<atlasctl_agent::fleet::PairOutcome> {
+    fn pair_at<'a>(
+        &'a self,
+        target: &'a str,
+        code: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = anyhow::Result<atlasctl_agent::fleet::PairOutcome>>
+                + Send
+                + 'a,
+        >,
+    > {
         self.0.pair_at(target, code)
     }
 
@@ -225,7 +237,6 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     .with_pairing(Box::new(crate::peerpairing::RuntimePeerPairing::new(
         Arc::clone(&identity),
         pins.clone(),
-        rt.handle().clone(),
     )));
 
     let fleet = Arc::new(fleet);

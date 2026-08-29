@@ -56,11 +56,21 @@ impl FleetView for FixtureFleet {
     fn nodes(&self) -> Vec<NodeDescriptor> {
         self.0.clone()
     }
-    fn pair(&self, _: NodeId, _: &str) -> anyhow::Result<PairOutcome> {
-        unreachable!("the driver never pairs")
+    fn pair<'a>(
+        &'a self,
+        _: NodeId,
+        _: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<PairOutcome>> + Send + 'a>>
+    {
+        Box::pin(async move { unreachable!("the driver never pairs") })
     }
-    fn pair_at(&self, _: &str, _: &str) -> anyhow::Result<PairOutcome> {
-        unreachable!("the driver never pairs")
+    fn pair_at<'a>(
+        &'a self,
+        _: &'a str,
+        _: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<PairOutcome>> + Send + 'a>>
+    {
+        Box::pin(async move { unreachable!("the driver never pairs") })
     }
     fn trust(&self, _: &PairOutcome, _: bool) -> anyhow::Result<()> {
         unreachable!("the driver never pairs")

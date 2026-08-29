@@ -93,11 +93,27 @@ impl crate::fleet::FleetView for SelfAwareFleet {
             reached_via: None,
         }]
     }
-    fn pair(&self, _: NodeId, _: &str) -> anyhow::Result<crate::fleet::PairOutcome> {
-        anyhow::bail!("not under test")
+    fn pair<'a>(
+        &'a self,
+        _: NodeId,
+        _: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = anyhow::Result<crate::fleet::PairOutcome>> + Send + 'a,
+        >,
+    > {
+        Box::pin(async move { anyhow::bail!("not under test") })
     }
-    fn pair_at(&self, _: &str, _: &str) -> anyhow::Result<crate::fleet::PairOutcome> {
-        anyhow::bail!("not under test")
+    fn pair_at<'a>(
+        &'a self,
+        _: &'a str,
+        _: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = anyhow::Result<crate::fleet::PairOutcome>> + Send + 'a,
+        >,
+    > {
+        Box::pin(async move { anyhow::bail!("not under test") })
     }
     fn trust(&self, _: &crate::fleet::PairOutcome, _: bool) -> anyhow::Result<()> {
         anyhow::bail!("not under test")

@@ -97,12 +97,12 @@ impl Session<'_> {
         addrs.into_iter().map(|a| a.addr).collect()
     }
 
-    pub(super) fn pair(&mut self, id: u32, node: NodeId, code: &str) -> Vec<ServerMsg> {
+    pub(super) async fn pair(&mut self, id: u32, node: NodeId, code: &str) -> Vec<ServerMsg> {
         // (helper `decision` is defined at the bottom of this file)
         let Some(fleet) = self.deps.fleet else {
             return vec![err(Some(id), AgentError::NotReady)];
         };
-        match fleet.pair(node, code) {
+        match fleet.pair(node, code).await {
             Ok(outcome) => {
                 let verification = outcome.verification.clone();
                 // Held, not written. Replacing any previous one: the UI shows a
@@ -141,11 +141,11 @@ impl Session<'_> {
     }
 
     /// Pair with a machine at an address the operator typed.
-    pub(super) fn pair_at(&mut self, id: u32, target: &str, code: &str) -> Vec<ServerMsg> {
+    pub(super) async fn pair_at(&mut self, id: u32, target: &str, code: &str) -> Vec<ServerMsg> {
         let Some(fleet) = self.deps.fleet else {
             return vec![err(Some(id), AgentError::NotReady)];
         };
-        match fleet.pair_at(target, code) {
+        match fleet.pair_at(target, code).await {
             Ok(outcome) => {
                 let (node, name, address, verification) = (
                     outcome.node,
