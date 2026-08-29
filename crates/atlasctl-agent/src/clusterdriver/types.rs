@@ -84,7 +84,9 @@ impl ClusterDriver {
             };
             match t.addr {
                 None => {
-                    let _ = self.rank.stop(&r.container);
+                    let rank = std::sync::Arc::clone(&self.rank);
+                    let container = r.container.clone();
+                    let _ = super::ceremonies::local_blocking(move || rank.stop(&container)).await;
                 }
                 // Best effort: supervision already knows something is wrong
                 // and has no operator waiting on a return value.

@@ -82,7 +82,16 @@ impl ClusterDriver {
         let mut accepted: Vec<&Target> = Vec::new();
         for t in &pending.targets {
             let reply = match t.addr {
-                None => self.rank.prepare(&epoch, &t.assignment),
+                None => {
+                    // The local rank shells out to docker exactly as a remote
+                    // one does; the only difference is the absence of a network
+                    // hop. Keeping it inline would hold a worker for the whole
+                    // reservation while the remote ranks' calls do not.
+                    let rank = std::sync::Arc::clone(&self.rank);
+                    let epoch = epoch.clone();
+                    let assignment = t.assignment.clone();
+                    local_blocking(move || rank.prepare(&epoch, &assignment)).await
+                }
                 Some(addr) => {
                     self.transport
                         .prepare(t.assignment.node, addr, &epoch, &t.assignment)
@@ -138,7 +147,13 @@ impl ClusterDriver {
         let mut started = Vec::with_capacity(pending.targets.len());
         for (i, t) in pending.targets.iter().enumerate() {
             let result = match t.addr {
-                None => self.rank.commit(epoch).map_err(|e| format!("{e:#}")),
+                None => {
+                    let rank = std::sync::Arc::clone(&self.rank);
+                    let epoch = epoch.to_owned();
+                    local_blocking(move || rank.commit(&epoch))
+                        .await
+                        .map_err(|e| format!("{e:#}"))
+                }
                 Some(addr) => self
                     .transport
                     .commit(t.assignment.node, addr, epoch)
@@ -203,7 +218,13 @@ impl ClusterDriver {
                 continue;
             };
             let alive = match t.addr {
-                None => self.rank.alive(&r.container).unwrap_or(false),
+                None => {
+                    let rank = std::sync::Arc::clone(&self.rank);
+                    let container = r.container.clone();
+                    local_blocking(move || rank.alive(&container))
+                        .await
+                        .unwrap_or(false)
+                }
                 // A rank we cannot ask is not a rank we can count.
                 Some(addr) => self
                     .transport
@@ -270,7 +291,13 @@ impl ClusterDriver {
                 continue;
             };
             let outcome = match t.addr {
-                None => self.rank.stop(&r.container).map_err(|e| format!("{e:#}")),
+                None => {
+                    let rank = std::sync::Arc::clone(&self.rank);
+                    let container = r.container.clone();
+                    local_blocking(move || rank.stop(&container))
+                        .await
+                        .map_err(|e| format!("{e:#}"))
+                }
                 // Remote failures count now. This arm returned `()`, so an
                 // unreachable peer contributed nothing and the operator was told
                 // every rank had stopped.
@@ -324,7 +351,13 @@ impl ClusterDriver {
                 continue;
             };
             let alive = match t.addr {
-                None => self.rank.alive(&r.container).unwrap_or(false),
+                None => {
+                    let rank = std::sync::Arc::clone(&self.rank);
+                    let container = r.container.clone();
+                    local_blocking(move || rank.alive(&container))
+                        .await
+                        .unwrap_or(false)
+                }
                 // Unreachable is not alive. A rank we cannot ask is not one we
                 // can count as part of a whole cluster — and if the answer is
                 // wrong, tearing down is the cheap mistake.
@@ -366,5 +399,30 @@ impl ClusterDriver {
                 names.join(" and ")
             ),
         })
+    }
+}
+
+/// Run a blocking local-rank call on tokio's blocking pool.
+///
+/// `RankService`'s prepare/commit/alive/stop shell out to docker. The trait
+/// stays synchronous — it has two implementations and a large test surface, and
+/// nothing about it needs to know where it runs — so the move happens here, at
+/// the call site, which is possible because `rank` is already an `Arc` and the
+/// arguments are owned.
+///
+/// `render`, `content_hash` and `recipe_port` are NOT routed through this: they
+/// are registry lookups with no I/O, and a hop to the blocking pool would cost
+/// more than the work.
+pub(super) async fn local_blocking<T, F>(f: F) -> T
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(v) => v,
+        // A panic in the local rank is a bug, and there is no error channel
+        // shared by all four call sites; re-raising keeps it visible rather
+        // than turning it into a plausible-looking "not alive".
+        Err(e) => std::panic::resume_unwind(e.into_panic()),
     }
 }
