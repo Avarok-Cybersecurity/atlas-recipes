@@ -150,6 +150,33 @@ Write-Host 'REACHED-THE-LINE-AFTER'
 $t = Get-Target
 Should-Contain 'this runner resolves to a real target' $t 'pc-windows-msvc'
 
+# ── the upgrade decision is content, not version ───────────────────────────────
+# Same bug as install.sh: two builds an entire wire-protocol apart can both
+# report "atlasctl 0.1.7", and comparing version strings left the operator
+# permanently on the old one while the control page kept sending them back here.
+$bd = Join-Path ([System.IO.Path]::GetTempPath()) ("bd-" + [System.Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $bd | Out-Null
+Set-Content -LiteralPath (Join-Path $bd 'old') -Value 'BUILD-protocol-1' -NoNewline
+Set-Content -LiteralPath (Join-Path $bd 'new') -Value 'BUILD-protocol-4' -NoNewline
+Set-Content -LiteralPath (Join-Path $bd 'same') -Value 'BUILD-protocol-1' -NoNewline
+
+if (Test-BinaryDiffers -Installed (Join-Path $bd 'old') -Downloaded (Join-Path $bd 'new')) {
+    Ok 'a different build is replaced even when the version string matches'
+} else {
+    Bad 'a different build is replaced even when the version string matches' 'it was kept'
+}
+if (-not (Test-BinaryDiffers -Installed (Join-Path $bd 'old') -Downloaded (Join-Path $bd 'same'))) {
+    Ok 'identical bytes are not reinstalled'
+} else {
+    Bad 'identical bytes are not reinstalled' 'it reinstalled the same file'
+}
+if (Test-BinaryDiffers -Installed (Join-Path $bd 'absent') -Downloaded (Join-Path $bd 'new')) {
+    Ok 'nothing installed yet installs'
+} else {
+    Bad 'nothing installed yet installs' 'it skipped a machine with no binary'
+}
+Remove-Item -Recurse -Force $bd -ErrorAction SilentlyContinue
+
 # ── what the script does to the CALLER'S session ───────────────────────────────
 # `irm | iex` executes in the caller's scope, so these are properties of the
 # shipped TEXT, not of anything a loaded function can be asked. An operator whose

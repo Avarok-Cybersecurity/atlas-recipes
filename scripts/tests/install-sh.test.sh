@@ -288,6 +288,29 @@ out=$(agent_fail no)
 contains "no held port: offers the foreground command" "$out" "agent run"
 contains "and names the platform's real log"          "$out" "journalctl"
 
+# --- binary_differs: the upgrade decision ------------------------------------
+# The bug this encodes, reported from a real machine: the agent spoke wire
+# protocol 1, the published build spoke 4, and BOTH reported "atlasctl 0.1.7"
+# because the crate version had not been bumped between them. Comparing version
+# STRINGS answered "already installed here — keeping it" forever, while the
+# control page kept telling the operator to run this installer. Nothing short of
+# deleting the binary could break that loop.
+differs_case() { # name  installed_bytes  downloaded_bytes  expect(yes|no)
+    ( . "$WORK/lib.sh"
+      d=$(mktemp -d); printf '%s' "$2" > "$d/old"; chmod +x "$d/old"
+      printf '%s' "$3" > "$d/new"
+      if binary_differs "$d/old" "$d/new"; then got=yes; else got=no; fi
+      rm -rf "$d"
+      [ "$got" = "$4" ] && echo ok || echo "got=$got" )
+}
+check "identical bytes are not reinstalled" "ok" \
+    "$(differs_case x 'BUILD-A' 'BUILD-A' no)"
+check "SAME version string, different build, IS replaced" "ok" \
+    "$(differs_case x 'BUILD-protocol-1' 'BUILD-protocol-4' yes)"
+check "nothing installed yet installs" "ok" \
+    "$( . "$WORK/lib.sh"; d=$(mktemp -d); printf 'NEW' > "$d/new"; \
+        if binary_differs "$d/absent" "$d/new"; then echo ok; else echo no; fi; rm -rf "$d" )"
+
 # --- option parsing -----------------------------------------------------------
 # The REAL script, as a subprocess. Both of these decisions happen in main()
 # before anything is fetched, so this cannot reach the network — and running the
