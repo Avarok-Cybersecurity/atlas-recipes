@@ -229,6 +229,7 @@ image — pull a newer `avarok/atlas-gb10:dev`.
 | `gemma-4-26b-a4b-nvfp4` | bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4A16 | single | MoE GeGLU, ~67 tok/s |
 | `nemotron-3-super-120b-a12b-nvfp4` | nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4 | single | LatentMoE, ~24 tok/s |
 | `nemotron-3-nano-30b-a3b-nvfp4` | nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4 | single | Mamba-2 + MoE, ~88 tok/s |
+| `nemotron-3.5-lightning-30b-a3b-nvfp4` | nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4 | single | NoPE hybrid, 256K ctx, ~72 tok/s — needs atlas#487 + #462 |
 | `mistral-small-4-119b-nvfp4` | mistralai/Mistral-Small-4-119B-2603-NVFP4 | single | MLA, BF16-only KV (mandatory) |
 
 ## Layout
@@ -245,6 +246,7 @@ recipes/
 ├── qwen3-coder-next/qwen3-coder-next-fp8.yaml
 ├── gemma4/{gemma-4-26b-a4b-nvfp4.yaml, gemma-4-31b-nvfp4.yaml}
 ├── nemotron-3-nano/nemotron-3-nano-30b-a3b-nvfp4.yaml
+├── nemotron-3.5-lightning/nemotron-3.5-lightning-30b-a3b-nvfp4.yaml
 ├── nemotron-3-super/nemotron-3-super-120b-a12b-nvfp4.yaml
 ├── mistral-small-4/mistral-small-4-119b-nvfp4.yaml
 └── minimax-m2.7/minimax-m2.7-nvfp4-ep2.yaml

@@ -1,0 +1,215 @@
+recipe_version: "2"
+model: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
+runtime: atlas
+container: avarok/atlas-gb10:latest
+max_nodes: 1
+
+metadata:
+  description: |
+    Nemotron-3.5-Lightning-30B-A3B — NVIDIA hybrid Mamba-2 + MoE +
+    Attention on a single GB10. 52 layers (6 attention, 23 SSM), 128
+    experts top-6, hidden 2688. Dimensionally identical to the
+    Nemotron-3-Nano sibling; it differs by shipping a DeepSeek-style
+    1-step MTP draft head and by wanting the OPPOSITE thinking policy.
+
+    Measured on a GB10 (2026-08-13) in exactly this profile — 256K
+    context, C=8, fp8 KV, util 0.60:
+      kernel audit  154 lookups, 0 unresolved, 9 expected-absent, PASS
+      target        (sm_121, nemotron-3.5-lightning-30b-a3b, nvfp4)
+      config        52 layers, 6 attn, 23 SSM, 128 experts, rotary_dim=0
+      C=8 chat      8/8 non-empty, agg 113.8 tok/s
+      needle         61153 prompt tokens -> PASS, prefill 2123 tok/s
+                    122242 prompt tokens -> PASS, prefill 2061 tok/s
+      prose         no degeneration, max 5-gram repeat <= 0.003 over 8 runs
+    A full agentic sweep is still outstanding.
+
+    Independently reproduced 2026-08-16 on a second GB10, atlas
+    ca3891e8 (the #487 branch), serving this `defaults:` block verbatim
+    and deliberately NOT passing --kernel-target, so target resolution
+    was tested rather than forced:
+      target        (sm_121, nemotron-3.5-lightning-30b-a3b, nvfp4)
+      config        52 layers, 6 attn, 23 SSM, 128 experts, rotary_dim=0
+      decode graphs disabled by MODEL.toml [behavior].no_decode_graphs
+      thinking      thinking_default = true (the Lightning policy)
+      KV pool       26.2 GB -> 9164240 tokens at util 0.60
+      needle         61091 prompt tokens -> PASS at 10/50/90% depth
+                    124343 prompt tokens -> PASS at 10/50/90% depth
+      decode        71.8 tok/s single-stream, structured JSON valid
+      prefill       2136 tok/s @ 61k, 1821 tok/s @ 124k
+    The needle rows above sweep DEPTH as well as length: a fact placed
+    at 10% of a 124k context has to survive ~112k tokens of following
+    text, which is where a 23-SSM-layer hybrid would be expected to
+    degrade first. It did not.
+
+    ── LONG CONTEXT IS CHEAP ON THIS MODEL ──
+    Only 6 of 52 layers are attention, so KV runs ~3072 bytes/token at
+    fp8. 8 x 256K = 2.1M tokens needs ~6.4 GB. At util 0.60 the pool
+    holds 8957184 tokens — a 4.3x margin over the worst case — so the
+    KV OVERCOMMIT warning does not fire and `max_num_seqs: 8` at full
+    256K is a genuine fit rather than a paged gamble. That is why util
+    is 0.60 and not 0.80: the GPU headroom is better spent elsewhere.
+
+    ── max_tokens MUST EXCEED THE THINKING BUDGET ──
+    Easy to misread as a broken model. `max_thinking_budget = 2048` with
+    `cap_thinking_at_max_tokens = false`, so a request whose max_tokens
+    is below ~2048 spends the whole budget inside <think> and returns
+    EMPTY `content`, with the text in `reasoning_content`. Measured:
+    max_tokens=300 gave 297 completion tokens and empty content;
+    max_tokens=4000 gave 1221 tokens and a real answer. Budget >= 3000
+    on thinking turns, or send enable_thinking=false for pure retrieval
+    (the needle rows above did).
+
+    ── MULTI-TURN TOOL LOOPS ARE WEAK HERE (single-turn is fine) ──
+    Single tool calls are clean: `get_weather` for both Santiago and
+    Kyoto returned well-formed arguments in 23 completion tokens.
+    CHAINED loops (tool -> result -> tool -> final answer) are not, and
+    the failure mode depends on thinking, N=6 per cell on a 3-step task:
+      thinking OFF (the target's tool policy)  0/6 pass, 6/6 leaked raw
+        `<parameter=...>` / `<parameter name=...>` markup into `content`
+      thinking ON (explicit kwarg)             1/6 pass, 0/6 leaked,
+        but 5/6 ran the step budget out without terminating
+    Sampling is NOT the variable — sigma/min_p made no difference to any
+    cell. The Puzzle sibling passes this identical task, so it is not
+    the harness. Treat Lightning as good for single-shot tool use and
+    unproven for chained agents until this is chased down.
+
+    ── SAMPLING FILTERS THAT LEAK IN FROM THE CLI ──
+    The target declares temperature/top_k/top_p presets but no min_p and
+    no top_n_sigma, so the server defaults survive into every request:
+    `top_n_sigma=1, min_p=0.08`. Measured on this checkpoint at
+    temperature 1.6, 8 samples:
+      min_p        LIVE      — min_p=0.95 collapsed 8 samples to 1
+                               distinct output, min_p=0.0 gave 8/8
+      top_n_sigma  NO-OP     — 8/8 distinct at sigma 0.0, 0.2 AND 0.5,
+                               where a restrictive 0.2 should collapse
+                               like min_p did. Matches the Laguna-XS
+                               finding that top_n_sigma does nothing.
+    Neither changed prose quality or the agentic result, so this recipe
+    leaves them alone; both can be overridden per request if needed.
+
+    ── REQUIRES AN IMAGE NEWER THAN :latest ──
+    As of 2026-08-13 this recipe cannot work on the published
+    `avarok/atlas-gb10:latest`. Neither prerequisite is on atlas `main`:
+
+      atlas#487  Lightning's OWN kernel target, and (as of atlas main
+                 fa198bef) the config parser that admits this checkpoint
+                 at all. Boot MUST log "Selected kernel target: (sm_121,
+                 nemotron-3.5-lightning-30b-a3b, nvfp4)".
+
+                 VERIFIED on atlas main fa198bef, 2026-08-16: the run
+                 does NOT reach the silent-fallback hazard this note
+                 originally described. It dies first, before any GPU
+                 work:
+
+                   Error: Failed to parse config.json
+                   Caused by: 0: Failed to parse nemotron_h config.json
+                              1: invalid type: null, expected usize
+
+                 The checkpoint ships `"moe_latent_size": null` and
+                 `"sliding_window": null`; main types `moe_latent_size`
+                 as a plain `usize`, and #487 adds the `nullable_usize`
+                 deserializer that reads JSON null as "absent".
+
+                 Kept because it is the hazard if that parse ever
+                 succeeds: without the target directory the checkpoint
+                 resolves to NANO — same dimensions, so nothing errors —
+                 inheriting Nano's `thinking_default = false`, i.e. a
+                 working server running the WRONG policy. A hard parse
+                 error is the friendlier of the two failures; do not
+                 rely on it surviving a parser change.
+      atlas#462  Nemotron-H is NoPE, plus the MODEL.toml
+                 `[behavior].no_decode_graphs` key. Atlas applied rotary
+                 embedding to the whole family, killing long-context
+                 retrieval above ~52 tokens; and decode-graph replay
+                 crashes this family with CUDA 716. Boot MUST log
+                 `rotary_dim=0` and "Decode graphs disabled by
+                 MODEL.toml [behavior].no_decode_graphs".
+
+    Recommended alongside: atlas#486, which fixes tool calls being
+    delivered with empty arguments when the model writes the
+    attribute dialect (`<parameter city="X">` rather than
+    `<parameter=city>`). Lightning emits the attribute form.
+
+    ── THINKING POLICY: THE REASON THIS TARGET IS SEPARATE ──
+    Served from the target's MODEL.toml, not from this recipe:
+      thinking_default  = true    # thinking is the quality path for chat
+      thinking_in_tools = false   # and the WRONG path for tool turns
+    With thinking on and tools armed, the model emits its `<tool_call>`
+    INSIDE `<think>`, so the turn depends on a `</think>` force-close
+    landing after the arguments rather than between the name and the
+    arguments. Measured at temperature 0, same build and prompt shape:
+    "Santiago" cut early and returned a name-only call; "Kyoto" cut late
+    and returned a good one. Not thinking at all on tool turns is both
+    correct and ~4x cheaper (23 completion tokens vs 89-97).
+
+    Do NOT try to reproduce this with
+    `--default-chat-template-kwargs '{"enable_thinking":true}'`. That is
+    an EXPLICIT directive and an explicit directive OUTRANKS
+    `thinking_in_tools`, so tool turns would think anyway. That
+    workaround is exactly what motivated splitting the target.
+
+    ── MTP: SHIPPED, BUT PARKED BY THE AUTO GATE ──
+    The checkpoint carries a 1-step draft head (`num_nextn_predict_layers
+    = 1`), which is also the discriminator that separates this target
+    from Nano's. Serve-validated 2026-08-11 (C=1, 400-token story, temp
+    0): the DRAFTS are good (K2 accept p1 = 0.49-0.65) but verify is NET
+    NEGATIVE — 55.0 tok/s forced-MTP against 70.1 tok/s serial — because
+    this target has no K-token batched verify kernels. The 23 Mamba-2
+    layers run K sequential recurrent decodes and the 23 MoE layers K
+    per-token expert GEMV sweeps, so a K=2 verify costs ~2x a decode in
+    weight reads for only ~1.55 tokens. The auto gate measures this and
+    parks speculation, so serving stays at the serial rate. Leave
+    `--speculative` OFF; it is not a win on this target today.
+
+    ── SAMPLING: use_sampling_presets_for_core IS LOAD-BEARING ──
+    generation_config.json carries temperature=1.0 / top_p=0.95, the HF
+    evaluation defaults rather than a serving recipe. Without the
+    target's opt-in, core sampling falls through to those values and
+    every preset is silently ignored for any client that does not send
+    its own sampling params (opencode does not).
+
+    ── AN EMPTY SYSTEM TURN DEGRADES THIS FAMILY ──
+    The chat template always emits a system block, rendering
+    `<|im_start|>system\n<|im_end|>` when the request carries no system
+    message. That exact shape was measured to degrade the Nano sibling
+    on 2026-07-28 — identical user text, only the system block
+    differing, correct with any system text and wrong with an empty one.
+    The target supplies a `default_system_prompt` so the empty turn
+    never renders; do not strip it.
+  maintainer: avarok
+  category: agent
+  model_params: 30B
+  model_dtype: nvfp4
+  quantization: nvfp4
+  kv_dtype: fp8
+
+defaults:
+  port: 8888
+  host: 0.0.0.0
+  # 256K, needle-verified to 122242 prompt tokens. The model declares
+  # max_position_embeddings = 1048576 and it is NoPE, so position is not
+  # the limit; this ceiling is what has been exercised. Raise it with a
+  # needle run at the new length.
+  max_model_len: 262144
+  max_num_seqs: 8
+  max_batch_size: 8
+  # fp8 is what this checkpoint is designed for and is the engine
+  # default here. It halves KV to ~3072 bytes/token, and 8 x 256K then
+  # fits with 4.3x margin at util 0.60 — MORE total KV capacity
+  # (8957184 tokens) than bf16 achieved at util 0.80 (8733808), for half
+  # the GPU budget. Long-context retrieval was verified ON fp8: needle
+  # PASS at both 61k and 122k prompt tokens.
+  #
+  # Boot raises "⚠ --kv-high-precision-layers is 0: all KV layers use
+  # fp8 ... NVFP4 models may hallucinate or lose coherence at long
+  # context". Retrieval at 122k was unaffected, but that warning is
+  # about long REASONING, which is not yet tested here. With only 6
+  # attention layers, `--kv-high-precision-layers 2` is nearly free if
+  # long-form thinking quality ever looks off.
+  kv_cache_dtype: fp8
+  # 0.60, not 0.80 — see the KV note in the description. The profile
+  # fits outright at 0.60, so the rest of the GB10 stays available.
+  gpu_memory_utilization: 0.60
+  scheduling_policy: slai
+  enable_prefix_caching: true
+  ssm_cache_slots: 64
