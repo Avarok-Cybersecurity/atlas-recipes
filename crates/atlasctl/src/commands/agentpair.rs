@@ -263,7 +263,34 @@ pub fn dial_hints(hosts: &[String], port: u16) -> String {
 /// running — which is exactly what happened when this was one function.
 fn local_agent_running() -> bool {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], atlasctl_agent::DEFAULT_PORT));
-    std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok()
+    if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok() {
+        return true;
+    }
+    // The browser port is not the agent.
+    //
+    // This asked one port and concluded from it who holds a DIFFERENT one --
+    // the peer port. An agent installed `--no-browser` binds no browser port at
+    // all, and `--port` moves it; both still hold the peer port. Those agents
+    // answered "no" here, so `bind_failure` took the else branch and sent the
+    // operator hunting for a second `atlasctl agent pair` that does not exist
+    // -- the exact outcome this pair of functions was written to stop, and the
+    // one `the_remedy_is_never_to_go_hunting_for_a_process` forbids.
+    //
+    // `--no-browser` is not an edge case here: it is the headless rank-holder,
+    // which is the machine most likely to be running `agent pair` at all.
+    //
+    // An installed unit answers the same question by a route that does not
+    // depend on which ports the agent chose. Best effort, as in `agentinfo`: a
+    // machine whose home cannot be read is one we cannot make this claim about,
+    // and guessing either way sends the operator to the wrong command.
+    crate::hostinfo::home_dir().is_ok_and(|home| {
+        crate::service::installed_unit(
+            &atlasctl_core::io::StdFileSystem,
+            &home,
+            crate::commands::service::uid_of(&home),
+        )
+        .is_ok_and(|u| u.is_some())
+    })
 }
 
 /// Why the peer port could not be bound, in the operator's terms.
