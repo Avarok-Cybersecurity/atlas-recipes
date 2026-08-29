@@ -187,7 +187,19 @@ pub fn logs(args: &LogsArgs) -> Result<()> {
         // it, the resolve error stands, so a TYPO still gets its "did you
         // mean".
         Err(unresolved) => {
-            if containers_for_recipe(&StdProcessRunner, &args.recipe, true)?.is_empty() {
+            // The TYPED name, which is what `stop` passes on this same path
+            // (`stop`, above). It matches the label only for an UNQUALIFIED
+            // recipe -- for `@reg/q` the label holds `q`, so this finds nothing
+            // and the resolve error stands. That is the honest reach of this
+            // fallback, not a bug hidden by a hopeful comment.
+            //
+            // A docker failure must NOT become the answer: `?` here turned a
+            // typo into "failed to run `docker`" and buried the registry's "did
+            // you mean". Treat an unusable docker as "nothing found" and let the
+            // original error surface.
+            let running =
+                containers_for_recipe(&StdProcessRunner, &args.recipe, true).unwrap_or_default();
+            if running.is_empty() {
                 return Err(unresolved);
             }
             logs_with(&StdProcessRunner, args, &args.recipe)
@@ -233,13 +245,19 @@ fn logs_with(runner: &dyn ProcessRunner, args: &LogsArgs, resolved: &str) -> Res
         // said "is running" about a container that had exited. Containers do
         // survive exit -- `run --no-rm` keeps them, which is the whole reason
         // reading their logs matters.
-        let mut found = containers_for_recipe(runner, resolved, false)?;
-        let mut any_running = !found.is_empty();
+        let running = containers_for_recipe(runner, resolved, false)?;
+        // Computed from the RUNNING query and never touched again. An earlier
+        // version set it false whenever widening added anything, so 2 live ranks
+        // plus 1 crashed one reported "(none running)" -- and since the
+        // multi-match arm needs two containers to be reached at all, EVERY mixed
+        // case said it. That is the same false claim this branch exists to
+        // remove, inverted.
+        let any_running = !running.is_empty();
+        let mut found = running;
         if found.len() != 1 {
             let with_exited = containers_for_recipe(runner, resolved, true)?;
             if found.is_empty() || with_exited.len() > found.len() {
                 found = with_exited;
-                any_running = false;
             }
         }
         match found.len() {

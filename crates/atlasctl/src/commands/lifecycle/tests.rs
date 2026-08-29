@@ -377,6 +377,34 @@ mod logs_finds_what_run_started {
         );
     }
 
+    /// Live and dead together must not be reported as "(none running)".
+    ///
+    /// This is the case the fix's own doc-comment named and no test covered,
+    /// which is why the inverted flag shipped green: `any_running` was set false
+    /// whenever widening ADDED anything, so two live ranks plus one crashed one
+    /// claimed nothing was running. The multi-match arm needs two containers to
+    /// be reached at all, so every mixed case said it.
+    #[test]
+    fn live_and_dead_together_is_not_reported_as_none_running() {
+        let r = RecordingRunner::new();
+        let out = |s: &str| Output {
+            status: 0,
+            stdout: s.to_owned(),
+            stderr: String::new(),
+        };
+        r.push_result(out("")); // exact name: nothing
+        r.push_result(out("atlas-x-rank0\natlas-x-rank1\n")); // running: two
+        r.push_result(out("atlas-x-rank0\natlas-x-rank1\natlas-x-rank2\n")); // widened: three
+
+        let err = logs_with(&r, &args("x"), "x").expect_err("several containers: must list them");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("has 3 containers"), "got: {msg}");
+        assert!(
+            !msg.contains("none running"),
+            "two of them ARE running: {msg}"
+        );
+    }
+
     /// A CRASHED container is found, and only by widening.
     ///
     /// The lookup asks for RUNNING containers first and widens to `-a` only if that
@@ -433,7 +461,15 @@ mod logs_finds_what_run_started {
             status: 0,
             stdout: "atlas-x-rank0\natlas-x-rank1\n".into(),
             stderr: String::new(),
-        });
+        }); // running
+        // Scripted deliberately. Without it the widened query consumed
+        // RecordingRunner's default-empty result, so the test passed on a
+        // response nobody wrote.
+        r.push_result(Output {
+            status: 0,
+            stdout: "atlas-x-rank0\natlas-x-rank1\n".into(),
+            stderr: String::new(),
+        }); // widened: the same two
         let err = logs_with(&r, &args("x"), "x").expect_err("must refuse to pick one");
         let msg = format!("{err:#}");
         assert!(

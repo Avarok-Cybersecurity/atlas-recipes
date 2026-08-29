@@ -128,9 +128,12 @@ fn check_sparkrun() -> usize {
 /// happen. `run` has always measured `host.hf_cache_dir` (run.rs:96); this now
 /// asks the same question of the same volume.
 ///
-/// Falls back to `.` when the cache directory does not exist yet, which is the
-/// ordinary state of a machine that has never pulled a model. Reporting
-/// "unknown" there would be a regression from a usable answer to none.
+/// A cache directory that does not exist yet -- the ordinary state of a machine
+/// that has never pulled a model -- is measured at its nearest existing
+/// ancestor, so the answer is about the filesystem that WOULD hold it. It is
+/// deliberately not measured at `.`: that is a different volume, and failing a
+/// healthy machine because the operator `cd`-ed somewhere small is the
+/// regression this doc used to record.
 ///
 /// Read with `df -Pk`: POSIX output is one line per filesystem with a fixed
 /// column order, which `df` without `-P` does not guarantee — a long device
@@ -140,15 +143,19 @@ fn check_sparkrun() -> usize {
 /// unreadable `df` says nothing about whether there is room, and doctor now
 /// exits non-zero on a problem, so guessing here would fail a healthy box.
 fn check_disk() -> Finding {
-    // The cache path must EXIST to be measured, because `free_bytes` walks up to
-    // the nearest existing ancestor (platform.rs:170). Without this check an
-    // unmounted `/mnt/models` returns ROOT's free space, and `disk_finding`
-    // prints "12 GB free on /mnt/models" -- a number from one volume under the
-    // other's name, which is worse than measuring the wrong path openly.
+    // Walk the cache path up to the nearest EXISTING directory and label THAT.
     //
-    // It also makes the `.` fallback real. It was previously unreachable for the
-    // same reason: `free_bytes` almost never returns `None`, so the commit that
-    // added it claimed a fallback that could not happen.
+    // `free_bytes` already walks up (platform.rs:170), so the number was always
+    // the right volume; the label was not. An unmounted `/mnt/models` reported
+    // ROOT's free space under the cache's name -- a figure from one filesystem
+    // wearing another's. Naming the ancestor makes the two agree.
+    //
+    // This deliberately does NOT fall back to `.`: `disk_space` fails below an
+    // absolute floor, so on a box that has never pulled a model -- the ordinary
+    // state -- running doctor from a small partition failed a healthy machine.
+    // The `(None, Some)` arm below is therefore unreachable for any absolute
+    // cache path, and is kept for a relative or empty `HF_HOME`, where the walk
+    // terminates immediately and `free_bytes("")` answers `None`.
     // The nearest EXISTING ancestor of the cache, not the cwd.
     //
     // Falling back to `.` was wrong in the direction this file forbids: on a
