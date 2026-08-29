@@ -328,12 +328,29 @@ mod tests {
     /// With no agent listening, the old wording is right: another `agent pair`
     /// really is the likely holder.
     #[test]
-    fn with_no_agent_running_it_still_suspects_another_pair() {
+    fn with_no_agent_detected_it_names_both_causes_not_one() {
         let msg = bind_failure(34334, false);
         assert!(msg.contains("34334"), "{msg}");
+
+        // BOTH, because this branch cannot tell them apart. The probe asks the
+        // BROWSER port, and an agent installed `--no-browser` or on a custom
+        // `--port` binds none -- so "no agent answered" does not mean "no agent".
+        // Naming only the second cause sent those operators hunting for a
+        // process that does not exist; a previous attempt at naming only the
+        // FIRST read a service unit file, which is true on any machine where
+        // the agent is merely installed and stopped, and misattributed a real
+        // second `agent pair` to the agent.
         assert!(
             msg.contains("another `atlasctl agent pair`"),
-            "without an agent, that is the honest guess: {msg}"
+            "must still name the second pair: {msg}"
+        );
+        assert!(
+            msg.contains("--no-browser"),
+            "must also name the agent that did not answer the probe: {msg}"
+        );
+        assert!(
+            msg.contains("agent status"),
+            "and must give the command that distinguishes them: {msg}"
         );
     }
 
