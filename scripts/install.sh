@@ -347,6 +347,53 @@ do_uninstall() {
     exit 0
 }
 
+# Put the downloaded binary in place and report which of the two things
+# happened: echoes "yes" when the installed copy was KEPT, and nothing when it
+# was replaced. All operator-facing text goes to stderr through `info`, so that
+# word is the only thing ever written to stdout.
+#
+# The wording and the copying are deliberately not in the same branch chain.
+# They were, once: the "published build differs" case was an `elif` that
+# announced a replacement while the `install`/`mv` sat in the `else`, so it
+# printed "replacing it" and replaced nothing. That is the worst failure this
+# script has available -- the operator is told the upgrade they came for
+# succeeded, and their agent keeps speaking the old protocol. Here every path
+# that decides to replace falls through to one copy, so the two cannot diverge.
+place_binary() { # dir tmp -> "yes" on stdout if kept
+    pb_dir="$1"; pb_tmp="$2"
+
+    # Ask the two binaries their versions rather than parsing a release tag: the
+    # downloaded one is already here and already checksum-verified, so this
+    # needs no second endpoint and cannot be fooled by a tag naming scheme that
+    # changes. An unreadable or non-answering existing binary compares unequal,
+    # which lands on the upgrade path -- the safe direction.
+    pb_new=$("$pb_tmp/$BIN_NAME" --version 2>/dev/null || true)
+    pb_old=""
+    [ -x "$pb_dir/$BIN_NAME" ] && pb_old=$("$pb_dir/$BIN_NAME" --version 2>/dev/null || true)
+
+    # Versions are for the OPERATOR to read. The decision is made on content --
+    # see `binary_differs`.
+    if ! binary_differs "$pb_dir/$BIN_NAME" "$pb_tmp/$BIN_NAME"; then
+        info "$pb_new is already installed here — keeping it."
+        echo "yes"
+        return 0
+    fi
+
+    if [ -n "$pb_old" ] && [ "$pb_old" = "$pb_new" ]; then
+        # Same version string, different build. Say so plainly rather than
+        # printing "upgrading 0.1.7 -> 0.1.7", which reads like a bug.
+        info "$pb_old is installed, but the published build differs — replacing it."
+    else
+        [ -z "$pb_old" ] || info "upgrading $pb_old -> $pb_new"
+    fi
+
+    # Install to a temp name and rename, so an interrupted install cannot leave
+    # a half-written binary on PATH.
+    install -m 0755 "$pb_tmp/$BIN_NAME" "$pb_dir/.$BIN_NAME.new"
+    mv -f "$pb_dir/.$BIN_NAME.new" "$pb_dir/$BIN_NAME"
+    info "installed $pb_dir/$BIN_NAME"
+}
+
 main() {
     [ "${1:-}" = "--uninstall" ] && do_uninstall
 
@@ -425,33 +472,7 @@ main() {
     mkdir -p "$dir"
     [ -f "$tmp/$BIN_NAME" ] || die "the archive did not contain $BIN_NAME"
 
-    # Ask the two binaries their versions rather than parsing a release tag: the
-    # downloaded one is already here and already checksum-verified, so this
-    # needs no second endpoint and cannot be fooled by a tag naming scheme that
-    # changes. An unreadable or non-answering existing binary compares unequal,
-    # which lands on the upgrade path -- the safe direction.
-    new_version=$("$tmp/$BIN_NAME" --version 2>/dev/null || true)
-    old_version=""
-    [ -x "$dir/$BIN_NAME" ] && old_version=$("$dir/$BIN_NAME" --version 2>/dev/null || true)
-
-    # Versions are for the OPERATOR to read. The decision is made on content --
-    # see `binary_differs`.
-    same_version=""
-    if ! binary_differs "$dir/$BIN_NAME" "$tmp/$BIN_NAME"; then
-        same_version="yes"
-        info "$new_version is already installed here — keeping it."
-    elif [ -n "$old_version" ] && [ "$old_version" = "$new_version" ]; then
-        # Same version string, different build. Say so plainly rather than
-        # printing "upgrading 0.1.7 -> 0.1.7", which reads like a bug.
-        info "$old_version is installed, but the published build differs — replacing it."
-    else
-        [ -z "$old_version" ] || info "upgrading $old_version -> $new_version"
-        # Install to a temp name and rename, so an interrupted install cannot leave
-        # a half-written binary on PATH.
-        install -m 0755 "$tmp/$BIN_NAME" "$dir/.$BIN_NAME.new"
-        mv -f "$dir/.$BIN_NAME.new" "$dir/$BIN_NAME"
-        info "installed $dir/$BIN_NAME"
-    fi
+    same_version=$(place_binary "$dir" "$tmp")
 
     case ":$PATH:" in
         *":$dir:"*) ;;

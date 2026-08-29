@@ -210,6 +210,46 @@ case "$out" in *"was not found"*) bad "a stopped docker must not be called missi
 contains "no nvidia runtime: named separately" "$(docker_state nogpu)" "NVIDIA container runtime"
 check "a healthy docker says nothing" "" "$(docker_state fine)"
 
+# --- place_binary -------------------------------------------------------------
+# The point of these is that the FILE moved, not that a message was printed.
+# The bug they exist for printed exactly the right sentence and left the old
+# binary in place, so asserting on output alone would have passed it.
+
+# Version string and file content are set SEPARATELY on purpose: the bug lives
+# in the branch taken when the two binaries report the same version and differ
+# in content, so a helper that could not express that could not catch it.
+# `mark` becomes a comment line -- invisible to --version, visible to sha256.
+pb() { # old_version new_version mark -> "<kept>|<version on disk>|<mark on disk>"
+    d=$(mktemp -d); t=$(mktemp -d)
+    if [ -n "$1" ]; then
+        printf '#!/bin/sh\n# installed\necho "atlasctl %s"\n' "$1" > "$d/atlasctl"
+        chmod +x "$d/atlasctl"
+    fi
+    printf '#!/bin/sh\n# %s\necho "atlasctl %s"\n' "$3" "$2" > "$t/atlasctl"
+    chmod +x "$t/atlasctl"
+    kept=$( . "$WORK/lib.sh"; place_binary "$d" "$t" 2>/dev/null )
+    printf '%s|%s|%s' "$kept" "$("$d/atlasctl")" "$(sed -n 2p "$d/atlasctl")"
+    rm -rf "$d" "$t"
+}
+
+# Byte-identical: keep it, and say so.
+check "identical build is kept" \
+    "yes|atlasctl 1.0.0|# installed" "$(pb 1.0.0 1.0.0 installed)"
+
+# THE REGRESSION, and the reason this helper separates version from content.
+# Same version string, different build -- the shape of EVERY atlasctl release
+# before 0.2.0, so it is the case the operator actually hit. The old code
+# announced "replacing it" and replaced nothing; the mark on disk is what
+# proves the file moved, since the version output is identical either way.
+check "same version, different build: the binary is REPLACED" \
+    "|atlasctl 1.0.0|# fresh" "$(pb 1.0.0 1.0.0 fresh)"
+
+# An ordinary upgrade, and a first install with nothing there before.
+check "a newer version replaces the old" \
+    "|atlasctl 2.0.0|# fresh" "$(pb 1.0.0 2.0.0 fresh)"
+check "a first install lands the binary" \
+    "|atlasctl 2.0.0|# fresh" "$(pb '' 2.0.0 fresh)"
+
 # --- install_agent ------------------------------------------------------------
 cat > "$WORK/fake-atlasctl" <<'EOF'
 #!/bin/sh
