@@ -38,6 +38,29 @@ impl Session<'_> {
         let Some(joining) = self.deps.joining else {
             return vec![err(Some(id), AgentError::NotReady)];
         };
+        // A code is an invitation to DIAL this machine's peer port. If our
+        // listener is not up, nobody can accept it — and the operator finds out
+        // on the OTHER machine, after installing there, as a bare "Connection
+        // refused" against an address this agent told them to use.
+        //
+        // Said here rather than refused: the window is a human decision and the
+        // listener retries, so a code minted a moment before the port frees is
+        // still worth having. What was missing is any word of it on the machine
+        // that can actually fix it.
+        //
+        // `listening_on`, not a probe: a probe would also succeed against
+        // whatever else is holding that port, which is the very situation being
+        // warned about.
+        if crate::peer::listening_on().is_none() {
+            eprintln!(
+                concat!(
+                    "warning: minting a join code while this machine's peer channel is ",
+                    "not accepting on {}. Until it is, nothing can complete this join ",
+                    "— the far machine will see \"Connection refused\".",
+                ),
+                crate::peer::DEFAULT_PEER_PORT
+            );
+        }
         match joining.mint(allow_control) {
             Ok(code) => vec![ServerMsg::JoinInvitation {
                 id,
