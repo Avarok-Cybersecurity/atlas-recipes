@@ -19,6 +19,7 @@ use crate::identity::{Identity, PinStore};
 use anyhow::{Result, bail};
 use atlasctl_protocol::fleet::NodeId;
 use std::net::SocketAddr;
+use std::time::Duration;
 
 /// How many unsolicited frames to skip before giving up on an answer.
 const SKIP_BUDGET: usize = 8;
@@ -29,17 +30,37 @@ const SKIP_BUDGET: usize = 8;
 /// is neither vitals nor an answer is a protocol error rather than something to
 /// wait through — a peer that replies to prepare with a preview is confused,
 /// and continuing to read would turn that into a timeout instead of a message.
+/// How long a rank gets to answer COMMIT.
+///
+/// Not `DIAL_TIMEOUT`. Every verb here used to share the 5s dial bound, which is
+/// right for rendering a preview and wrong for the one verb that does real work:
+/// commit runs `docker rm -f` on any prior container and then `docker run`, and
+/// a first launch pulls a multi-gigabyte image. Losing that race did not just
+/// report a failure -- the peer's commit was still in flight and had already
+/// consumed its reservation, so the head's abort no-opped, its `docker run`
+/// then succeeded into the void, and the operator was told the launch failed
+/// while an orphan rank held that machine's GPU.
+///
+/// Five minutes is long for a human to wait. It is shorter than the time to
+/// notice an orphan container on another machine and remove it by hand.
+const COMMIT_BUDGET: Duration = Duration::from_secs(300);
+
+/// How long a rank gets to answer STOP. `docker stop` sends SIGTERM and waits
+/// out a grace period before killing, which routinely outlasts 5s.
+const STOP_BUDGET: Duration = Duration::from_secs(60);
+
 async fn answer<S, T>(
     tls: &mut S,
     addr: SocketAddr,
     what: &str,
+    budget: Duration,
     mut want: impl FnMut(PeerFrame) -> Result<Option<T>>,
 ) -> Result<T>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     for _ in 0..SKIP_BUDGET {
-        let frame = match tokio::time::timeout(DIAL_TIMEOUT, read_frame(tls)).await {
+        let frame = match tokio::time::timeout(budget, read_frame(tls)).await {
             Ok(f) => f?,
             Err(_) => bail!("{addr} did not answer the {what} in time"),
         };
@@ -81,7 +102,7 @@ pub async fn preview_rank(
     )
     .await?;
 
-    answer(&mut tls, addr, "preview", |f| match f {
+    answer(&mut tls, addr, "preview", DIAL_TIMEOUT, |f| match f {
         PeerFrame::RankPreviewed { command, unmapped } => Ok(Some((command, unmapped))),
         PeerFrame::RankRefused { reason } => bail!("{reason}"),
         other => bail!("expected a rank preview, got {other:?}"),
@@ -120,7 +141,7 @@ pub async fn prepare_rank(
     .await?;
 
     let want_epoch = epoch.to_owned();
-    answer(&mut tls, addr, "prepare", move |f| match f {
+    answer(&mut tls, addr, "prepare", DIAL_TIMEOUT, move |f| match f {
         // A reply for another epoch is a stale answer from an earlier attempt,
         // not this one's; accepting it would let a previous cluster's yes
         // authorize this cluster's commit.
@@ -160,7 +181,7 @@ pub async fn commit_rank(
     .await?;
 
     let want_epoch = epoch.to_owned();
-    answer(&mut tls, addr, "commit", move |f| match f {
+    answer(&mut tls, addr, "commit", COMMIT_BUDGET, move |f| match f {
         PeerFrame::Committed { epoch, container } if epoch == want_epoch => Ok(Some(container)),
         PeerFrame::Committed { .. } => Ok(None),
         PeerFrame::RankRefused { reason } => bail!("{reason}"),
@@ -196,7 +217,7 @@ pub async fn abort_rank(
     )
     .await?;
     let want_epoch = epoch.to_owned();
-    answer(&mut tls, addr, "abort", move |f| match f {
+    answer(&mut tls, addr, "abort", DIAL_TIMEOUT, move |f| match f {
         PeerFrame::Aborted { epoch } if epoch == want_epoch => Ok(Some(())),
         PeerFrame::Aborted { .. } => Ok(None),
         other => bail!("expected an abort acknowledgement, got {other:?}"),
@@ -226,7 +247,7 @@ pub async fn rank_alive(
     )
     .await?;
     let want = container.to_owned();
-    answer(&mut tls, addr, "liveness", move |f| match f {
+    answer(&mut tls, addr, "liveness", DIAL_TIMEOUT, move |f| match f {
         PeerFrame::RankLiveness { container, running } if container == want => Ok(Some(running)),
         PeerFrame::RankLiveness { .. } => Ok(None),
         other => bail!("expected a liveness answer, got {other:?}"),
@@ -260,7 +281,7 @@ pub async fn stop_rank(
     )
     .await?;
     let want = container.to_owned();
-    answer(&mut tls, addr, "stop", move |f| match f {
+    answer(&mut tls, addr, "stop", STOP_BUDGET, move |f| match f {
         PeerFrame::RankStopped { container } if container == want => Ok(Some(())),
         PeerFrame::RankStopped { .. } => Ok(None),
         other => bail!("expected a stop acknowledgement, got {other:?}"),
