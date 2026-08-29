@@ -50,13 +50,30 @@ pub fn write(path: &Path, bytes: &[u8]) -> Result<()> {
     // un-revoking a peer that was just removed. Closing that needs a lock file
     // (or routing CLI mutations through the running daemon) and is a bigger
     // change than this one.
+    // Resolve a symlink to its target FIRST. The previous truncate-then-write
+    // opened `path` and wrote THROUGH a symlink, so a stowed/dotfiles setup that
+    // links `agent.key` or `peers.json` elsewhere kept working. A rename would
+    // replace the link itself with a regular file -- silently destroying that
+    // arrangement, and, worse for a rotation, leaving the OLD secret live at the
+    // real target, which is the one thing rotating exists to prevent.
+    let path = &std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+
     let dir = path.parent().unwrap_or(Path::new("."));
+    // Unique PER CALL, not per process. A pid-only suffix is not unique inside
+    // the daemon: `peers.json` is written from the address-poll loop, from a
+    // browser session's unpair, and from a join window's pin write, all on the
+    // same multi-threaded runtime. Two of those sharing one temp name is the
+    // torn file this function exists to prevent, arrived at from inside a single
+    // process -- and the loser's cleanup could delete the winner's temp before
+    // its rename. The counter makes each attempt its own file.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let tmp = dir.join(format!(
-        ".{}.tmp{}",
+        ".{}.tmp{}.{}",
         path.file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("secret"),
-        std::process::id()
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
 
     #[cfg(unix)]
@@ -99,11 +116,22 @@ pub fn write(path: &Path, bytes: &[u8]) -> Result<()> {
         std::fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
     }
 
+    // The DIRECTORY entry too, not just the bytes. Without this the rename can
+    // be undone by a power cut and a write that reported success -- a rotated
+    // token, a revoked pin -- silently rolls back to the previous contents.
+    // Best-effort: not every filesystem lets you open a directory for sync, and
+    // failing the write over an unsyncable parent would be worse than the risk.
     if let Err(e) = std::fs::rename(&tmp, path) {
         // Do not leave the temp file behind to be mistaken for state, or to
         // accumulate one per crashed process.
         let _ = std::fs::remove_file(&tmp);
         return Err(e).with_context(|| format!("replacing {}", path.display()));
+    }
+    #[cfg(unix)]
+    {
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
     }
     Ok(())
 }
@@ -235,9 +263,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
-    /// Replacing must not widen. `OpenOptions` reuses an existing file's mode,
-    /// so a secret rotated into a file someone had chmod-ed stays readable
-    /// unless rotation is checked too.
+    /// Two writers in ONE process must not share a temp file. Inside the daemon
+    /// `peers.json` is written from the address-poll loop, a browser unpair and a
+    /// join window's pin write, on the same multi-threaded runtime; with a
+    /// pid-only temp name they truncate each other and one renames the mixed
+    /// bytes into place -- the torn file this function exists to prevent,
+    /// reachable without a second process at all.
+    #[test]
+    fn concurrent_writers_in_one_process_do_not_share_a_temp_file() {
+        let d = tmp("concurrent");
+        let p = d.join("peers.json");
+        let a = format!("{{\"a\":\"{}\"}}", "a".repeat(60_000));
+        let b = format!("{{\"b\":\"{}\"}}", "b".repeat(90_000));
+        let target = &p;
+        std::thread::scope(|s| {
+            for body in [a.as_bytes(), b.as_bytes()] {
+                s.spawn(move || {
+                    for _ in 0..25 {
+                        write(target, body).expect("writes");
+                    }
+                });
+            }
+        });
+        // Whoever landed last, the file must be EXACTLY one of the two -- never
+        // a prefix, a mixture, or a length in between.
+        let got = std::fs::read(&p).expect("reads");
+        assert!(
+            got == a.as_bytes() || got == b.as_bytes(),
+            "torn file: {} bytes, expected {} or {}",
+            got.len(),
+            a.len(),
+            b.len()
+        );
+        let strays: Vec<_> = std::fs::read_dir(&d)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(strays.is_empty(), "left temp files behind: {strays:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     /// The reason this write goes through a temp file: `peers.json` is
     /// rewritten whole on every pin change, and a truncate-then-write left a
     /// torn file if anything interrupted it -- after which every load fails to
@@ -270,6 +337,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// Replacing must not widen. `OpenOptions` reuses an existing file's mode,
+    /// so a secret rotated into a file someone had chmod-ed stays readable
+    /// unless rotation is checked too.
     #[cfg(unix)]
     #[test]
     fn rewriting_over_a_widened_file_is_caught() {

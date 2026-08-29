@@ -65,7 +65,7 @@ pub fn pair(args: &crate::cli::AgentPairArgs) -> Result<()> {
         code.as_str()
     );
     println!();
-    println!("  This code is good for {CODE_TTL_SECS} seconds and for one attempt.");
+    println!("  This code is good for {CODE_TTL_SECS} seconds and for {MAX_ATTEMPTS} attempts.");
     println!("  Waiting…");
 
     let paired = runtime.block_on(async {

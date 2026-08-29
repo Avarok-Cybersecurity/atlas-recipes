@@ -185,19 +185,34 @@ fn spawn_peer_listener(
         };
         eprintln!("peer channel on 0.0.0.0:{port}");
 
+        // 0 means "the last accept succeeded", which is also what makes the
+        // first failure of a run the one that gets printed.
+        let mut backoff_ms: u64 = 0;
         loop {
             let (tcp, _) = match listener.accept().await {
-                Ok(v) => v,
+                Ok(v) => {
+                    backoff_ms = 0;
+                    v
+                }
                 Err(e) => {
                     // Backoff, not a bare `continue`. Under fd exhaustion
                     // (EMFILE -- plausible while this same process is pulling a
                     // multi-GB image) `accept` fails IMMEDIATELY and forever, so
                     // retrying with no pause burns 100% of a core silently,
-                    // inside a service that bounds memory but not CPU. Ten
-                    // milliseconds is invisible to a real connection and turns a
-                    // hot spin into an idle one that says why.
-                    eprintln!("peer listener: accept failed: {e}");
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    // inside a service that bounds memory but not CPU.
+                    //
+                    // The backoff DOUBLES, and only the first failure of a run
+                    // is printed. A fixed 10ms pause plus a line each time is
+                    // ~100 journal entries a second for as long as the condition
+                    // lasts -- trading a CPU spin for a log flood, which under
+                    // journald's rate limiting means dropping everyone else's
+                    // messages too. One line names the condition; the ramp to a
+                    // second keeps the loop responsive when it clears.
+                    if backoff_ms == 0 {
+                        eprintln!("peer listener: accept failed: {e}");
+                    }
+                    backoff_ms = (backoff_ms * 2).clamp(10, 1000);
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                     continue;
                 }
             };

@@ -254,6 +254,16 @@ fn systemd(agent: &AgentInvocation, home: &Path) -> ServicePlan {
             sc(&["enable", "--now", &unit]),
             sc(&["restart", &unit]),
         ],
+        // A shell, deliberately, and consistent with the Windows plan two
+        // functions down, which hands PowerShell a script the same way. The
+        // runner's "argv, never a command string" property is about the RUNNER
+        // not interpreting what it is given -- it still passes three inert
+        // arguments -- and everything interpolated below is a compile-time
+        // constant. Doing the wait in Rust instead would put a three-second
+        // sleep in the install path's unit tests, and the only way around that
+        // is an injection point that exists for tests, which this repo does not
+        // allow in a production path.
+        //
         // Delayed, then CONFIRMED, for the reason the Windows plan spells out.
         // `is-active` ran the instant `restart` returned, and for a Type=simple
         // unit that is "active" as soon as ExecStart is SPAWNED -- while the
