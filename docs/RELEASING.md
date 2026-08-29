@@ -19,6 +19,28 @@ Commit titles decide the version, so they must be conventional commits:
 footer for a major. The repository squash-merges, so the PR title becomes the
 commit message.
 
+### The release PR's checks do not start on their own
+
+release-please pushes its branch as a bot, and this repository requires manual
+approval before workflows run for it. So the release PR sits with **one** check
+(GitGuardian, which is not an Actions workflow) and everything else absent —
+which reads exactly like a slow queue, and waits indefinitely.
+
+They are waiting for a person:
+
+```sh
+gh run list --branch release-please--branches--main --json databaseId,name,conclusion
+# conclusion "action_required" means it never started
+gh api -X POST repos/:owner/:repo/actions/runs/<id>/approve
+```
+
+Approve them and the checks run normally. Every merge to `main` regenerates the
+branch, and the new runs need approving again — so approve **last**, once the
+release PR is the change you actually intend to ship.
+
+The tell is the check count. A release PR showing one check has not started; a
+release PR showing a dozen is genuinely running.
+
 ## What publishes, and how it authenticates
 
 | Target | Job | Credential |
