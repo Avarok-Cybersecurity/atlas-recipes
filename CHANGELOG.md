@@ -1,5 +1,64 @@
 # Changelog
 
+## [0.5.0](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.4.1...v0.5.0) (2026-08-29)
+
+
+### Features
+
+* **doctor:** report a disk with no room for an image and a model ([#110](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/110)) ([5222585](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/5222585c3fc3f71a46b9f5048b7f04780a4d4cac))
+* **run:** answer an unknown `-o` key instead of only refusing it ([#103](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/103)) ([0012bb1](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/0012bb1df224bbbd665978e65982440aed5a01eb))
+* **run:** say the weights are missing before pulling an image for nothing ([#100](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/100)) ([491e6ed](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/491e6ed03c29d6bc106dcc7692c4c0f09ceed280))
+* **windows:** native Windows support — binary, installer, and supervised agent ([#114](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/114)) ([e8b304a](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/e8b304aa07c190f017278657c1719bc533b2311a))
+
+
+### Bug Fixes
+
+* a destructive git escape the path guard could not see, and three more ([#117](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/117)) ([f2fcabe](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/f2fcabe83534d1cf9aa673a52db55196e8caf431))
+* **agent:** four ways the installed agent misbehaved on a user's machine ([#119](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/119)) ([e5fc285](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/e5fc285d4a08056e4a8f6df2a243d97bb0c60e9d))
+* **agent:** make the installer an upgrader, and a starter ([#112](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/112)) ([6f0d8f9](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/6f0d8f9f88d8fb12d6cd841cd3c1a295a7123315))
+* **cluster:** a cluster that died told nobody ([#130](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/130)) ([2e1c498](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/2e1c4981eb82a4188b5335e12b1b159454a34216))
+* **cluster:** a reservation whose head vanished bricked the machine forever ([#124](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/124)) ([3536607](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/35366072fc48afdf2ced7a7e6b164aa6bb19b53f))
+* **cluster:** a stop that reached nobody reported every rank stopped ([#126](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/126)) ([0e0b77d](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/0e0b77da7920f9ebe551f9a9c29317503b0af103))
+* **cluster:** commit gets its own answer budget, not the 5s dial bound ([#129](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/129)) ([3002c62](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/3002c62fa7fbd313d8e7a929a58739218e992b3b))
+* **cluster:** refuse a second cluster while one is running ([#131](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/131)) ([986219b](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/986219bdfcd77a283f58bf159a7ff8779f7c8756))
+* **cluster:** the endpoint fallback named a port the engine never uses ([#139](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/139)) ([2f652a7](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/2f652a7af87bc3c7ea687d761b85f483157fec88))
+* **docker:** mark what the renderer wrote, do not guess it from the text ([#90](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/90)) ([76e6043](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/76e60430821755be5b37a7212a5867eda39a5d42))
+* **doctor:** "agent: not running" did not say which port it asked ([#140](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/140)) ([cd2cff6](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/cd2cff615afc33eaf31ebf182bbeb73659946a51))
+* **doctor:** exit non-zero when problems were found ([#97](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/97)) ([36cf651](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/36cf651dfd1997c6186ba9c2b199c3e543da90c1))
+* **doctor:** the disk check measured the cwd, not where models land ([#141](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/141)) ([2faddd3](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/2faddd319d3e18b265f8a25905400d7b49e79646))
+* **fleet:** dial the port the peer advertised, not our own ([#85](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/85)) ([edd3c84](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/edd3c8497e60df66815a80cfb9bffd45519a7acc))
+* four defects an audit found in tonight's own fixes ([#145](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/145)) ([1554ae6](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/1554ae63576f2bc1ceebf5dafa1de09efeb1bb64))
+* four more defects, this time in the fixes-of-the-fixes ([#146](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/146)) ([279cbdf](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/279cbdfecf43ca46aef156815e52221d1cc4676e))
+* **install:** --grant-control was announced and then dropped ([#137](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/137)) ([d4d324b](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/d4d324bc9549532b1f0d0d8b3268170ad305e185))
+* **install.ps1:** stop leaving the operator's PowerShell session altered ([#121](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/121)) ([3f2bbb1](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/3f2bbb1370a6d810f245f84b18af8f83e5cf2f1e))
+* **install.sh:** stop crying wolf about provenance, and tell Windows readers the README exists for them too ([#115](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/115)) ([c9965fa](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/c9965fad312c0ee45d423a1b4b0e97ee459297bd))
+* **install:** the "published build differs" path replaced nothing ([#135](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/135)) ([e5297b3](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/e5297b3e6798a424ceb9986d767ebc4b0b47993a))
+* **install:** the PATH advice named a file macOS never reads ([#136](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/136)) ([263095c](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/263095c37415b9210a4a250e915972e8ac26d082))
+* **install:** the three ways a Windows install could end badly ([#118](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/118)) ([97c2f8f](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/97c2f8fd2fb1fbd4ffe1701a453d513b1795e0f9))
+* **install:** upgrade on CONTENT, not on the version string ([#122](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/122)) ([016cf28](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/016cf286813c89c8862cd307221052d8b206c8de))
+* **launcher:** stop could not reach a cluster rank's container ([#133](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/133)) ([e8897a1](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/e8897a1338bffb7f6fbf226551a8edf434ef13bc))
+* **launch:** refuse remotely what the CLI only cautions about ([#87](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/87)) ([5e84474](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/5e844740d99dfb5fc66a511f508c6daba5474199))
+* **lifecycle:** say "not running" instead of quoting the docker daemon ([#98](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/98)) ([a023034](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/a023034978139bd4c5d82e03a7925308588da337))
+* **logs:** find the container `run` actually started ([#142](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/142)) ([9ded867](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/9ded867515fdf9fbf1c6a642de68db4dd60128b1))
+* **pair:** a headless agent was reported as no agent at all ([#143](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/143)) ([53d9629](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/53d9629a203d315306a32e2b9574b6c67e78cea3))
+* **pair:** sanitise the peer's name before it reaches a terminal ([#86](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/86)) ([e63441d](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/e63441d7005d2f9bba2220115aefdb837dbc0ae8))
+* **peer:** check the pairing code before opening a socket ([#101](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/101)) ([770837b](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/770837b81e8e11ea5cfb1e483e262270cdc5b910))
+* **peer:** sanitise the refusal, and check the version both ways ([#89](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/89)) ([54da03d](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/54da03d8e346bacb1fcd32c915cb6a544da86ec4))
+* **rank:** a rank may only stop a container this fleet launched ([#94](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/94)) ([105ce8e](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/105ce8ead67c13dd666c8f6b69303284b03e5840))
+* **rankservice:** the reservation TTL panicked on Windows, breaking main ([#128](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/128)) ([537b01e](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/537b01e1708613a8f848e8519a8ee28b0a6d4a21))
+* **recipe:** a recipe may not read the agent's secrets or its egress policy ([#91](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/91)) ([9fe4b3a](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/9fe4b3a63097163f683a8cb18211c2f8a483fe77))
+* **recipe:** refuse a field that would be read as an option ([#93](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/93)) ([6487c66](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/6487c669568d279c0e086ee78bdddd57effec4f1))
+* **recipe:** suggest the recipe you meant, not the three that sort first ([#96](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/96)) ([e88874d](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/e88874d3b2ffca70537ace311624b8f2f9d54508))
+* **registry:** a scope should not cost the operator the suggestion ([#111](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/111)) ([5b6eb5e](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/5b6eb5e7d670d19ad1e145212f3092ea9c4c8644))
+* **registry:** a scoped ref cannot walk out of the recipe cache ([#92](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/92)) ([46eccef](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/46eccef8c07965e03544b29c9da057efbc2f6d30))
+* **run:** the CLI never checked a `-o` value against its declared bound ([#102](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/102)) ([c3ae320](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/c3ae320362b3833ea1c6ae433c6825450d34b443))
+* **run:** the weights pre-flight must not block a launch that brings its own ([#106](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/106)) ([6e046df](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/6e046df1e2d0446f1de042053ec884fd10f6f085))
+* **run:** warn about a full disk before the pull, not after ([#116](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/116)) ([df676f6](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/df676f682da9068948722bd7c322e45f1388913c))
+* **scrape:** a chunk length that lands mid-character must not panic ([#95](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/95)) ([405d6e0](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/405d6e032bf39c2e1981833825f556803e607dab))
+* **secretfile:** canonicalising every write raced Windows file replacement ([#132](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/132)) ([efe1325](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/efe132585c2756a28d04f3e1a3126b1db60ece31))
+* **settings:** `port` is the TCP domain, not the IANA registered range ([#105](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/105)) ([d971dd1](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/d971dd1e8da22cec0e83d00640dd0cab7a911527))
+* six audit findings, including two regressions from tonight ([#104](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/104)) ([7e3386f](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/7e3386fa62de3c866292fa87dbebc132a68ca135))
+
 ## [0.4.1](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.4.0...v0.4.1) (2026-08-28)
 
 

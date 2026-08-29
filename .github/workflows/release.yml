@@ -63,6 +63,9 @@ jobs:
     outputs:
       tag: ${{ steps.pick.outputs.tag }}
       release: ${{ steps.pick.outputs.release }}
+      cut: ${{ steps.pick.outputs.cut }}
+    permissions:
+      contents: write
     steps:
       - id: pick
         env:
@@ -76,14 +79,42 @@ jobs:
             echo "manual dispatch for $INPUT_TAG"
             echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
             echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "cut=false" >> "$GITHUB_OUTPUT"
           elif [ "$RP_RESULT" = "success" ] && [ "$RP_CREATED" = "true" ]; then
             echo "release-please cut $RP_TAG"
             echo "tag=$RP_TAG" >> "$GITHUB_OUTPUT"
             echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "cut=true" >> "$GITHUB_OUTPUT"
           else
             echo "nothing to release on this run"
             echo "release=false" >> "$GITHUB_OUTPUT"
           fi
+
+      # release-please publishes the release the instant the release PR merges,
+      # but the archives are uploaded ~30 minutes later, by `github-release` at
+      # the very end of this run. In between, `releases/latest` resolves to a
+      # release with zero assets and every
+      # `curl https://atlasinference.io/install.sh | sh` on earth dies on a 404
+      # for the tarball it just tried to fetch. Not theoretical: v0.5.0 did
+      # exactly that to real installs.
+      #
+      # Marking it a prerelease removes it from `releases/latest` (which skips
+      # prereleases), so installs keep resolving to the previous, fully
+      # populated release. `github-release` promotes it once the assets are up.
+      #
+      # Deliberately NOT a draft: GitHub does not create the tag for a draft
+      # release, and `preflight at the tag` and `publish-crates` both check that
+      # tag out.
+      - name: hide the release until its assets exist
+        if: ${{ steps.pick.outputs.cut == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.pick.outputs.tag }}
+        run: |
+          set -eu
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" -F prerelease=true >/dev/null
+          echo "$TAG hidden from releases/latest until its assets land"
 
   # release-please rewrites the version in every workspace manifest but updates
   # Cargo.lock only for the members its own discovery finds — its log reports
@@ -345,6 +376,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.resolve.outputs.tag }}
         run: gh release upload "$TAG" dist/* --clobber
+
+      # The assets are attached, so the release can stop hiding. Gated on `cut`
+      # so a recovery dispatch re-uploading an OLD tag cannot drag
+      # `releases/latest` backwards onto it.
+      - name: promote the release now that it is complete
+        if: ${{ needs.resolve.outputs.cut == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -eu
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" \
+            -F prerelease=false -f make_latest=true >/dev/null
+          echo "$TAG is now the latest release"
 
   publish-crates:
     name: crates.io

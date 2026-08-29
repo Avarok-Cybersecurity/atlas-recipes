@@ -57,8 +57,15 @@ detect_target() {
 }
 
 # Verify a downloaded archive against the release's SHA256SUMS.
-# The SHA256 of a file, or "" when it cannot be read. One implementation, used
-# both by the download check and by `binary_differs` below.
+# The SHA256 of a file, or "" when it cannot be read -- used by
+# `binary_differs` to decide whether an upgrade is needed.
+#
+# `verify_checksum` deliberately does NOT share this: it must DIE when no
+# hasher exists, because installing an unverified binary is worse than not
+# installing, whereas this returns "" and lets the caller treat "cannot hash"
+# as "assume it differs" and reinstall -- the safe direction there. Two
+# failure semantics, so two implementations. (The comment here previously
+# claimed one shared implementation, which was simply untrue.)
 sha256_of() {
     [ -r "$1" ] || return 0
     if command -v sha256sum >/dev/null 2>&1; then
@@ -347,6 +354,99 @@ do_uninstall() {
     exit 0
 }
 
+# Which file actually gets read when the operator opens a new terminal.
+#
+# This used to say `~/.profile` to everybody. macOS has defaulted to zsh since
+# Catalina and **zsh never reads ~/.profile** -- so the one instruction printed
+# to a Mac user, on the platform we ship a binary for and tell people to curl
+# from, silently did nothing. They reopen the terminal, `atlasctl` is still not
+# found, and the installer said it succeeded.
+#
+# Keyed off $SHELL (the login shell), not the shell running this script: the
+# installer is piped into `sh`, so $0 says nothing about what the operator uses.
+# fish is named rather than guessed at, because `export PATH=...` is not fish
+# syntax and would fail if pasted.
+rc_file() {
+    case "${SHELL:-}" in
+        */zsh)  echo "$HOME/.zshrc" ;;
+        # Bash reads ~/.bashrc for interactive non-login shells (the Linux
+        # terminal case) but ~/.bash_profile for login shells, which is what
+        # Terminal.app opens on macOS.
+        */bash) [ "$(uname -s)" = "Darwin" ] && echo "$HOME/.bash_profile" || echo "$HOME/.bashrc" ;;
+        */fish) echo "fish" ;;
+        *)      echo "$HOME/.profile" ;;
+    esac
+}
+
+# The advice itself, so the SENTINEL has a tested contract.
+#
+# `rc_file` returns the literal "fish" to mean "not a file at all, and not
+# `export` syntax either". That agreement lived across two places with nothing
+# holding them together: `rc_file` was tested in isolation and this branch was
+# inside `main`, which the test loader strips. Change the sentinel to a path
+# and the comparison here silently stops matching, handing a fish user an
+# `export PATH=...` line that fails when pasted -- exactly the defect the
+# sentinel was added to prevent, reintroduced without a failing test.
+path_advice() { # dir  -- writes the two warn lines
+    pa_rc=$(rc_file)
+    warn "$1 is not on your PATH. Add it, e.g.:"
+    if [ "$pa_rc" = "fish" ]; then
+        # Quoted, because $HOME can contain a space: an unquoted
+        # /Users/John Smith/.zshrc is a line that breaks when pasted, which is
+        # the one thing this message exists to avoid.
+        warn "    fish_add_path \"$1\""
+    else
+        warn "    echo 'export PATH=\"\$PATH:$1\"' >> \"$pa_rc\""
+    fi
+}
+
+# Put the downloaded binary in place and report which of the two things
+# happened: echoes "yes" when the installed copy was KEPT, and nothing when it
+# was replaced. All operator-facing text goes to stderr through `info`, so that
+# word is the only thing ever written to stdout.
+#
+# The wording and the copying are deliberately not in the same branch chain.
+# They were, once: the "published build differs" case was an `elif` that
+# announced a replacement while the `install`/`mv` sat in the `else`, so it
+# printed "replacing it" and replaced nothing. That is the worst failure this
+# script has available -- the operator is told the upgrade they came for
+# succeeded, and their agent keeps speaking the old protocol. Here every path
+# that decides to replace falls through to one copy, so the two cannot diverge.
+place_binary() { # dir tmp -> "yes" on stdout if kept
+    pb_dir="$1"; pb_tmp="$2"
+
+    # Ask the two binaries their versions rather than parsing a release tag: the
+    # downloaded one is already here and already checksum-verified, so this
+    # needs no second endpoint and cannot be fooled by a tag naming scheme that
+    # changes. An unreadable or non-answering existing binary compares unequal,
+    # which lands on the upgrade path -- the safe direction.
+    pb_new=$("$pb_tmp/$BIN_NAME" --version 2>/dev/null || true)
+    pb_old=""
+    [ -x "$pb_dir/$BIN_NAME" ] && pb_old=$("$pb_dir/$BIN_NAME" --version 2>/dev/null || true)
+
+    # Versions are for the OPERATOR to read. The decision is made on content --
+    # see `binary_differs`.
+    if ! binary_differs "$pb_dir/$BIN_NAME" "$pb_tmp/$BIN_NAME"; then
+        info "$pb_new is already installed here — keeping it."
+        echo "yes"
+        return 0
+    fi
+
+    if [ -n "$pb_old" ] && [ "$pb_old" = "$pb_new" ]; then
+        # Same version string, different build. Say so plainly rather than
+        # printing "upgrading 0.1.7 -> 0.1.7", which reads like a bug.
+        info "$pb_old is installed, but the published build differs — replacing it."
+    else
+        [ -z "$pb_old" ] || info "upgrading $pb_old -> $pb_new"
+    fi
+
+    # Install to a temp name and rename, so an interrupted install cannot leave
+    # a half-written binary on PATH.
+    install -m 0755 "$pb_tmp/$BIN_NAME" "$pb_dir/.$BIN_NAME.new"
+    mv -f "$pb_dir/.$BIN_NAME.new" "$pb_dir/$BIN_NAME"
+    info "installed $pb_dir/$BIN_NAME"
+}
+
 main() {
     [ "${1:-}" = "--uninstall" ] && do_uninstall
 
@@ -385,7 +485,22 @@ main() {
         shift
     done
     [ -z "$join" ] || info "will join the fleet at ${join#*@} once installed"
-    [ -z "$grant_control" ] || info "and will let that fleet run models on this machine"
+    # Announced only WITH a join, because it only happens with a join.
+    # `--grant-control` is meaningful solely alongside `--join`: the grant is
+    # written into this machine's pin of the inviter, so with no inviter there
+    # is nothing to write it into, and `install_agent` correspondingly forwards
+    # the flag on the join path alone. Printing the promise unconditionally told
+    # an operator who passed the flag without a join that their machine was now
+    # remotely drivable when nothing of the sort had been arranged -- a consent
+    # decision reported as made when it was silently dropped.
+    if [ -n "$grant_control" ]; then
+        if [ -n "$join" ]; then
+            info "and will let that fleet run models on this machine"
+        else
+            warn "--grant-control does nothing without --join, so it is being ignored."
+            warn "It grants control to the fleet you are JOINING; there is none here."
+        fi
+    fi
 
     need uname
     need tar
@@ -401,8 +516,10 @@ main() {
     version="${ATLASCTL_VERSION:-latest}"
     if [ "$version" = "latest" ]; then
         base="https://github.com/$REPO/releases/latest/download"
+        release_page="https://github.com/$REPO/releases/latest"
     else
         base="https://github.com/$REPO/releases/download/$version"
+        release_page="https://github.com/$REPO/releases/tag/$version"
     fi
 
     tmp=$(mktemp -d)
@@ -411,8 +528,32 @@ main() {
 
     archive_name="${BIN_NAME}-${target}.tar.xz"
     info "downloading $archive_name"
-    fetch "$base/$archive_name" "$tmp/$archive_name" \
-        || die "could not download $base/$archive_name — is there a release for $target yet?"
+    if ! fetch "$base/$archive_name" "$tmp/$archive_name"; then
+        # A failed asset download has three very different causes, and the old
+        # message named only the least likely one: it asked whether this
+        # platform has a release at all, which reads as "atlasctl does not
+        # support your machine". The usual cause is far more boring -- the
+        # release was published a few minutes ago and its archives are still
+        # uploading, so `releases/latest` briefly resolves to a release with no
+        # assets. A user who is told their platform is unsupported gives up; a
+        # user who is told to retry in a few minutes succeeds.
+        #
+        # SHA256SUMS is written by the same step that uploads the archives, so
+        # its presence separates the cases with no API call and no jq.
+        # A tag that does not exist at all must not be reported as "still
+        # publishing" -- that would send someone who mistyped a version off to
+        # wait for an upload that is never coming.
+        if ! fetch "$release_page" "$tmp/release.probe" 2>/dev/null; then
+            die "there is no release named '$version' in $REPO. Available releases are listed at https://github.com/$REPO/releases"
+        fi
+        if fetch "$base/SHA256SUMS" "$tmp/SHA256SUMS.probe" 2>/dev/null; then
+            if grep -q "$archive_name" "$tmp/SHA256SUMS.probe" 2>/dev/null; then
+                die "downloading $archive_name failed, but this release does list it. That points at a network problem on the way to GitHub rather than a missing build — please retry."
+            fi
+            die "this release has no build for $target. The targets it does ship are listed at https://github.com/$REPO/releases"
+        fi
+        die "this release has not finished publishing its binaries yet — they are uploaded a few minutes after the release itself appears. Retry shortly, or pin a known-good version with ATLASCTL_VERSION=<tag> (see https://github.com/$REPO/releases)."
+    fi
     fetch "$base/SHA256SUMS" "$tmp/SHA256SUMS" \
         || die "could not download SHA256SUMS; refusing to install unverified binaries."
 
@@ -425,39 +566,12 @@ main() {
     mkdir -p "$dir"
     [ -f "$tmp/$BIN_NAME" ] || die "the archive did not contain $BIN_NAME"
 
-    # Ask the two binaries their versions rather than parsing a release tag: the
-    # downloaded one is already here and already checksum-verified, so this
-    # needs no second endpoint and cannot be fooled by a tag naming scheme that
-    # changes. An unreadable or non-answering existing binary compares unequal,
-    # which lands on the upgrade path -- the safe direction.
-    new_version=$("$tmp/$BIN_NAME" --version 2>/dev/null || true)
-    old_version=""
-    [ -x "$dir/$BIN_NAME" ] && old_version=$("$dir/$BIN_NAME" --version 2>/dev/null || true)
-
-    # Versions are for the OPERATOR to read. The decision is made on content --
-    # see `binary_differs`.
-    same_version=""
-    if ! binary_differs "$dir/$BIN_NAME" "$tmp/$BIN_NAME"; then
-        same_version="yes"
-        info "$new_version is already installed here — keeping it."
-    elif [ -n "$old_version" ] && [ "$old_version" = "$new_version" ]; then
-        # Same version string, different build. Say so plainly rather than
-        # printing "upgrading 0.1.7 -> 0.1.7", which reads like a bug.
-        info "$old_version is installed, but the published build differs — replacing it."
-    else
-        [ -z "$old_version" ] || info "upgrading $old_version -> $new_version"
-        # Install to a temp name and rename, so an interrupted install cannot leave
-        # a half-written binary on PATH.
-        install -m 0755 "$tmp/$BIN_NAME" "$dir/.$BIN_NAME.new"
-        mv -f "$dir/.$BIN_NAME.new" "$dir/$BIN_NAME"
-        info "installed $dir/$BIN_NAME"
-    fi
+    same_version=$(place_binary "$dir" "$tmp")
 
     case ":$PATH:" in
         *":$dir:"*) ;;
         *)
-            warn "$dir is not on your PATH. Add it, e.g.:"
-            warn "    echo 'export PATH=\"\$PATH:$dir\"' >> ~/.profile"
+            path_advice "$dir"
             ;;
     esac
 

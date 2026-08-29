@@ -208,6 +208,7 @@ mod absent_tests {
     fn logs_for_a_recipe_never_started_here_says_so_and_never_streams() {
         let r = RecordingRunner::new();
         r.push_result(out(0, "\n", "")); // ps -a matched nothing
+        r.push_result(out(0, "\n", "")); // ...and neither did the label lookup
         let e = logs_with(
             &r,
             &LogsArgs {
@@ -215,6 +216,7 @@ mod absent_tests {
                 tail: 100,
                 follow: false,
             },
+            "q",
         )
         .expect_err("there is nothing to show");
         let msg = e.to_string();
@@ -223,7 +225,16 @@ mod absent_tests {
             msg.contains("atlasctl status"),
             "points somewhere useful: {msg}"
         );
-        assert_eq!(r.calls().len(), 1, "must not have run `docker logs` at all");
+        // Asserted directly rather than by counting calls. The count was 1 when
+        // this only guessed a name; it now also asks the LABEL before concluding
+        // nothing is running, because a rank launch is `atlas-q-rank0` and the
+        // guess never finds it. "Did not stream" is the actual claim, and saying
+        // it outright survives that lookup being added.
+        assert!(
+            !r.calls().iter().any(|c| c.contains(&"logs".to_string())),
+            "must not have run `docker logs` at all: {:?}",
+            r.calls()
+        );
     }
 
     #[test]
@@ -238,6 +249,7 @@ mod absent_tests {
                 tail: 100,
                 follow: false,
             },
+            "q",
         )
         .expect("a stopped container still has logs worth reading");
         let argv = &r.calls()[1];
