@@ -291,10 +291,17 @@ async fn a_retried_launch_after_a_lost_reply_is_already_running_not_doubled() {
     pin(&relay, &target, false);
     pin(&target, &relay, true);
 
-    let relay_budget = Duration::from_millis(300);
+    // The margin between these two is the whole test: the relay must give up
+    // BEFORE the launch returns, or the reply is not lost and there is nothing
+    // to recover from. It used to be 3x (300ms vs 900ms), and a loaded Windows
+    // runner lost that race -- the launch answered `Started`, the assertion for
+    // the relay's refusal failed, and a pull request that had not touched any
+    // Rust went red. 20x is not a tuned number; it is far enough outside any
+    // plausible scheduling delay that the ordering stops being a coin flip.
+    let relay_budget = Duration::from_millis(150);
     let launcher = Arc::new(SlowThenBusy {
         launches: AtomicUsize::new(0),
-        delay: relay_budget * 3,
+        delay: relay_budget * 20,
     });
     let port = {
         let launcher = std::sync::Arc::clone(&relay.launcher);
