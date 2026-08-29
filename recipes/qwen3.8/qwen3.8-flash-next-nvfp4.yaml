@@ -10,9 +10,13 @@ metadata:
     12 full-attention) MoE with 512 experts, top-10, and QSA sparse attention.
 
     ⚠ REQUIRES AN ENGINE THAT HAS THE `qwen3.8-flash-next` KERNEL TARGET.
-    Support landed with the Flash-Next integration; on an older image this
-    checkpoint does not load at all. If `atlasctl run` fails at load, the image
-    is the thing to check first, not this file.
+    Support arrives with the Flash-Next integration; on an older image this
+    checkpoint does not load at all. `container:` below is `:latest`, matching
+    every sibling recipe, which means THIS FILE MUST NOT SHIP BEFORE THAT
+    SUPPORT IS IN THE PUBLISHED IMAGE -- otherwise `:latest` is precisely the
+    older image and every user meets the load refusal on day one. If
+    `atlasctl run` fails at load, the image is the first thing to check, not
+    this file.
 
     ★ THERE ARE TWO PUBLISHED CONVERSIONS AND THEY ARE NOT THE SAME WEIGHTS.
     This recipe names `Inferact/…` deliberately. It ships the per-layer n-gram
@@ -79,6 +83,11 @@ defaults:
   # One at a time. Batching is unmeasured for this checkpoint, and the memory
   # picture above has ~10 GB of headroom, not a lot.
   max_batch_size: 1
-  gpu_memory_utilization: 0.90
+  # 0.85, not the 0.90 the measurement above ran at. This box has frozen hard at
+  # 0.90 before and needed a power cycle, and the usual headroom lever -- fp8 KV
+  # -- is the one thing this model cannot use. 78.1 GB pre-KV + 10.4 GB reserve
+  # is 88.5 GB, comfortably inside 0.85 x 121.7 = 103.4 GB, so the lower number
+  # costs KV blocks and nothing else.
+  gpu_memory_utilization: 0.85
   # Required by QSA, not a preference — see the note above.
   kv_cache_dtype: bf16
