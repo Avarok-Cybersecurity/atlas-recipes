@@ -20,6 +20,7 @@ pub fn run() -> Result<()> {
     for f in [
         check_config_dir(),
         check_agent(),
+        check_peer_channel(),
         check_reachable(),
         check_disk(),
     ] {
@@ -220,6 +221,19 @@ fn check_agent() -> Finding {
     let up =
         std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok();
     doctor_checks::agent(up, port)
+}
+
+/// Whether the peer listener — the one other machines dial — is open.
+///
+/// Probed the same way as the browser port, and reported separately, because
+/// the two are separate listeners: the agent can be perfectly healthy for its
+/// own browser while accepting no peers at all.
+fn check_peer_channel() -> Finding {
+    let port = atlasctl_agent::peer::DEFAULT_PEER_PORT;
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let up =
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok();
+    doctor_checks::peer_channel(up, port)
 }
 
 /// Whether another machine could reach this one.

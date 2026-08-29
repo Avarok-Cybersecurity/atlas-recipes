@@ -164,6 +164,36 @@ pub fn agent(listening: bool, port: u16) -> Finding {
     }
 }
 
+/// Is the listener other machines actually connect to open?
+///
+/// Distinct from [`agent`], which probes the BROWSER port. They are separate
+/// listeners with separate failure modes, and only one of them was ever
+/// checked here — so doctor could report a healthy agent and a dialable
+/// address for a machine that could not accept a single peer.
+///
+/// That combination is worse than either alone: [`reachable`] answers "you
+/// have an address", and an operator reasonably reads the pair as "other
+/// machines can reach me". The address is useless if nothing is listening at
+/// the other end of it.
+///
+/// Not marked a problem when shut. A single-machine install never needs the
+/// peer channel, and doctor turning red for an unused feature is how its red
+/// stops meaning anything.
+#[must_use]
+pub fn peer_channel(listening: bool, port: u16) -> Finding {
+    if listening {
+        Finding::ok("peers", &format!("accepting on {port}"))
+    } else {
+        Finding {
+            line: format!(
+                "{:<9} not listening on {port} — other machines cannot join this one",
+                "peers:"
+            ),
+            problem: false,
+        }
+    }
+}
+
 /// Could another machine dial this one?
 ///
 /// The failure this catches: a laptop on Wi-Fi advertised no address at all,
@@ -264,6 +294,39 @@ mod tests {
         assert!(f.problem);
         assert!(f.line.contains("owned by root"), "{}", f.line);
         assert!(f.line.contains("--config-dir"), "{}", f.line);
+    }
+
+    /// A shut peer channel is REPORTED but is not a problem.
+    ///
+    /// A single-machine install never needs it, and doctor turning red for an
+    /// unused feature is how its red stops meaning anything. It still has to
+    /// appear: the whole reason this check exists is that `agent: ok` plus
+    /// `network: ok` reads as "other machines can reach me", and neither of
+    /// those looks at the port they would actually dial.
+    #[test]
+    fn a_shut_peer_channel_is_reported_without_being_called_a_problem() {
+        let f = peer_channel(false, 34334);
+        assert!(!f.problem, "an unused peer channel is not a fault");
+        assert!(f.line.contains("34334"), "must name the port: {}", f.line);
+        assert!(
+            f.line.contains("cannot join"),
+            "must say what it costs, not just that a socket is shut: {}",
+            f.line
+        );
+    }
+
+    /// An open one says so, and names the port, so the two findings can be told
+    /// apart in a transcript pasted into an issue.
+    #[test]
+    fn an_open_peer_channel_names_its_port() {
+        let f = peer_channel(true, 34334);
+        assert!(!f.problem);
+        assert!(f.line.contains("34334"), "{}", f.line);
+        assert!(
+            !f.line.contains("cannot"),
+            "an open channel must not read as a shut one: {}",
+            f.line
+        );
     }
 
     /// An operator running `doctor` before installing anything has no fault.
