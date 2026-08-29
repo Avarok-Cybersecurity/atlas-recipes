@@ -263,34 +263,7 @@ pub fn dial_hints(hosts: &[String], port: u16) -> String {
 /// running — which is exactly what happened when this was one function.
 fn local_agent_running() -> bool {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], atlasctl_agent::DEFAULT_PORT));
-    if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok() {
-        return true;
-    }
-    // The browser port is not the agent.
-    //
-    // This asked one port and concluded from it who holds a DIFFERENT one --
-    // the peer port. An agent installed `--no-browser` binds no browser port at
-    // all, and `--port` moves it; both still hold the peer port. Those agents
-    // answered "no" here, so `bind_failure` took the else branch and sent the
-    // operator hunting for a second `atlasctl agent pair` that does not exist
-    // -- the exact outcome this pair of functions was written to stop, and the
-    // one `the_remedy_is_never_to_go_hunting_for_a_process` forbids.
-    //
-    // `--no-browser` is not an edge case here: it is the headless rank-holder,
-    // which is the machine most likely to be running `agent pair` at all.
-    //
-    // An installed unit answers the same question by a route that does not
-    // depend on which ports the agent chose. Best effort, as in `agentinfo`: a
-    // machine whose home cannot be read is one we cannot make this claim about,
-    // and guessing either way sends the operator to the wrong command.
-    crate::hostinfo::home_dir().is_ok_and(|home| {
-        crate::service::installed_unit(
-            &atlasctl_core::io::StdFileSystem,
-            &home,
-            crate::commands::service::uid_of(&home),
-        )
-        .is_ok_and(|u| u.is_some())
-    })
+    std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok()
 }
 
 /// Why the peer port could not be bound, in the operator's terms.
@@ -318,9 +291,32 @@ fn bind_failure(port: u16, agent_running: bool) -> String {
              This command is for a machine whose agent is not running yet."
         )
     } else {
+        // Both, because this cannot tell them apart.
+        //
+        // The probe above asks the BROWSER port; an agent installed
+        // `--no-browser` binds none, and `--port` moves it, so a perfectly
+        // healthy agent answers "no" here. Naming only the second cause sent
+        // those operators hunting for a process that does not exist.
+        //
+        // An earlier attempt at this fell back to whether a service UNIT exists
+        // on disk, which is worse: `install.sh` writes that file for everyone,
+        // so it reads true on a machine whose agent is merely INSTALLED and
+        // stopped -- and that is exactly the machine this command is for. It
+        // would have asserted "your agent is running" while the real holder,
+        // another `agent pair`, went unnamed. A check that cannot distinguish
+        // two causes should name both, not pick one.
         format!(
-            "could not bind the peer port {port} — is another `atlasctl agent pair` \
-             already waiting?"
+            "could not bind the peer port {port}. Either this machine's agent \
+             holds it — it binds the same port, and one installed with \
+             `--no-browser` or a custom `--port` will not have answered the \
+             probe above — or another `atlasctl agent pair` is already \
+             waiting.\n\
+             \n\
+             Check with:  {} agent status\n\
+             If it is the agent, add machines through its join window instead: \
+             open the control page on the machine you are adding this one FROM \
+             and use \"Show me how\".",
+            env!("CARGO_BIN_NAME")
         )
     }
 }
@@ -332,12 +328,29 @@ mod tests {
     /// With no agent listening, the old wording is right: another `agent pair`
     /// really is the likely holder.
     #[test]
-    fn with_no_agent_running_it_still_suspects_another_pair() {
+    fn with_no_agent_detected_it_names_both_causes_not_one() {
         let msg = bind_failure(34334, false);
         assert!(msg.contains("34334"), "{msg}");
+
+        // BOTH, because this branch cannot tell them apart. The probe asks the
+        // BROWSER port, and an agent installed `--no-browser` or on a custom
+        // `--port` binds none -- so "no agent answered" does not mean "no agent".
+        // Naming only the second cause sent those operators hunting for a
+        // process that does not exist; a previous attempt at naming only the
+        // FIRST read a service unit file, which is true on any machine where
+        // the agent is merely installed and stopped, and misattributed a real
+        // second `agent pair` to the agent.
         assert!(
             msg.contains("another `atlasctl agent pair`"),
-            "without an agent, that is the honest guess: {msg}"
+            "must still name the second pair: {msg}"
+        );
+        assert!(
+            msg.contains("--no-browser"),
+            "must also name the agent that did not answer the probe: {msg}"
+        );
+        assert!(
+            msg.contains("agent status"),
+            "and must give the command that distinguishes them: {msg}"
         );
     }
 

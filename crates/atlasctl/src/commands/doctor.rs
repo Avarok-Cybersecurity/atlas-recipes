@@ -140,7 +140,19 @@ fn check_sparkrun() -> usize {
 /// unreadable `df` says nothing about whether there is room, and doctor now
 /// exits non-zero on a problem, so guessing here would fail a healthy box.
 fn check_disk() -> Finding {
-    let cache = crate::hostinfo::snapshot().ok().map(|h| h.hf_cache_dir);
+    // The cache path must EXIST to be measured, because `free_bytes` walks up to
+    // the nearest existing ancestor (platform.rs:170). Without this check an
+    // unmounted `/mnt/models` returns ROOT's free space, and `disk_finding`
+    // prints "12 GB free on /mnt/models" -- a number from one volume under the
+    // other's name, which is worse than measuring the wrong path openly.
+    //
+    // It also makes the `.` fallback real. It was previously unreachable for the
+    // same reason: `free_bytes` almost never returns `None`, so the commit that
+    // added it claimed a fallback that could not happen.
+    let cache = crate::hostinfo::snapshot()
+        .ok()
+        .map(|h| h.hf_cache_dir)
+        .filter(|d| std::path::Path::new(d).exists());
     let at_cache = cache
         .as_deref()
         .and_then(|d| atlasctl_core::platform::free_bytes(std::path::Path::new(d)));

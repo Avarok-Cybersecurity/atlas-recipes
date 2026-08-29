@@ -30,7 +30,7 @@ pub fn stop(args: &StopArgs) -> Result<()> {
         // readable. Only when nothing is running under that name does the
         // resolve error stand, so a TYPO still gets its "Did you mean ...?".
         Err(unresolved) => {
-            let found = containers_for_recipe(&StdProcessRunner, typed)?;
+            let found = containers_for_recipe(&StdProcessRunner, typed, false)?;
             if found.is_empty() {
                 return Err(unresolved);
             }
@@ -69,15 +69,29 @@ fn known_recipe(name: &str) -> Result<String> {
 ///
 /// The label is written by the launch itself, so it survives a registry being
 /// removed and needs no name arithmetic here.
-fn containers_for_recipe(runner: &dyn ProcessRunner, recipe: &str) -> Result<Vec<String>> {
-    let out = runner.run(&[
-        "docker".into(),
-        "ps".into(),
-        "--filter".into(),
-        format!("label={LABEL_RECIPE}={recipe}"),
-        "--format".into(),
-        "{{.Names}}".into(),
-    ])?;
+fn containers_for_recipe(
+    runner: &dyn ProcessRunner,
+    recipe: &str,
+    include_exited: bool,
+) -> Result<Vec<String>> {
+    // `stop` wants running containers only; `logs` wants exited ones too, for
+    // the reason the exact-name probe already gives: "a container that exited
+    // still has logs worth reading, and that is often exactly why someone is
+    // here." Without this the label fallback could not find a CRASHED rank
+    // container -- the single likeliest reason to be reading logs at all.
+    let mut argv: Vec<String> = vec!["docker".into(), "ps".into()];
+    if include_exited {
+        argv.push("-a".into());
+    }
+    let out = runner.run(&{
+        argv.extend([
+            "--filter".into(),
+            format!("label={LABEL_RECIPE}={recipe}"),
+            "--format".into(),
+            "{{.Names}}".into(),
+        ]);
+        argv
+    })?;
     Ok(out
         .stdout
         .lines()
@@ -102,7 +116,7 @@ fn stop_all_with(runner: &dyn ProcessRunner) -> Result<()> {
 /// `typed` is what the operator wrote (for the message); `resolved` is the
 /// recipe's own name, which is what the launch wrote into the label.
 fn stop_recipe_with(runner: &dyn ProcessRunner, typed: &str, resolved: &str) -> Result<()> {
-    let found = containers_for_recipe(runner, resolved)?;
+    let found = containers_for_recipe(runner, resolved, false)?;
     if found.is_empty() {
         println!("{typed} is not running");
         return Ok(());
@@ -154,12 +168,17 @@ fn stop_each(runner: &dyn ProcessRunner, targets: Vec<String>) -> Result<()> {
 /// replaces ran `sleep infinity` as PID 1, so its `docker logs` showed nothing
 /// and it had to tail a file inside the container instead.
 pub fn logs(args: &LogsArgs) -> Result<()> {
-    known_recipe(&args.recipe)?;
-    logs_with(&StdProcessRunner, args)
+    // The RESOLVED name is threaded through, not discarded. The launch writes
+    // the resolved recipe into `LABEL_RECIPE`, so filtering on what the operator
+    // TYPED misses exactly the case the label lookup was added for: `logs
+    // @registry/q` would query `label=…=@registry/q` against a label of `q`.
+    // `stop` has always passed the resolved name for this reason.
+    let resolved = known_recipe(&args.recipe)?;
+    logs_with(&StdProcessRunner, args, &resolved)
 }
 
 /// `logs`, with the runner injected so the not-started path is testable.
-fn logs_with(runner: &dyn ProcessRunner, args: &LogsArgs) -> Result<()> {
+fn logs_with(runner: &dyn ProcessRunner, args: &LogsArgs, resolved: &str) -> Result<()> {
     let name = container_of(&args.recipe);
 
     // Ask whether the container exists before streaming. `docker logs` on a
@@ -190,7 +209,7 @@ fn logs_with(runner: &dyn ProcessRunner, args: &LogsArgs) -> Result<()> {
         // printed "started atlas-X-rank0" and, on the very next line,
         // "logs: atlasctl logs X --follow", a command that then denied the
         // container existed.
-        let found = containers_for_recipe(runner, &args.recipe)?;
+        let found = containers_for_recipe(runner, resolved, true)?;
         match found.len() {
             0 => bail!(
                 "no container for `{}` on this machine — it has not been started here. `atlasctl status` lists what is running",

@@ -216,6 +216,7 @@ mod absent_tests {
                 tail: 100,
                 follow: false,
             },
+            "q",
         )
         .expect_err("there is nothing to show");
         let msg = e.to_string();
@@ -248,6 +249,7 @@ mod absent_tests {
                 tail: 100,
                 follow: false,
             },
+            "q",
         )
         .expect("a stopped container still has logs worth reading");
         let argv = &r.calls()[1];
@@ -329,11 +331,83 @@ mod logs_finds_what_run_started {
             stderr: String::new(),
         });
 
-        logs_with(&r, &args("x")).expect("must stream the rank container");
+        logs_with(&r, &args("x"), "x").expect("must stream the rank container");
         let last = r.calls().last().cloned().unwrap_or_default();
         assert!(
             last.contains(&"atlas-x-rank0".to_string()),
             "must read the container the label found, got: {last:?}"
+        );
+    }
+
+    /// The label carries the RESOLVED recipe, so the lookup must filter on that
+    /// and not on what the operator typed.
+    ///
+    /// `logs @registry/q` would otherwise query `label=…=@registry/q` against a
+    /// label of `q` and still deny the container — one of the two cases the
+    /// label fallback exists to fix, and the one the first version missed
+    /// because it passed `args.recipe` through.
+    #[test]
+    fn the_label_query_uses_the_resolved_name_not_the_typed_one() {
+        let r = RecordingRunner::new();
+        r.push_result(Output {
+            status: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
+        r.push_result(Output {
+            status: 0,
+            stdout: "atlas-q-rank0\n".into(),
+            stderr: String::new(),
+        });
+        r.push_result(Output {
+            status: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
+
+        logs_with(&r, &args("@registry/q"), "q").expect("must find it by the resolved label");
+        let label_call = &r.calls()[1];
+        assert!(
+            label_call.iter().any(|a| a.ends_with("=q")),
+            "must filter on the resolved name: {label_call:?}"
+        );
+        assert!(
+            !label_call.iter().any(|a| a.contains("@registry")),
+            "must not filter on the typed name: {label_call:?}"
+        );
+    }
+
+    /// A CRASHED container still has logs, and reading them is the likeliest
+    /// reason to run this command at all.
+    ///
+    /// The exact-name probe uses `ps -a` deliberately. The label fallback did
+    /// not, so it could only ever find a container that was still running —
+    /// fixing the rank case for healthy containers and not for the ones anyone
+    /// actually needs to read.
+    #[test]
+    fn the_label_query_includes_exited_containers() {
+        let r = RecordingRunner::new();
+        r.push_result(Output {
+            status: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
+        r.push_result(Output {
+            status: 0,
+            stdout: "atlas-x-rank0\n".into(),
+            stderr: String::new(),
+        });
+        r.push_result(Output {
+            status: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
+
+        logs_with(&r, &args("x"), "x").expect("must stream");
+        let label_call = &r.calls()[1];
+        assert!(
+            label_call.contains(&"-a".to_string()),
+            "the label lookup must include exited containers: {label_call:?}"
         );
     }
 
@@ -352,7 +426,7 @@ mod logs_finds_what_run_started {
             stdout: "atlas-x-rank0\natlas-x-rank1\n".into(),
             stderr: String::new(),
         });
-        let err = logs_with(&r, &args("x")).expect_err("must refuse to pick one");
+        let err = logs_with(&r, &args("x"), "x").expect_err("must refuse to pick one");
         let msg = format!("{err:#}");
         assert!(
             msg.contains("atlas-x-rank0") && msg.contains("atlas-x-rank1"),
@@ -378,7 +452,7 @@ mod logs_finds_what_run_started {
             stdout: String::new(),
             stderr: String::new(),
         });
-        let err = logs_with(&r, &args("x")).expect_err("must refuse");
+        let err = logs_with(&r, &args("x"), "x").expect_err("must refuse");
         assert!(format!("{err:#}").contains("has not been started here"));
     }
 }
