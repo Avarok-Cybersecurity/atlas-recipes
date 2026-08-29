@@ -210,6 +210,32 @@ case "$out" in *"was not found"*) bad "a stopped docker must not be called missi
 contains "no nvidia runtime: named separately" "$(docker_state nogpu)" "NVIDIA container runtime"
 check "a healthy docker says nothing" "" "$(docker_state fine)"
 
+# --- rc_file ------------------------------------------------------------------
+# The bug: everyone was told `~/.profile`. zsh -- the macOS default since
+# Catalina -- does not read it, so the only instruction a Mac user got did
+# nothing, on the platform the front page tells them to curl from.
+
+# The OS is captured BEFORE the stub is defined: inside `uname()`, `$2` is the
+# stub's own argument list (`-s`), not this helper's -- which silently returned
+# an empty OS and sent the macOS case down the Linux branch.
+rc() { ( . "$WORK/lib.sh"; _os="$2"; SHELL="$1" HOME=/h
+         # shellcheck disable=SC2317  # called indirectly, by rc_file
+         uname() { echo "$_os"; }
+         rc_file ) }
+
+check "zsh gets .zshrc, not .profile"   "/h/.zshrc"        "$(rc /bin/zsh Darwin)"
+check "zsh on linux too"                "/h/.zshrc"        "$(rc /usr/bin/zsh Linux)"
+# bash splits by OS: Terminal.app opens a LOGIN shell, which reads
+# .bash_profile; a Linux terminal is interactive non-login and reads .bashrc.
+check "bash on macos -> .bash_profile"  "/h/.bash_profile" "$(rc /bin/bash Darwin)"
+check "bash on linux -> .bashrc"        "/h/.bashrc"       "$(rc /bin/bash Linux)"
+# fish is NAMED, not guessed: `export PATH=...` is not fish syntax, so emitting
+# it would hand the operator a line that fails when pasted.
+check "fish is identified, not guessed" "fish"             "$(rc /usr/bin/fish Linux)"
+# An unset or unrecognised SHELL keeps the old advice, which is right for sh/ksh.
+check "unknown shell falls back"        "/h/.profile"      "$(rc /bin/dash Linux)"
+check "empty SHELL falls back"          "/h/.profile"      "$(rc '' Linux)"
+
 # --- place_binary -------------------------------------------------------------
 # The point of these is that the FILE moved, not that a message was printed.
 # The bug they exist for printed exactly the right sentence and left the old
