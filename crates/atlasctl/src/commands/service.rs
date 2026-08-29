@@ -273,6 +273,57 @@ fn port_is_taken(port: u16) -> bool {
     TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok()
 }
 
+#[cfg(test)]
+mod obstacle_tests {
+    use super::{port_is_taken, startup_obstacle};
+
+    /// The probe must answer about the port it was ASKED about.
+    ///
+    /// This is the check that replaced an asserted "the usual cause is the
+    /// port". An assertion that is right by luck is no better than the one it
+    /// replaced, so both directions are pinned.
+    #[test]
+    fn the_port_probe_distinguishes_held_from_free() {
+        let held = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let held_port = held.local_addr().expect("addr").port();
+        assert!(port_is_taken(held_port), "a bound port must read as taken");
+
+        // Bind then drop: a port we know is free, rather than a number we hope
+        // nothing on the machine is using.
+        let free_port = {
+            let l = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+            l.local_addr().expect("addr").port()
+        };
+        assert!(
+            !port_is_taken(free_port),
+            "a closed port must not read as taken"
+        );
+    }
+
+    /// With a free port and a usable config directory, there is NO obstacle —
+    /// and saying so is the point.
+    ///
+    /// The bug this replaced was a confident wrong answer. "I cannot see why"
+    /// is the honest one when neither thing this can check is wrong, and it is
+    /// what sends the operator to the log instead of to a dead end.
+    #[test]
+    fn nothing_wrong_reports_nothing_rather_than_guessing() {
+        let free_port = {
+            let l = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+            l.local_addr().expect("addr").port()
+        };
+        // The config-dir half depends on this machine's real directory, so this
+        // asserts only what is safe to assert: whatever it answers, it must not
+        // blame a port that nothing is holding.
+        if let Some(why) = startup_obstacle(free_port) {
+            assert!(
+                !why.contains("already listening"),
+                "must not blame a free port: {why}"
+            );
+        }
+    }
+}
+
 /// Turn a failed join into words the operator can act on.
 ///
 /// Extracted so the WORDING is testable. The defect this replaced was entirely

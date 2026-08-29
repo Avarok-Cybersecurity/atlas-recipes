@@ -226,4 +226,49 @@ mod status_tests {
             assert!(install < run, "the persistent option must come first: {a}");
         }
     }
+
+    /// A port nothing answers on must read as NOT listening, and must say what
+    /// that costs the operator.
+    ///
+    /// The whole reason this line exists is that the browser channel being up
+    /// says nothing about the peer channel: they are separate listeners. A
+    /// version of this that only ever printed the happy case would restore
+    /// exactly the blind spot it was added to remove.
+    #[test]
+    fn a_silent_peer_port_is_reported_as_not_listening() {
+        // Bind and drop, so the port is one we know is free rather than one we
+        // hope is: a hard-coded number can be in use on somebody's machine and
+        // the test would then assert the opposite of what it means.
+        let free = {
+            let l = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+            l.local_addr().expect("addr").port()
+        };
+        let out = super::peer_channel_line(free);
+        assert!(
+            out[0].contains("NOT listening"),
+            "must state it plainly: {out:?}"
+        );
+        assert!(
+            out.iter().any(|l| l.contains("cannot join")),
+            "must say what it costs, not just that a socket is shut: {out:?}"
+        );
+    }
+
+    /// A port something IS listening on reads as accepting, in one line.
+    ///
+    /// One line on the happy path is deliberate: `agent status` is read most
+    /// often when nothing is wrong, and four lines of reassurance is how the
+    /// four lines that matter stop being read.
+    #[test]
+    fn a_live_peer_port_is_reported_in_one_line() {
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let port = l.local_addr().expect("addr").port();
+        let out = super::peer_channel_line(port);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(out[0].contains("accepting on"), "{out:?}");
+        assert!(
+            !out[0].contains("NOT"),
+            "a live port must not read as a dead one: {out:?}"
+        );
+    }
 }
