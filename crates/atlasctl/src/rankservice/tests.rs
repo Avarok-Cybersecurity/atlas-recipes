@@ -207,12 +207,15 @@ fn a_reservation_whose_head_vanished_lapses_and_the_refusal_says_when() {
         "the refusal must say waiting works: {reason}"
     );
 
-    // Age it past the TTL, exactly as an abandoned head would.
+    // Age it past the TTL, exactly as an abandoned head would. The deadline is
+    // pulled BACK to now rather than pushing the creation time into the past:
+    // subtracting a ten-minute Duration from `Instant::now()` panics on Windows
+    // whenever the machine booted more recently than that -- which a CI runner
+    // always has. That panic is how this test broke main after passing here.
     {
         let mut held = svc.reserved.lock().expect("reservation lock poisoned");
         let r = held.as_mut().expect("still reserved");
-        r.made = std::time::Instant::now()
-            - (super::RESERVATION_TTL + std::time::Duration::from_secs(1));
+        r.expires = std::time::Instant::now();
     }
     assert_eq!(
         svc.prepare("other", &a),

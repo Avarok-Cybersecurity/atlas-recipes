@@ -41,14 +41,17 @@ struct Reservation {
     epoch: String,
     recipe: String,
     plan: atlasctl_core::docker::LaunchPlan,
-    /// When this machine agreed. Without it a reservation is immortal: the head
-    /// that made it can close its tab, crash, or be restarted for an upgrade,
-    /// and nothing on this machine ever releases the hold. The refusal below
-    /// tells the operator to "abort that launch, or wait for it to finish" --
-    /// abort needs the lost epoch, and it never finishes, so every future
-    /// cluster launch on this machine is refused until someone restarts the
-    /// agent by hand. On a fleet that is every machine at once.
-    made: std::time::Instant,
+    /// When this hold stops binding, computed FORWARD from creation.
+    ///
+    /// Without an expiry a reservation is immortal: the head that made it can
+    /// close its tab, crash, or restart for an upgrade, and nothing here ever
+    /// releases it -- so every later cluster launch on this machine is refused
+    /// until someone restarts the agent by hand. On a fleet, all of them.
+    ///
+    /// Stored as a deadline rather than a creation time so that nothing ever
+    /// computes `Instant::now() - d`, which PANICS on Windows when `d` exceeds
+    /// the time since boot. A CI runner is minutes old; that panic broke main.
+    expires: std::time::Instant,
 }
 
 /// How long a reservation outlives the head that made it.
@@ -315,7 +318,7 @@ impl RankService for LocalRankService {
             if let Some(r) = held.as_ref()
                 && r.epoch != epoch
             {
-                if r.made.elapsed() >= RESERVATION_TTL {
+                if std::time::Instant::now() >= r.expires {
                     // The head that made this is gone -- it would have committed
                     // or aborted long ago. Releasing here is what makes the
                     // refusal's "wait for it to finish" true, and it is the
@@ -326,7 +329,10 @@ impl RankService for LocalRankService {
                 } else {
                     return refuse(RefusalReason::Reserved {
                         recipe: r.recipe.clone(),
-                        expires_in_s: (RESERVATION_TTL - r.made.elapsed()).as_secs(),
+                        expires_in_s: r
+                            .expires
+                            .saturating_duration_since(std::time::Instant::now())
+                            .as_secs(),
                     });
                 }
             }
@@ -362,7 +368,7 @@ impl RankService for LocalRankService {
             epoch: epoch.to_owned(),
             recipe: assignment.recipe.clone(),
             plan,
-            made: std::time::Instant::now(),
+            expires: std::time::Instant::now() + RESERVATION_TTL,
         });
         PrepareReply::Prepared
     }
