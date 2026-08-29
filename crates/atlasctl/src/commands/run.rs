@@ -207,6 +207,22 @@ pub fn run(args: &RunArgs) -> Result<()> {
         // a URL the operator is invited to open.
         .unwrap_or_else(|| atlasctl_core::flags::DEFAULT_SERVE_PORT.to_string());
 
+    // `docker run -d` exiting 0 means the container was CREATED, not that it
+    // survived. A model that cannot load — a checkpoint this image has no kernel
+    // target for, a KV dtype the engine refuses, plain OOM — exits within
+    // seconds, and printing "started" plus an endpoint URL for that is the same
+    // defect `agent install` fixed: it sends the operator to an address that
+    // will refuse, and to `atlasctl logs` for a container that no longer exists,
+    // because recipes run with `--rm`.
+    //
+    // The wait is the cost of the check. It is deliberately short: a real launch
+    // holds the container for minutes while weights load, so a couple of seconds
+    // only distinguishes "died immediately" from "running", which is the whole
+    // question here.
+    if let Some(why) = died_immediately(&runner, &plan.docker.name) {
+        bail!("{why}");
+    }
+
     println!("started {}", plan.docker.name);
     if port != "0" {
         println!("endpoint: http://localhost:{port}/v1");
@@ -342,5 +358,102 @@ mod value_shape_tests {
         );
         assert!(!setting_shaped("has space"), "nor whitespace");
         assert!(!setting_shaped("semi;colon"), "nor punctuation outside ._-");
+    }
+}
+
+/// How long to give a container to prove it did not die on the spot.
+const LIVENESS_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// `Some(explanation)` when the container is already gone.
+fn died_immediately(runner: &dyn atlasctl_core::io::ProcessRunner, name: &str) -> Option<String> {
+    std::thread::sleep(LIVENESS_WAIT);
+    let out = runner
+        .run(&[
+            "docker".to_string(),
+            "ps".to_string(),
+            "-q".to_string(),
+            "-f".to_string(),
+            format!("name={name}"),
+        ])
+        .ok();
+    liveness_verdict(out.as_ref(), name)
+}
+
+/// The judgement, separated from the waiting and the process call so it can be
+/// tested without either.
+///
+/// `None` covers both "still running" and "cannot tell". A docker that will not
+/// answer `ps` is not evidence the launch failed, and refusing a launch that
+/// worked because a status query hiccuped is worse than the silence this
+/// replaces.
+fn liveness_verdict(
+    out: Option<&atlasctl_core::io::process::Output>,
+    name: &str,
+) -> Option<String> {
+    let out = out?;
+    if !out.success() || !out.stdout.trim().is_empty() {
+        return None;
+    }
+    Some(format!(
+        "`{name}` started and then exited within {}s.\n\
+         That is the container failing at load rather than the launch failing: \
+         docker accepted it, and the engine stopped afterwards.\n\
+         Its logs are already gone — recipes run with `--rm` — so run it in the \
+         foreground to see why:\n    \
+         atlasctl run <recipe> --print\n\
+         then paste that command without `-d`. The usual causes are an image \
+         without a kernel target for this checkpoint, a KV dtype the engine \
+         refuses, and not enough memory.",
+        LIVENESS_WAIT.as_secs()
+    ))
+}
+
+#[cfg(test)]
+mod liveness_tests {
+    use super::liveness_verdict;
+    use atlasctl_core::io::process::Output;
+
+    fn out(status: i32, stdout: &str) -> Output {
+        Output {
+            status,
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+        }
+    }
+
+    /// An empty `docker ps` means the container is gone, and the message has to
+    /// say the two things the operator cannot work out alone: that docker
+    /// accepted the launch, and that `atlasctl logs` will not help because the
+    /// container was removed on exit.
+    #[test]
+    fn an_empty_ps_is_a_container_that_died() {
+        let why = liveness_verdict(Some(&out(0, "")), "atlas-r").expect("gone");
+        assert!(why.contains("atlas-r"), "must name it: {why}");
+        assert!(why.contains("--rm"), "must explain the missing logs: {why}");
+        assert!(
+            why.contains("--print"),
+            "must offer a way to actually see the failure: {why}"
+        );
+    }
+
+    /// A container id means it is still running: say nothing.
+    #[test]
+    fn a_running_container_is_not_reported() {
+        assert!(liveness_verdict(Some(&out(0, "9f3c1a2b\n")), "atlas-r").is_none());
+    }
+
+    /// A docker that will not answer is NOT evidence of failure. Refusing a
+    /// launch that worked, because a status query hiccuped, would be a worse
+    /// bug than the silence this check replaces.
+    #[test]
+    fn an_unanswerable_docker_is_not_treated_as_a_dead_container() {
+        assert!(
+            liveness_verdict(Some(&out(1, "")), "atlas-r").is_none(),
+            "a failed ps must not be read as a dead container"
+        );
+        assert!(
+            liveness_verdict(None, "atlas-r").is_none(),
+            "a runner error must not be read as a dead container"
+        );
     }
 }
