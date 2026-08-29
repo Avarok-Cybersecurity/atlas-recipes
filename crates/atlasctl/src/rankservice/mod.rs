@@ -41,25 +41,16 @@ struct Reservation {
     epoch: String,
     recipe: String,
     plan: atlasctl_core::docker::LaunchPlan,
-    /// When this machine agreed, as a monotonic COUNT rather than an `Instant`.
+    /// When this hold stops binding, computed FORWARD from creation.
     ///
-    /// `Instant` looked natural and is a trap: `Instant::now() - d` panics on
-    /// Windows when `d` exceeds the time since boot, and a CI runner is minutes
-    /// old. The test that ages a reservation past the TTL therefore panicked
-    /// there while passing everywhere else -- which is how it reached main.
+    /// Without an expiry a reservation is immortal: the head that made it can
+    /// close its tab, crash, or restart for an upgrade, and nothing here ever
+    /// releases it -- so every later cluster launch on this machine is refused
+    /// until someone restarts the agent by hand. On a fleet, all of them.
     ///
-    /// Without it a reservation is immortal: the head
-    /// that made it can close its tab, crash, or be restarted for an upgrade,
-    /// and nothing on this machine ever releases the hold. The refusal below
-    /// tells the operator to "abort that launch, or wait for it to finish" --
-    /// abort needs the lost epoch, and it never finishes, so every future
-    /// cluster launch on this machine is refused until someone restarts the
-    /// agent by hand. On a fleet that is every machine at once.
-    /// The instant this hold stops binding, computed FORWARD from creation.
-    ///
-    /// Forward, not backward: a test that wants an already-lapsed reservation
-    /// sets a deadline in the past by construction, instead of subtracting from
-    /// `Instant::now()` -- which is the operation that panics on Windows.
+    /// Stored as a deadline rather than a creation time so that nothing ever
+    /// computes `Instant::now() - d`, which PANICS on Windows when `d` exceeds
+    /// the time since boot. A CI runner is minutes old; that panic broke main.
     expires: std::time::Instant,
 }
 
