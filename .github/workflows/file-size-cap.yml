@@ -35,3 +35,22 @@ jobs:
             echo "files over the 500-line cap:"; echo "$over"; exit 1
           fi
           echo "all source files within the cap"
+
+          # A file at 495 passes and is one comment from failing -- and it fails
+          # on SOMEBODY ELSE'S pull request, because this check runs per PR
+          # against a tree that does not yet contain the other. That is how main
+          # broke on 2026-08-29: two changes each landed under the cap and their
+          # merge was 532. Naming the near-misses is the cheapest warning there
+          # is, and it does not gate -- a file at 495 is not yet wrong.
+          near=$(git ls-files '*.rs' | while read -r f; do
+            n=$(wc -l < "$f")
+            if [ "$n" -gt 460 ] && [ "$n" -le 500 ]; then
+              echo "  $f ($n lines, $((500 - n)) to spare)"
+            fi
+          done)
+          if [ -n "$near" ]; then
+            echo
+            echo "::warning::within 40 lines of the cap - the next change to one"
+            echo "of these may fail on a pull request that never touched it:"
+            echo "$near"
+          fi
