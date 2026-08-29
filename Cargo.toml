@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# The workspace root is ALSO a package (`atlas-recipes-data`). This is
+# deliberate and load-bearing: `cargo package` only includes files beneath the
+# crate root, so a crate under `crates/` could not `include_dir!("../../recipes")`
+# and still work when installed from crates.io. Making the root a package lets
+# `recipes/**` ship inside the `.crate`, so `cargo install atlasctl` gets the
+# same vendored recipe snapshot as the prebuilt tarballs.
+
+[workspace]
+resolver = "3"
+members = ["crates/atlasctl-core", "crates/atlasctl", "crates/atlasctl-protocol", "crates/atlasctl-agent"]
+
+[workspace.package]
+# NOTE: version is deliberately NOT inherited. release-please's cargo-workspace
+# plugin parses each Cargo.toml directly and cannot resolve workspace
+# inheritance — it fails with "invalid [package.version]" — so every crate
+# carries a literal version, and the plugin keeps them in lockstep on release.
+# Everything else here is still shared.
+edition = "2024"
+rust-version = "1.88"
+license = "AGPL-3.0-only"
+repository = "https://github.com/Avarok-Cybersecurity/atlas-recipes"
+authors = ["Avarok Cybersecurity"]
+
+[workspace.dependencies]
+sha2 = "0.11"
+# Each version below MUST equal the `[package] version` of the crate it names.
+# These are requirements, not labels: release-please bumps them by finding the
+# current version string, so a stale one is silently skipped — and `^0.1.1`
+# means `>=0.1.1, <0.2.0`, which resolves fine against 0.1.x and then fails the
+# moment a release is a minor bump:
+#
+#   error: failed to select a version for the requirement
+#          `atlas-recipes-data = "^0.1.1"`
+#
+# All four had drifted to 0.1.1 while the packages reached 0.1.3, and that
+# blocked every release attempt on 2026-08-26. The `version-sync` job in
+# ci.yml now fails the build instead of the release.
+atlas-recipes-data = { path = ".", version = "0.6.0" } # x-release-please-version
+atlasctl-core = { path = "crates/atlasctl-core", version = "0.3.0" } # x-release-please-version
+atlasctl-protocol = { path = "crates/atlasctl-protocol", version = "0.5.0" } # x-release-please-version
+atlasctl-agent = { path = "crates/atlasctl-agent", version = "0.3.0" } # x-release-please-version
+anyhow = "1"
+include_dir = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_yaml_ng = "0.10"
+thiserror = "2"
+
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+all = "deny"
+
+[package]
+name = "atlas-recipes-data"
+description = "Vendored Atlas Spark recipe corpus, embedded at compile time."
+version = "0.6.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+include = ["src/**/*.rs", "recipes/**/*.yaml", "LICENSE", "README.md"]
+build = "build.rs"
+
+[dependencies]
+include_dir.workspace = true
+
+[lints]
+workspace = true

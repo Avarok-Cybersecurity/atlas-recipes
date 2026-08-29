@@ -1,0 +1,471 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+//! This machine, acting as one rank of somebody else's cluster.
+//!
+//! The head never renders another machine's command. It does not know which
+//! recipe revision that machine has, what its flag table claims, or what
+//! hardware it is exposing — so a preview the head invented would be a guess
+//! presented as the thing that will execute. Each rank answers for itself,
+//! through the same `translate()` the launcher uses, so preview and execution
+//! cannot drift.
+//!
+//! ## The reservation
+//!
+//! `prepare` renders the command and *keeps it*. `commit` runs what was kept,
+//! and takes only an epoch. So the bytes that reach the container runtime were
+//! produced by this machine, from its own recipe, before the head was told
+//! anything — a head compromised between the two phases can start the launch
+//! the operator already previewed, or not start it, and nothing else.
+//!
+//! One reservation at a time, deliberately. A machine that has agreed to be
+//! rank 1 of one cluster must refuse to be rank 1 of another, or the second
+//! commit would silently replace the first cluster's container mid-launch.
+
+use anyhow::{Context, Result, bail};
+use atlasctl_agent::cluster::{PrepareReply, RankAssignment, RefusalReason};
+use atlasctl_agent::rank::RankService;
+use atlasctl_agent::rendezvous;
+use atlasctl_core::chain::UserConfig;
+use atlasctl_core::docker::collective::CollectiveEnv;
+use atlasctl_core::docker::profile::{DeviceProfile, LaunchProfile};
+use atlasctl_core::docker::translate::{LaunchContext, Placement, translate};
+use atlasctl_core::host::HostSnapshot;
+use atlasctl_core::io::ProcessRunner;
+use atlasctl_core::registry::{RecipeRef, RegistrySet};
+use atlasctl_core::settings;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+
+/// What this machine can do, as opposed to what it ships.
+///
+/// Grouped rather than passed loose: these three are one question — whether
+/// this node can take a rank at all, and whether it can reach the rendezvous
+/// it would be given — and a constructor that takes them separately reads as
+/// nine unrelated arguments.
+pub struct RankEnvironment {
+    /// Why this machine cannot run models, when it cannot.
+    pub can_launch: Result<(), String>,
+    /// This machine's own addresses, with their subnets.
+    pub local_addresses: Vec<atlasctl_protocol::fleet::NodeAddress>,
+    /// How to ask the network about an address subnet arithmetic cannot place.
+    pub reachability: Box<dyn rendezvous::Reachability>,
+    /// Which RDMA device backs each of this machine's interfaces.
+    ///
+    /// Injected rather than read at render time so the mapping is fixed for
+    /// the life of the agent and a test can supply its own.
+    pub rdma_devices: BTreeMap<String, String>,
+}
+
+/// Serves rank requests from this machine's own recipe inventory.
+pub struct LocalRankService {
+    registry: RegistrySet,
+    host: HostSnapshot,
+    profile: &'static LaunchProfile,
+    devices: Box<dyn DeviceProfile>,
+    collective: Box<dyn CollectiveEnv>,
+    runner: Arc<dyn ProcessRunner>,
+    /// Why this machine cannot run models, when it cannot.
+    can_launch: Result<(), String>,
+    /// This machine's own addresses, for judging whether a rendezvous address
+    /// is one it can actually reach.
+    local_addresses: Vec<atlasctl_protocol::fleet::NodeAddress>,
+    /// How to ask the network about an address subnet arithmetic cannot place.
+    reachability: Box<dyn rendezvous::Reachability>,
+    /// Which RDMA device backs each of this machine's interfaces.
+    rdma_devices: BTreeMap<String, String>,
+    reserved: Mutex<Option<Reservation>>,
+}
+
+impl std::fmt::Debug for LocalRankService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalRankService").finish_non_exhaustive()
+    }
+}
+
+impl LocalRankService {
+    /// Build a rank service for this machine.
+    #[must_use]
+    pub fn new(
+        registry: RegistrySet,
+        host: HostSnapshot,
+        profile: &'static LaunchProfile,
+        devices: Box<dyn DeviceProfile>,
+        collective: Box<dyn CollectiveEnv>,
+        runner: Arc<dyn ProcessRunner>,
+        env: RankEnvironment,
+    ) -> Self {
+        Self {
+            registry,
+            host,
+            profile,
+            devices,
+            collective,
+            runner,
+            can_launch: env.can_launch,
+            local_addresses: env.local_addresses,
+            reachability: env.reachability,
+            rdma_devices: env.rdma_devices,
+            reserved: Mutex::new(None),
+        }
+    }
+
+    /// Resolve, agree on the revision, and translate — the shared path behind
+    /// both preview and prepare, so a preview cannot succeed where the prepare
+    /// that follows it would fail.
+    fn plan_for(&self, a: &RankAssignment) -> Result<atlasctl_core::docker::LaunchPlan> {
+        let recipe = self
+            .registry
+            .resolve(&RecipeRef::parse(&a.recipe))
+            .with_context(|| format!("this node does not ship recipe {}", a.recipe))?;
+
+        // Two nodes running different revisions of one recipe would launch two
+        // different models and call it one cluster; the failure would surface
+        // as wrong output rather than as an error. An empty hash means the head
+        // did not state one, which is not agreement.
+        let local = recipe.content_hash();
+        if a.recipe_hash != local {
+            bail!(
+                "{}",
+                RefusalReason::RecipeMismatch {
+                    recipe: a.recipe.clone(),
+                    head: if a.recipe_hash.is_empty() {
+                        "(none sent)".to_owned()
+                    } else {
+                        a.recipe_hash.clone()
+                    },
+                    local,
+                }
+            );
+        }
+
+        // The wire carries settings, and they go back through the SAME bounded
+        // schema the browser's settings go through. A peer cannot widen what a
+        // setting may be simply by virtue of being a peer.
+        let overrides = settings::validate(&a.settings).map_err(|errors| {
+            anyhow::anyhow!(
+                "this node will not accept those settings: {}",
+                errors
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        })?;
+
+        let placement = Placement::Rank {
+            rank: a.rank,
+            world_size: a.world_size,
+            master_addr: a.master_addr.clone(),
+            master_port: a.master_port,
+        };
+
+        let mut plan = translate(
+            &recipe,
+            &overrides,
+            &UserConfig::default(),
+            &self.host,
+            &placement,
+            &LaunchContext {
+                profile: self.profile,
+                devices: self.devices.as_ref(),
+                collective: self.collective.as_ref(),
+            },
+        )
+        .with_context(|| format!("rendering rank {} of {}", a.rank, a.recipe))?;
+
+        // Pin the collective to the link the plan actually chose.
+        //
+        // Nothing set NCCL_SOCKET_IFNAME or NCCL_IB_HCA, on the reasoning that
+        // guessing a NIC name produces a launch that looks fine and silently
+        // uses the wrong fabric. That is true of guessing -- but leaving them
+        // unset does not avoid the guess, it delegates it to NCCL, which on a
+        // machine with four RoCE ports picked the one that reaches nobody and
+        // died at `ibv_modify_qp` with `Connection timed out`.
+        //
+        // This is not a guess. The rendezvous address is on exactly one of this
+        // machine's interfaces, and that interface is backed by exactly one
+        // RDMA device. Both are read from the system, not assumed.
+        if let Placement::Rank { .. } = placement {
+            for (k, v) in self.collective_binding(&a.master_addr) {
+                plan.docker.env.insert(k, v);
+            }
+        }
+
+        // The agent removes a container by name before it starts one, and on
+        // stop, so it owns this lifecycle already. Auto-remove therefore buys
+        // nothing and costs the only evidence there is: a rank that dies takes
+        // its logs with it, and the operator's next question is always "why".
+        // That happened for real -- a rank died a second after starting and the
+        // container was gone before anyone could read it.
+        plan.docker.auto_remove = false;
+        Ok(plan)
+    }
+
+    /// The interface and RDMA device carrying a given address, as NCCL wants
+    /// them named.
+    ///
+    /// Empty when the address is not on a directly-attached subnet: a routed
+    /// rendezvous has no single local interface to name, and inventing one
+    /// would be the guess this exists to avoid.
+    fn collective_binding(&self, master_addr: &str) -> Vec<(String, String)> {
+        let Some(iface) = self
+            .local_addresses
+            .iter()
+            .filter(|a| a.prefix_len > 0 && !a.iface.is_empty())
+            .find(|a| rendezvous::shares_network(&a.addr, a.prefix_len, master_addr))
+            .map(|a| a.iface.clone())
+        else {
+            return Vec::new();
+        };
+        // Which variables carry this is the collective backend's business.
+        // Naming them here would put a vendor's vocabulary in a module that is
+        // supposed to have none, which is how the abstraction erodes.
+        self.collective
+            .bind_interface(&iface, self.rdma_devices.get(&iface).map(String::as_str))
+            .into_iter()
+            .collect()
+    }
+
+    /// Whether this machine can reach the rendezvous address.
+    ///
+    /// Directly-attached first because it is exact and free; a routed probe
+    /// only for addresses subnet arithmetic cannot account for.
+    fn can_reach(&self, addr: &str, port: u16) -> bool {
+        rendezvous::on_local_subnet(addr, &self.local_addresses)
+            || self.reachability.answers(addr, port)
+    }
+
+    /// Whether the container runtime is answering here.
+    fn docker_ok(&self) -> bool {
+        self.runner
+            .run(&atlasctl_agent::fleet::docker_probe_argv())
+            .is_ok_and(|o| o.success())
+    }
+}
+
+impl RankService for LocalRankService {
+    fn render(&self, assignment: &RankAssignment) -> Result<(String, Vec<String>)> {
+        let plan = self.plan_for(assignment)?;
+        // Surfaced rather than swallowed: a setting this node's flag table does
+        // not claim will silently not apply, and the operator should see that
+        // before they commit rather than wonder afterwards.
+        let unmapped = plan.unmapped.iter().map(|u| u.key.clone()).collect();
+        Ok((plan.docker.to_string(), unmapped))
+    }
+
+    fn content_hash(&self, recipe: &str) -> Result<String> {
+        Ok(self
+            .registry
+            .resolve(&RecipeRef::parse(recipe))
+            .with_context(|| format!("this node does not ship recipe {recipe}"))?
+            .content_hash())
+    }
+
+    fn recipe_port(&self, recipe: &str) -> Result<Option<u16>> {
+        let resolved = self
+            .registry
+            .resolve(&RecipeRef::parse(recipe))
+            .with_context(|| format!("this node does not ship recipe {recipe}"))?;
+        Ok(match resolved.defaults.get("port") {
+            Some(atlasctl_core::ScalarValue::Int(p)) => u16::try_from(*p).ok(),
+            _ => None,
+        })
+    }
+
+    fn prepare(&self, epoch: &str, assignment: &RankAssignment) -> PrepareReply {
+        let refuse = |r: RefusalReason| PrepareReply::Refused {
+            reason: r.to_string(),
+        };
+
+        if let Err(why) = &self.can_launch {
+            return refuse(RefusalReason::NotLaunchable(why.clone()));
+        }
+
+        // Checked before rendering: a machine that has agreed to be rank 1 of
+        // one cluster must refuse to be rank 1 of another, or the second commit
+        // would replace the first cluster's container mid-launch. Re-preparing
+        // the SAME epoch is allowed, because a retried prepare after a dropped
+        // connection is an ordinary thing and not a second cluster.
+        {
+            let mut held = self.reserved.lock().expect("reservation lock poisoned");
+            if let Some(r) = held.as_ref()
+                && r.epoch != epoch
+            {
+                if std::time::Instant::now() >= r.expires {
+                    // The head that made this is gone -- it would have committed
+                    // or aborted long ago. Releasing here is what makes the
+                    // refusal's "wait for it to finish" true, and it is the
+                    // behaviour `RankService::abort`'s own doc already claims:
+                    // "a stale reservation is released by the next prepare
+                    // regardless".
+                    *held = None;
+                } else {
+                    return refuse(RefusalReason::Reserved {
+                        recipe: r.recipe.clone(),
+                        expires_in_s: r
+                            .expires
+                            .saturating_duration_since(std::time::Instant::now())
+                            .as_secs(),
+                    });
+                }
+            }
+        }
+
+        if !self.docker_ok() {
+            return refuse(RefusalReason::DockerUnavailable);
+        }
+
+        // Checked here, where a refusal costs a second and names the problem.
+        // After commit the same fact is a silent hang: the rank starts, waits
+        // at the collective barrier, and retries until somebody reads the logs.
+        if !self.can_reach(&assignment.master_addr, assignment.master_port) {
+            return refuse(RefusalReason::RendezvousUnreachable(rendezvous::explain(
+                &assignment.master_addr,
+                &self.local_addresses,
+            )));
+        }
+
+        // Rendering is the last check, and it is the strongest one: it proves
+        // this machine can actually produce a command for this assignment, so
+        // commit has nothing left that can fail on its own terms.
+        let plan = match self.plan_for(assignment) {
+            Ok(p) => p,
+            Err(e) => {
+                return PrepareReply::Refused {
+                    reason: format!("{e:#}"),
+                };
+            }
+        };
+
+        *self.reserved.lock().expect("reservation lock poisoned") = Some(Reservation {
+            epoch: epoch.to_owned(),
+            recipe: assignment.recipe.clone(),
+            plan,
+            expires: std::time::Instant::now() + RESERVATION_TTL,
+        });
+        PrepareReply::Prepared
+    }
+
+    fn commit(&self, epoch: &str) -> Result<String> {
+        // Taken, not borrowed: a committed reservation is spent, so a replayed
+        // commit frame starts nothing a second time.
+        let held = {
+            let mut slot = self.reserved.lock().expect("reservation lock poisoned");
+            match slot.as_ref() {
+                Some(r) if r.epoch == epoch => slot.take().expect("just matched"),
+                Some(r) => bail!(
+                    "this node is holding a reservation for {}, not {epoch}",
+                    r.epoch
+                ),
+                None => bail!("this node has no reservation for {epoch}; prepare first"),
+            }
+        };
+
+        let name = held.plan.docker.name.clone();
+        // Clear a previous container of the same name. Failure is expected when
+        // nothing is there; the run below is what has to succeed.
+        let _ = self
+            .runner
+            .run(&["docker".into(), "rm".into(), "-f".into(), name.clone()]);
+
+        let out = self
+            .runner
+            .run(&held.plan.docker.to_argv())
+            .context("starting the rank")?;
+        if !out.success() {
+            bail!("docker run exited {}: {}", out.status, out.stderr.trim());
+        }
+        Ok(name)
+    }
+
+    fn alive(&self, container: &str) -> Result<bool> {
+        // Not ours to ask about. See `is_ours`.
+        if !is_ours(container) {
+            return Ok(false);
+        }
+        let out = self
+            .runner
+            .run(&[
+                "docker".into(),
+                "inspect".into(),
+                "-f".into(),
+                "{{.State.Running}}".into(),
+                container.to_owned(),
+            ])
+            .context("asking the container runtime about a rank")?;
+        // A container that has already been removed is not running, and that is
+        // an answer rather than a failure: a rank that died under `--rm` is
+        // exactly the case this exists to catch.
+        if !out.success() {
+            return Ok(false);
+        }
+        Ok(out.stdout.trim() == "true")
+    }
+
+    fn stop(&self, container: &str) -> Result<()> {
+        // The name arrives from whichever node is acting as head, and this
+        // runs `docker rm -f` on it. Unbounded, that is a peer with the
+        // `controller` grant force-removing ANY container on this machine —
+        // well past "drive its own launch, one hop". The browser's own stop
+        // has always been scoped to `atlas-{recipe}`; this path had no
+        // equivalent.
+        if !is_ours(container) {
+            anyhow::bail!(
+                "refusing to stop `{container}`: a rank may only stop a \
+                 container this fleet launched, and that name is not one"
+            );
+        }
+        let out = self
+            .runner
+            .run(&[
+                "docker".into(),
+                "rm".into(),
+                "-f".into(),
+                container.to_owned(),
+            ])
+            .context("stopping the rank")?;
+        // Already gone is the outcome the caller wanted, so it is not a
+        // failure: rollback asking about a container that never started is an
+        // ordinary race.
+        if !out.success() && !out.stderr.contains("No such container") {
+            bail!("docker rm exited {}: {}", out.status, out.stderr.trim());
+        }
+        Ok(())
+    }
+
+    fn abort(&self, epoch: &str) {
+        let mut slot = self.reserved.lock().expect("reservation lock poisoned");
+        // Only the named reservation: an abort for a stale epoch arriving late
+        // must not release a reservation made since.
+        if slot.as_ref().is_some_and(|r| r.epoch == epoch) {
+            *slot = None;
+        }
+    }
+}
+
+/// Whether a container name is one this fleet could have created.
+///
+/// `translate::container_name` only ever produces `atlas-{recipe}` or
+/// `atlas-{recipe}-rank{n}`, and `recipe` is a `RecipeId` — lowercase
+/// alphanumerics, `.` and `-`. Anything outside that shape was not launched by
+/// us, so a request to stop it is not a request we can honour.
+///
+/// A prefix test alone would already stop the escalation; matching the shape
+/// costs nothing more and keeps the rule readable next to the thing it mirrors.
+pub(crate) fn is_ours(container: &str) -> bool {
+    let Some(rest) = container.strip_prefix("atlas-") else {
+        return false;
+    };
+    !rest.is_empty()
+        && rest
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-')
+}
+
+mod reservation;
+pub(crate) use reservation::*;
+
+#[cfg(test)]
+mod commit_tests;
+#[cfg(test)]
+mod tests;

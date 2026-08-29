@@ -1,0 +1,162 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# Windows is a supported target, so it needs a compiler that says so. Nothing
+# else in CI runs on Windows, and a unix-only API compiles perfectly well on
+# Linux right up to the moment someone asks for a Windows binary.
+name: windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # `check` before `test`: the first port of a unix-only codebase fails to
+      # compile long before it fails a test, and a compile error list is the
+      # thing worth reading.
+      - name: cargo check
+        run: cargo check --workspace --all-targets
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: cargo test
+        run: cargo test --workspace
+
+      # A parse pass, not a run: the installer downloads a release, and there
+      # is no Windows release until this lands. A syntax error in a script
+      # served by `irm | iex` is the worst possible failure mode -- it fails
+      # halfway through, on the user's machine, with no way back.
+      - name: parse install.ps1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $errs = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            "scripts/install.ps1", [ref]$null, [ref]$errs)
+          if ($errs) { $errs | ForEach-Object { Write-Host $_ }; exit 1 }
+          Write-Host "install.ps1 parses"
+
+      # Parsing is not deciding. This drives the checksum gate — the decision
+      # standing between `irm | iex` and executing arbitrary bytes — and the
+      # version comparison that chooses between upgrading and skipping.
+      - name: install.ps1 behaviour
+        shell: pwsh
+        run: ./scripts/tests/install-ps1.test.ps1
+
+      # ...and again under WINDOWS PowerShell 5.1, which is what the one-liner on
+      # the website is actually pasted into: it is the shell `Win+X` opens and the
+      # only one present on a clean install. 5.1 and pwsh 7 disagree about native
+      # commands -- 5.1 turns the first stderr line of a redirected native command
+      # into a TERMINATING error under `$ErrorActionPreference = 'Stop'` -- so a
+      # pwsh-only suite is green while every real visitor's install aborts. That
+      # is not hypothetical: it is how `docker info` (which writes to stderr in
+      # exactly the "Docker Desktop installed but stopped" state the probe exists
+      # to report) took the installer down mid-run.
+      - name: install.ps1 behaviour (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./scripts/tests/install-ps1.test.ps1
+
+      # The scheduled-task plan is the half no unit test can reach: whether
+      # Task Scheduler ACCEPTS this XML, whether the task then reports Running,
+      # and whether uninstall removes it. Every one of those has failed for a
+      # reason a pure planner cannot see -- a rejected encoding, a quoting bug,
+      # a task that exists but whose process died.
+      - name: install, verify and remove the agent for real
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Native stderr is not an error. Under `Stop`, pwsh 7 turns a native
+          # command's stderr into a terminating error when it is redirected —
+          # and `agent install` writes its notes there, so capturing its output
+          # would throw on a SUCCESSFUL install.
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo build --release -p atlasctl
+          $exe = "target/release/atlasctl.exe"
+
+          # Waits for the port, and says something useful when it does not
+          # arrive. A bare "never listened" leaves nobody able to tell a slow
+          # runner from an agent that died.
+          function Wait-ForAgent {
+            param([int]$Seconds = 60)
+            foreach ($i in 1..$Seconds) {
+              if (Get-NetTCPConnection -LocalPort 34333 -State Listen -ErrorAction SilentlyContinue) {
+                return $true
+              }
+              Start-Sleep -Seconds 1
+            }
+            $t = Get-ScheduledTask -TaskName 'atlasctl-agent' -ErrorAction SilentlyContinue
+            $i = Get-ScheduledTaskInfo -TaskName 'atlasctl-agent' -ErrorAction SilentlyContinue
+            Write-Host "task state: $($t.State)  lastResult: $($i.LastTaskResult)  lastRun: $($i.LastRunTime)"
+            Write-Host "atlasctl processes: $((Get-Process atlasctl -ErrorAction SilentlyContinue | Measure-Object).Count)"
+            $log = "$env:LOCALAPPDATA\atlasctl\atlasctl-agent.log"
+            if (Test-Path -LiteralPath $log) {
+              Write-Host "--- agent log ($((Get-Item $log).Length) bytes) ---"
+              # Piped to Write-Host, not left on the output stream. A bare
+              # `Get-Content` here made this function RETURN the log lines, so
+              # it answered `@(line1, …, $false)` — a truthy array — and
+              # `if (-not (Wait-ForAgent))` never threw. The masking triggered
+              # exactly when a non-empty log existed, which is the diagnosed
+              # death this helper was added to report.
+              Get-Content -LiteralPath $log | Write-Host
+            } else {
+              Write-Host "no log at $log"
+            }
+            return $false
+          }
+
+          & $exe agent install --no-discovery
+          if ($LASTEXITCODE -ne 0) { throw "agent install failed" }
+
+          $task = Get-ScheduledTask -TaskName 'atlasctl-agent' -ErrorAction Stop
+          Write-Host "task state: $($task.State)"
+
+          # The install claims it started; prove the port is actually open
+          # rather than trusting the claim. This is the exact failure the
+          # `verify` step exists for.
+          if (-not (Wait-ForAgent)) { throw "the agent never listened on 34333" }
+          Write-Host "the agent is listening"
+
+          # Installing twice is the reported failure on macOS and the reason
+          # pre_activate exists. It must be an upgrade, not an error -- and
+          # `agent install` returns 0 for "installed but not running" ON
+          # PURPOSE, so an exit-code check alone passes while the operator is
+          # told their agent is down. It was: the first run of this step
+          # printed "agent installed, but it is NOT running" and went green.
+          # The outcome, not the exit code, is what has to hold.
+          $out = & $exe agent install --no-discovery 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw "re-install must upgrade in place, not fail" }
+          if ($out -match 'NOT running') {
+            throw "an upgrade reported the agent as down: $out"
+          }
+          if (-not (Wait-ForAgent)) { throw "the agent did not come back after an upgrade" }
+          Write-Host "the upgrade left a listening agent behind"
+
+          # The log is the entire reason `--log-file` exists. An empty or
+          # missing one means the redirect silently did nothing, and the
+          # install's "see why with Get-Content" advice names a file that
+          # never appears.
+          $log = "$env:LOCALAPPDATA\atlasctl\atlasctl-agent.log"
+          if (-not (Test-Path $log)) { throw "no agent log at $log" }
+          if ((Get-Item $log).Length -eq 0) { throw "the agent log at $log is empty" }
+          Write-Host "--- agent log ---"; Get-Content $log -Tail 20
+
+          & $exe agent uninstall
+          if ($LASTEXITCODE -ne 0) { throw "agent uninstall failed" }
+          if (Get-ScheduledTask -TaskName 'atlasctl-agent' -ErrorAction SilentlyContinue) {
+            throw "uninstall left the task behind"
+          }
+          Write-Host "install / re-install / uninstall all clean"

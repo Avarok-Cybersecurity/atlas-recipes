@@ -8,8 +8,8 @@ metadata:
   description: |
     THE FLAGSHIP. Qwen3.6-35B-A3B (qwen3_5_moe architecture) at native FP8
     on the Atlas runtime: bf16 lm-head (full-precision 248K-vocab logit
-    projection), bf16 KV cache, 64K context, MTP K=2 speculative decoding,
-    live-streamed tool-call argument deltas. Single GB10 (~109 of 119.7 GB).
+    projection), bf16 KV cache, 256K context, MTP K=2 speculative decoding,
+    live-streamed tool-call argument deltas. Single GB10 (~105 of 119.7 GB).
 
     Config rationale (gate-measured, opencode webserver_ok harness, N=10):
       - bf16 lm-head: ws_ok 10/10, tightest wall distribution of the
@@ -18,6 +18,11 @@ metadata:
         at agentic lengths; fp8 KV is a memory-only lever for ~128K.
       - Re-verified post --lm-head-dtype merge 2026-06-09: 10/10 ws_ok,
         10/10 followed_directions.
+      - 256K context live-validated 2026-07-18 on a single GB10: bf16 KV
+        pool sizes to 37.4 GB across the 10 attention layers (122595
+        blocks), ~105 GB steady-state inside the 107.1 GB budget at 0.88
+        util; serve ready in ~35 s (fast-load), coherence + tool-call
+        smokes green cross-node.
   maintainer: avarok
   category: agent
   model_params: 35B
@@ -28,9 +33,12 @@ metadata:
 defaults:
   port: 8888
   host: 0.0.0.0
-  # 64K with bf16 KV fits next to the FP8 weights on one GB10 (~109/119.7
-  # GB, live-validated 2026-06-09 incl. streaming tool calls).
-  max_model_len: 65536
+  # 256K with bf16 KV fits next to the FP8 weights on one GB10: the KV
+  # pool is only 37.4 GB because just 10 of the 40 layers are attention
+  # (~105 GB steady of the 107.1 GB budget at 0.88 util). Live-validated
+  # 2026-07-18 incl. tool calls. (Old 64K profile: ~109/119.7 GB,
+  # 2026-06-09.)
+  max_model_len: 262144
   # max_batch_size 2: REQUIRED until Avarok-Cybersecurity/atlas#110 lands —
   # an uncapped batch hits the concurrency>=4 + deep-context CUDA-700 crash
   # (re-confirmed live 2026-06-11 at n_decode=2 + n_prefill=2, ~8.5K ctx).

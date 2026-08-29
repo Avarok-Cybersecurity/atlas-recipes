@@ -7,7 +7,7 @@ max_nodes: 1
 metadata:
   description: |
     Qwen3.6-35B-A3B (nvidia modelopt NVFP4) — the DEFAULT 35B recipe. MTP
-    K=1 on a single GB10 with calibrated fp8 KV (128K context lever) and
+    K=1 on a single GB10 with calibrated fp8 KV (256K context) and
     the agentic/tool-calling stack (qwen3_coder parser, tool grammar OFF).
 
     Checkpoint choice: this recipe previously pointed at
@@ -62,7 +62,12 @@ metadata:
 defaults:
   port: 8888
   host: 0.0.0.0
-  max_model_len: 131072
+  # 256K: fp8 KV at 262144 needs only ~18.7 GB of pool (half the 37.4 GB
+  # bf16 pool measured on the fp8-mtp flagship at 256K on 2026-07-18 —
+  # identical 10-attention-layer layout), and NVFP4 weights are ~14 GB
+  # smaller than FP8, so the fit is derived from that measurement, with
+  # margin, rather than a separate live run.
+  max_model_len: 262144
   kv_cache_dtype: fp8
   gpu_memory_utilization: 0.88
   scheduling_policy: slai

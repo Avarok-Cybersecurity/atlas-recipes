@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+name: Bootstrap crates.io publish
+
+# SUPERSEDED — kept as a recovery path, not a normal one.
+#
+# This existed because crates.io has no pending-publisher mechanism: a crate
+# must already exist before a Trusted Publisher can be attached to it, so the
+# very first publish could not use OIDC and had to present a token. That has
+# happened; all five crates were published at 0.1.0 on 2026-08-25 and their
+# Trusted Publishers are configured.
+#
+# Normal releases now go through release.yml, which mints a short-lived token
+# from its own OIDC identity and stores nothing. This file only matters if that
+# path is broken and something has to ship anyway.
+#
+# Delete it, and revoke CARGO_REGISTRY_TOKEN, once you are satisfied release.yml
+# publishes cleanly. Both are being kept deliberately for now: removing the
+# fallback before the primary has been exercised end to end would leave no way
+# to ship a fix.
+#
+# It stays awkward to run on purpose — a typed confirmation, a dry run by
+# default, and no automatic trigger — because publishing is irreversible.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "publish" to confirm. Versions on crates.io are permanent.'
+        required: true
+        type: string
+      dry_run:
+        description: "Package and verify without uploading"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bootstrap-publish
+
+jobs:
+  publish:
+    name: publish in dependency order
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check the confirmation
+        if: inputs.confirm != 'publish'
+        run: |
+          echo "::error::confirmation not given; nothing was published"
+          exit 1
+
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test before publishing anything
+        run: cargo test --workspace --locked
+
+      - name: Publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -eu
+          # Order matters: a crate cannot be published until everything it
+          # depends on is already on the registry.
+          for crate in atlas-recipes-data atlasctl-protocol atlasctl-core atlasctl-agent atlasctl; do
+            version=$(cargo metadata --no-deps --format-version 1 \
+              | python3 -c "import json,sys;print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='$crate'))")
+
+            # Idempotent: re-running after a partial failure must not trip over
+            # the crates that already went out.
+            if curl -fsSL "https://crates.io/api/v1/crates/$crate/$version" >/dev/null 2>&1; then
+              echo "$crate $version is already published, skipping"
+              continue
+            fi
+
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "would publish $crate $version"
+              continue
+            fi
+
+            echo "publishing $crate $version"
+            cargo publish -p "$crate" --locked
+            # crates.io indexes asynchronously; the next crate depends on this
+            # one resolving, so wait for the index rather than racing it.
+            for _ in $(seq 1 60); do
+              if curl -fsSL "https://crates.io/api/v1/crates/$crate/$version" >/dev/null 2>&1; then
+                echo "  indexed"; break
+              fi
+              sleep 5
+            done
+          done

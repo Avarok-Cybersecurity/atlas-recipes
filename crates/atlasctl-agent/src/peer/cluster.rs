@@ -1,0 +1,290 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+//! Asking another machine to be a rank.
+//!
+//! Every verb here dials, introduces itself, asks one question and hangs up.
+//! There is no long-lived cluster session, deliberately: a session would have
+//! to survive a switch reboot and a laptop lid closing to be worth anything,
+//! and a head that reconnects per phase discovers a dead rank at the phase
+//! boundary — which is exactly where the rollback path already is.
+//!
+//! Vitals are unsolicited, so a peer can offer one at any moment. Every reader
+//! here skips them rather than mistaking one for an answer, bounded so that a
+//! peer sending nothing else cannot hold a phase open.
+
+use super::link::{DIAL_TIMEOUT, SelfIntro, dial, exchange_hello};
+use super::wire::{PeerFrame, read_frame, write_frame};
+use crate::cluster::{PrepareReply, RankAssignment};
+use crate::identity::{Identity, PinStore};
+use anyhow::{Result, bail};
+use atlasctl_protocol::fleet::NodeId;
+use std::net::SocketAddr;
+use std::time::Duration;
+
+/// How many unsolicited frames to skip before giving up on an answer.
+const SKIP_BUDGET: usize = 8;
+
+/// Read frames until one of them answers the question, skipping vitals.
+///
+/// `want` maps a frame to an answer, or `None` if it was not one. Anything that
+/// is neither vitals nor an answer is a protocol error rather than something to
+/// wait through — a peer that replies to prepare with a preview is confused,
+/// and continuing to read would turn that into a timeout instead of a message.
+/// How long a rank gets to answer COMMIT.
+///
+/// Not `DIAL_TIMEOUT`. Every verb here used to share the 5s dial bound, which is
+/// right for rendering a preview and wrong for the one verb that does real work:
+/// commit runs `docker rm -f` on any prior container and then `docker run`, and
+/// a first launch pulls a multi-gigabyte image. Losing that race did not just
+/// report a failure -- the peer's commit was still in flight and had already
+/// consumed its reservation, so the head's abort no-opped, its `docker run`
+/// then succeeded into the void, and the operator was told the launch failed
+/// while an orphan rank held that machine's GPU.
+///
+/// Five minutes is long for a human to wait. It is shorter than the time to
+/// notice an orphan container on another machine and remove it by hand.
+const COMMIT_BUDGET: Duration = Duration::from_secs(300);
+
+/// How long a rank gets to answer STOP. `docker stop` sends SIGTERM and waits
+/// out a grace period before killing, which routinely outlasts 5s.
+const STOP_BUDGET: Duration = Duration::from_secs(60);
+
+async fn answer<S, T>(
+    tls: &mut S,
+    addr: SocketAddr,
+    what: &str,
+    budget: Duration,
+    mut want: impl FnMut(PeerFrame) -> Result<Option<T>>,
+) -> Result<T>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    for _ in 0..SKIP_BUDGET {
+        let frame = match tokio::time::timeout(budget, read_frame(tls)).await {
+            Ok(f) => f?,
+            Err(_) => bail!("{addr} did not answer the {what} in time"),
+        };
+        if matches!(frame, PeerFrame::Vitals { .. }) {
+            continue;
+        }
+        if let Some(v) = want(frame)? {
+            return Ok(v);
+        }
+    }
+    bail!("{addr} kept sending vitals instead of answering the {what}")
+}
+
+/// Ask a rank to render the command it would run, without running it.
+///
+/// The head does not render this itself, and that is the point: it does not
+/// know what recipe revision, hardware or flag table the other machine has, so
+/// a preview it invented would be a guess presented as the thing that will
+/// execute.
+///
+/// # Errors
+/// If the peer cannot be reached, refuses the assignment, or answers with
+/// something other than a preview.
+pub async fn preview_rank(
+    identity: &Identity,
+    pins: PinStore,
+    addr: SocketAddr,
+    expect: NodeId,
+    intro: &SelfIntro,
+    assignment: RankAssignment,
+) -> Result<(String, Vec<String>)> {
+    let mut tls = dial(identity, pins, addr, expect).await?;
+    exchange_hello(&mut tls, addr, intro, &[]).await?;
+    write_frame(
+        &mut tls,
+        &PeerFrame::PreviewRank {
+            assignment: Box::new(assignment),
+        },
+    )
+    .await?;
+
+    answer(&mut tls, addr, "preview", DIAL_TIMEOUT, |f| match f {
+        PeerFrame::RankPreviewed { command, unmapped } => Ok(Some((command, unmapped))),
+        PeerFrame::RankRefused { reason } => bail!("{reason}"),
+        other => bail!("expected a rank preview, got {other:?}"),
+    })
+    .await
+}
+
+/// Ask a rank to validate and reserve. Nothing starts.
+///
+/// A refusal is an ordinary outcome and is returned as a value rather than an
+/// error, because the head must collect every rank's answer before deciding —
+/// treating the first refusal as an error would abandon ranks still holding
+/// reservations.
+///
+/// # Errors
+/// If the peer cannot be reached or answers with something other than a
+/// prepare result. A *refusal* is not an error.
+pub async fn prepare_rank(
+    identity: &Identity,
+    pins: PinStore,
+    addr: SocketAddr,
+    expect: NodeId,
+    intro: &SelfIntro,
+    epoch: &str,
+    assignment: RankAssignment,
+) -> Result<PrepareReply> {
+    let mut tls = dial(identity, pins, addr, expect).await?;
+    exchange_hello(&mut tls, addr, intro, &[]).await?;
+    write_frame(
+        &mut tls,
+        &PeerFrame::Prepare {
+            assignment: Box::new(assignment),
+            epoch: epoch.to_owned(),
+        },
+    )
+    .await?;
+
+    let want_epoch = epoch.to_owned();
+    answer(&mut tls, addr, "prepare", DIAL_TIMEOUT, move |f| match f {
+        // A reply for another epoch is a stale answer from an earlier attempt,
+        // not this one's; accepting it would let a previous cluster's yes
+        // authorize this cluster's commit.
+        PeerFrame::Prepared { epoch, reply } if epoch == want_epoch => Ok(Some(reply)),
+        PeerFrame::Prepared { .. } => Ok(None),
+        PeerFrame::RankRefused { reason } => Ok(Some(PrepareReply::Refused { reason })),
+        other => bail!("expected a prepare result, got {other:?}"),
+    })
+    .await
+}
+
+/// Start what a rank prepared under this epoch.
+///
+/// Carries no assignment. What starts is what that machine rendered and stored
+/// at prepare time, so a head compromised between the phases can start the
+/// launch the operator already previewed, or not start it, and nothing else.
+///
+/// # Errors
+/// If the peer cannot be reached, holds no such reservation, or the container
+/// runtime refuses.
+pub async fn commit_rank(
+    identity: &Identity,
+    pins: PinStore,
+    addr: SocketAddr,
+    expect: NodeId,
+    intro: &SelfIntro,
+    epoch: &str,
+) -> Result<String> {
+    let mut tls = dial(identity, pins, addr, expect).await?;
+    exchange_hello(&mut tls, addr, intro, &[]).await?;
+    write_frame(
+        &mut tls,
+        &PeerFrame::Commit {
+            epoch: epoch.to_owned(),
+        },
+    )
+    .await?;
+
+    let want_epoch = epoch.to_owned();
+    answer(&mut tls, addr, "commit", COMMIT_BUDGET, move |f| match f {
+        PeerFrame::Committed { epoch, container } if epoch == want_epoch => Ok(Some(container)),
+        PeerFrame::Committed { .. } => Ok(None),
+        PeerFrame::RankRefused { reason } => bail!("{reason}"),
+        other => bail!("expected a commit result, got {other:?}"),
+    })
+    .await
+}
+
+/// Release a rank's reservation without starting anything.
+///
+/// Returns nothing, and callers ignore its failures on purpose: this runs when
+/// something has already gone wrong, and a second failure must not replace the
+/// reason the operator actually needs to read. A reservation left behind is
+/// released by that machine's next prepare regardless.
+///
+/// # Errors
+/// If the peer cannot be reached.
+pub async fn abort_rank(
+    identity: &Identity,
+    pins: PinStore,
+    addr: SocketAddr,
+    expect: NodeId,
+    intro: &SelfIntro,
+    epoch: &str,
+) -> Result<()> {
+    let mut tls = dial(identity, pins, addr, expect).await?;
+    exchange_hello(&mut tls, addr, intro, &[]).await?;
+    write_frame(
+        &mut tls,
+        &PeerFrame::Abort {
+            epoch: epoch.to_owned(),
+        },
+    )
+    .await?;
+    let want_epoch = epoch.to_owned();
+    answer(&mut tls, addr, "abort", DIAL_TIMEOUT, move |f| match f {
+        PeerFrame::Aborted { epoch } if epoch == want_epoch => Ok(Some(())),
+        PeerFrame::Aborted { .. } => Ok(None),
+        other => bail!("expected an abort acknowledgement, got {other:?}"),
+    })
+    .await
+}
+
+/// Ask whether a container a rank started is still running.
+///
+/// # Errors
+/// If the peer cannot be reached or answers with something else.
+pub async fn rank_alive(
+    identity: &Identity,
+    pins: PinStore,
+    addr: SocketAddr,
+    expect: NodeId,
+    intro: &SelfIntro,
+    container: &str,
+) -> Result<bool> {
+    let mut tls = dial(identity, pins, addr, expect).await?;
+    exchange_hello(&mut tls, addr, intro, &[]).await?;
+    write_frame(
+        &mut tls,
+        &PeerFrame::IsRankAlive {
+            container: container.to_owned(),
+        },
+    )
+    .await?;
+    let want = container.to_owned();
+    answer(&mut tls, addr, "liveness", DIAL_TIMEOUT, move |f| match f {
+        PeerFrame::RankLiveness { container, running } if container == want => Ok(Some(running)),
+        PeerFrame::RankLiveness { .. } => Ok(None),
+        other => bail!("expected a liveness answer, got {other:?}"),
+    })
+    .await
+}
+
+/// Stop a container a rank started.
+///
+/// Used by rollback, so failures are the caller's to ignore: this runs when
+/// something has already gone wrong and the operator needs the original reason,
+/// not this one.
+///
+/// # Errors
+/// If the peer cannot be reached or answers with something else.
+pub async fn stop_rank(
+    identity: &Identity,
+    pins: PinStore,
+    addr: SocketAddr,
+    expect: NodeId,
+    intro: &SelfIntro,
+    container: &str,
+) -> Result<()> {
+    let mut tls = dial(identity, pins, addr, expect).await?;
+    exchange_hello(&mut tls, addr, intro, &[]).await?;
+    write_frame(
+        &mut tls,
+        &PeerFrame::StopRank {
+            container: container.to_owned(),
+        },
+    )
+    .await?;
+    let want = container.to_owned();
+    answer(&mut tls, addr, "stop", STOP_BUDGET, move |f| match f {
+        PeerFrame::RankStopped { container } if container == want => Ok(Some(())),
+        PeerFrame::RankStopped { .. } => Ok(None),
+        other => bail!("expected a stop acknowledgement, got {other:?}"),
+    })
+    .await
+}

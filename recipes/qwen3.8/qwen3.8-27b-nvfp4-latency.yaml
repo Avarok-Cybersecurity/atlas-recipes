@@ -1,0 +1,131 @@
+recipe_version: "2"
+model: unsloth/Qwen3.8-27B-NVFP4
+runtime: atlas
+container: avarok/atlas-gb10:latest
+max_nodes: 1
+
+metadata:
+  description: |
+    Qwen3.8-27B (unsloth NVFP4, dense hybrid SSM+Attn) — the LATENCY profile:
+    one user, or a handful, who care about time-to-token rather than aggregate
+    tokens/s.
+
+    ★ ITS DIFFERENCES FROM THE THROUGHPUT SIBLING ARE ALL EMPIRICAL. Several
+    optimisations that win at C>=8 measurably COST throughput at low width, and
+    this recipe turns exactly those off. That is the whole reason the two
+    profiles exist rather than one.
+
+    MEASURED BASIS (2026-08-17, dgx2 GB10, ISL 128 / OSL 1024, temp 0, seed 42):
+
+      * Single stream: 23.59 tok/s at C=1 (vLLM+MTP with the same checkpoint
+        and matched sampling: 19.72 — 1.196x).
+
+      * The canonical verify graph key (a throughput fix that collapses the n=8
+        key space 266 -> 3 and is worth +3.9% at C=8) COSTS -2.4% at C=2 and
+        -4.3% at C=4. Same binary, same session, one variable. It is width-
+        gated in the engine (>= 8) so it is inert here — no toggle needed, but
+        do not raise `ATLAS_CANONICAL_KEY_MIN_WIDTH` below 8 on this profile.
+
+      * D-Cut row pruning at its shipped 0.75 is BETTER at C=4 (66.42 vs 63.24
+        with pruning off) and WORSE at C=8 (108.85 vs 117.06). This profile
+        therefore keeps the default rather than the throughput profile's
+        `ATLAS_MTP_DCUT_RATIO=1.0`.
+
+      * ★ RETRACTED: an earlier draft of this recipe disabled the MTP drafter
+        small-M tier, on the belief that it caused a wall regression on the 35B
+        agentic gate. That was wrong twice over and the toggle is GONE. The
+        kill-switch A/B measured the tier at ~0% of the wall
+        (1078 s with it off vs 1084/1068 s with it on), and the "regression"
+        itself was a cross-box comparison: unmodified `main` runs that gate at
+        1079 s on the same box. On dgx1 the full stack passes at 692 s / 662 s.
+        The tier is measured to HELP at low width (C=4 +3.2%, C=8 +1.8%), so a
+        latency profile keeps it.
+
+    ENV STACK — REQUIRED, and the recipe schema cannot express it. `defaults:`
+    carries serve FLAGS only; there is no `env:` key in the Atlas recipe struct
+    today, so these must be exported by whoever starts the server (same
+    convention as the qwen3.6 prefill-record recipe):
+
+      ATLAS_PREFILL_CODISPATCH=1        # prefill co-scheduling: helps TTFT at
+                                        #   every width, no low-width penalty
+      ATLAS_FP8_ROWWISE=1               # native per-row FP8 GDN projections,
+                                        #   +21% prefill — TTFT is most of what
+                                        #   "latency" means for a single user
+      # DELIBERATELY ABSENT vs the throughput profile:
+      #   ATLAS_MTP_DCUT_RATIO=1.0      -> keep the 0.75 default (better at C=4)
+      #   ATLAS_MTP_K_LADDER=...        -> keep the engine default ladder; the
+      #      n=2 step-down exists to dodge the w4a16_gemv_batch8 tier at R=7,
+      #      which is a THROUGHPUT trade (it drops tok_step/seq 2.172 -> 1.695).
+      #      A single user wants the deeper draft, not the cheaper kernel.
+
+    WHEN NOT TO USE THIS. For concurrent serving use
+    `qwen3.8-27b-nvfp4-throughput.yaml` — at C=128 it delivers 478 tok/s where
+    this geometry cannot. For long agentic coding trajectories use
+    `qwen3.8-27b-nvfp4-unsloth.yaml`: its `lm_head_dtype: bf16` is a
+    correctness pin, not a tuning knob, and this profile does not carry it.
+
+    QUALITY STATUS (gates run on the shared code stack, 2026-08-17).
+      ssm-state-poisoning-gate  PASS — 12 of 12 replays byte-identical
+      decode-floor              PASS
+      agentic-webserver         PASS on dgx1 — 692 s / 662 s, 10/10 + 10/10,
+                                faster than the 773 s pre-stack reference
+      bfcl-subset               PASS — overall 84.22 (bar 83.42) · normalized
+                                84.12 (bar 83.32) · n=995, dense 27B. This is
+                                the gate that matters for the numerics-changing
+                                fixes (f16-pool halves GDN recurrent-state
+                                precision; the drafter small-M tier moves
+                                proposal numerics and therefore acceptance).
+                                Both bars cleared, so the concurrency win costs
+                                nothing in tool-calling accuracy.
+
+    ALL FOUR GATES PASS — certified, not merely measured.
+
+    ⚠ Wall verdicts are box-specific: the same gate reads ~1070-1080 s on dgx2
+    for BOTH this stack and unmodified `main`, so that box's Σwall says nothing
+    about the code. Compare on one box only.
+
+  maintainer: Atlas
+  category: interactive
+  quantization: NVFP4 (compressed-tensors, mixed precision)
+  updated: "2026-08-17"
+
+defaults:
+  host: 0.0.0.0
+  port: 8888
+  # Roomier than the throughput profile's 2048: an interactive session is not a
+  # fixed-shape benchmark. Quality above ~24K is uncharacterised on this
+  # checkpoint (the kernel target declares effective_context 24576), so 32K is
+  # the honest ceiling rather than the 262144 the weights nominally support.
+  max_model_len: 32768
+  # Small batch: this profile optimises the latency of the requests present,
+  # not the aggregate of a queue. 8 keeps a little sharing without paying the
+  # wide-batch step cost.
+  max_batch_size: 8
+  gpu_memory_utilization: 0.85
+  # fp8 KV is the checkpoint's declared format and buys context headroom at
+  # 32K. KV is only 16 of 64 layers here, so this is a smaller lever than it
+  # looks — it is context capacity, not a speed knob, at this width.
+  kv_cache_dtype: fp8
+  enable_prefix_caching: true
+  # Denser than the throughput profile's 8: an interactive session DOES replay
+  # a shared prefix (the conversation), which is exactly what Marconi restores.
+  ssm_cache_slots: 64
+  ssm_checkpoint_interval: 16
+  speculative: true
+  # Full draft depth. At low width the verify rows are cheap and acceptance is
+  # what buys latency: p1 measures 0.78-0.90 through n=16 on this checkpoint,
+  # so deeper drafting pays here even where it does not at C>=16.
+  num_drafts: 3
+  mtp_quantization: bf16
+  scheduling_policy: fifo
+  tool_call_parser: qwen3_coder
+  disable_tool_grammar: true
+  disable_thinking: true
+  ssm_h_dtype: f16-pool
+  gdn_fused_norm: true
+  ssm_batched_recurrent: true
+  ssm_tail_midchunk: false
+  mtp_gate: force
+  # Batched varlen prefill helps TTFT whenever more than one request arrives
+  # together, and is inert for a solo request (it keeps the inline chunk-0 path).
+  prefill_varlen_batch: true

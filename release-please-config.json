@@ -1,0 +1,33 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "rust",
+  "packages": {
+    ".": {
+      "package-name": "atlas-recipes-data",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        "Cargo.toml"
+      ]
+    },
+    "crates/atlasctl-protocol": {},
+    "crates/atlasctl-core": {},
+    "crates/atlasctl-agent": {},
+    "crates/atlasctl": {}
+  },
+  "plugins": [
+    "cargo-workspace",
+    {
+      "type": "linked-versions",
+      "groupName": "atlasctl",
+      "components": [
+        "atlas-recipes-data",
+        "atlasctl-protocol",
+        "atlasctl-core",
+        "atlasctl-agent",
+        "atlasctl"
+      ]
+    }
+  ],
+  "separate-pull-requests": false,
+  "include-component-in-tag": false
+}

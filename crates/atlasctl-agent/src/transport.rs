@@ -1,0 +1,104 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+//! Reaching another machine, behind a trait.
+//!
+//! The cluster state machine decides *what* to ask each rank and, more
+//! importantly, what to undo when a rank says no. That logic is where a partial
+//! cluster comes from, so it is the part that has to be testable — and it
+//! cannot be, if asking a rank means opening a socket.
+//!
+//! So the driver takes one of these instead. Production passes an
+//! implementation that dials the authenticated peer channel; tests pass one
+//! that records calls and answers from a table, and the rollback paths can then
+//! be driven through every ordering that matters without two machines, two
+//! TLS stacks and a network.
+
+use crate::cluster::{PrepareReply, RankAssignment};
+use anyhow::Result;
+use atlasctl_protocol::fleet::NodeId;
+use std::net::SocketAddr;
+
+/// Asking a *remote* rank to do something.
+///
+/// Mirrors [`crate::rank::RankService`] verb for verb, because the driver must
+/// treat the head no differently from a worker. Where the two diverge is where
+/// a bug hides: a head that skipped its own prepare would commit a rank nobody
+/// validated.
+/// Every method returns a boxed future rather than being an `async fn`: this
+/// trait is used as `dyn RankTransport`, and an `async fn` in a trait is not
+/// dyn-compatible. Boxing is what lets the implementation await its peer calls
+/// instead of blocking a runtime worker to run them.
+pub trait RankTransport: Send + Sync {
+    /// What this rank would run.
+    ///
+    /// # Errors
+    /// If the peer cannot be reached or refuses.
+    fn preview<'a>(
+        &'a self,
+        node: NodeId,
+        addr: SocketAddr,
+        assignment: &'a RankAssignment,
+    ) -> crate::BoxFut<'a, Result<(String, Vec<String>)>>;
+
+    /// Ask this rank to validate and reserve.
+    ///
+    /// Returns a refusal rather than an error when the machine cannot be
+    /// reached: a machine that did not answer has not agreed to anything, and
+    /// the ranks that already accepted still hold reservations the driver must
+    /// release.
+    fn prepare<'a>(
+        &'a self,
+        node: NodeId,
+        addr: SocketAddr,
+        epoch: &'a str,
+        assignment: &'a RankAssignment,
+    ) -> crate::BoxFut<'a, PrepareReply>;
+
+    /// Start what this rank prepared.
+    ///
+    /// # Errors
+    /// If the peer cannot be reached, holds no such reservation, or its
+    /// container runtime refuses.
+    fn commit<'a>(
+        &'a self,
+        node: NodeId,
+        addr: SocketAddr,
+        epoch: &'a str,
+    ) -> crate::BoxFut<'a, Result<String>>;
+
+    /// Release this rank's reservation. Failures are the driver's to ignore.
+    fn abort<'a>(&'a self, node: NodeId, addr: SocketAddr, epoch: &'a str)
+    -> crate::BoxFut<'a, ()>;
+
+    /// Whether a container this rank started is still running.
+    ///
+    /// A peer that cannot be asked is treated as dead by the caller: a rank
+    /// whose liveness is unknown cannot be counted as part of a whole cluster.
+    ///
+    /// # Errors
+    /// If the peer cannot be reached.
+    fn alive<'a>(
+        &'a self,
+        node: NodeId,
+        addr: SocketAddr,
+        container: &'a str,
+    ) -> crate::BoxFut<'a, Result<bool>>;
+
+    /// Stop a container this rank started.
+    ///
+    /// # Errors
+    /// If the peer cannot be reached, or refuses. This used to return `()` and
+    /// swallow both, so `stop_cluster` reported every rank stopped while an
+    /// unreachable machine kept its container -- and its GPU. A fleet view that
+    /// cannot be trusted about what is running is worse than no fleet view.
+    fn stop<'a>(
+        &'a self,
+        node: NodeId,
+        addr: SocketAddr,
+        container: &'a str,
+    ) -> crate::BoxFut<'a, Result<()>>;
+
+    /// Mark a rank dead, so a test can exercise supervision.
+    #[cfg(test)]
+    fn kill_for_test(&self, _node: NodeId) {}
+}

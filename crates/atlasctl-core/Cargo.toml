@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[package]
+name = "atlasctl-core"
+description = "Recipe model and deterministic recipe-to-docker translation for atlasctl."
+version = "0.3.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+atlas-recipes-data.workspace = true
+atlasctl-protocol.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_yaml_ng.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# Only to read the vendored engine snapshot in the coverage check; the crate
+# itself speaks YAML, not JSON.
+serde_json = "1"
+
+[features]
+# Exposes the recording mocks to downstream test suites (the agent crate).
+test-mocks = []
+
+[lints]
+workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Console",
+] }

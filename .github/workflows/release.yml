@@ -1,0 +1,650 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+name: Release
+
+# Releases are cut by merging the pull request release-please maintains, not by
+# hand-tagging. That keeps "every merge ships" honest without burning an
+# immutable crates.io version on every typo fix: recipe edits land on main
+# immediately and accumulate in the pending release PR, and merging it publishes
+# everything since the last release.
+#
+# The publish jobs live in this file rather than a tag-triggered one on purpose:
+# a tag created with the default GITHUB_TOKEN does not trigger workflows, so a
+# split would simply never fire.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "existing tag to re-publish (recovery only)"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # No cancel-in-progress: interrupting a half-finished publish is worse than
+  # waiting for it.
+  group: release-${{ github.ref }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release-please:
+    name: prepare release
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # Single source of truth for "are we releasing, and what tag?".
+  #
+  # This job exists because release-please only runs on push. A job that `needs`
+  # a skipped job is itself skipped no matter what its own `if` says, so every
+  # downstream job silently skipped when the workflow was dispatched by hand —
+  # the run went green having done nothing. Depending on this job instead means
+  # the manual path and the automatic path resolve identically.
+  resolve:
+    name: resolve the release
+    needs: [release-please]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+      release: ${{ steps.pick.outputs.release }}
+      cut: ${{ steps.pick.outputs.cut }}
+    permissions:
+      contents: write
+    steps:
+      - id: pick
+        env:
+          RP_RESULT: ${{ needs.release-please.result }}
+          RP_CREATED: ${{ needs.release-please.outputs.release_created }}
+          RP_TAG: ${{ needs.release-please.outputs.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -eu
+          if [ -n "$INPUT_TAG" ]; then
+            echo "manual dispatch for $INPUT_TAG"
+            echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "cut=false" >> "$GITHUB_OUTPUT"
+          elif [ "$RP_RESULT" = "success" ] && [ "$RP_CREATED" = "true" ]; then
+            echo "release-please cut $RP_TAG"
+            echo "tag=$RP_TAG" >> "$GITHUB_OUTPUT"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "cut=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "nothing to release on this run"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # release-please publishes the release the instant the release PR merges,
+      # but the archives are uploaded ~30 minutes later, by `github-release` at
+      # the very end of this run. In between, `releases/latest` resolves to a
+      # release with zero assets and every
+      # `curl https://atlasinference.io/install.sh | sh` on earth dies on a 404
+      # for the tarball it just tried to fetch. Not theoretical: v0.5.0 did
+      # exactly that to real installs.
+      #
+      # Marking it a prerelease removes it from `releases/latest` (which skips
+      # prereleases), so installs keep resolving to the previous, fully
+      # populated release. `github-release` promotes it once the assets are up.
+      #
+      # Deliberately NOT a draft: GitHub does not create the tag for a draft
+      # release, and `preflight at the tag` and `publish-crates` both check that
+      # tag out.
+      - name: hide the release until its assets exist
+        if: ${{ steps.pick.outputs.cut == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.pick.outputs.tag }}
+        run: |
+          set -eu
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" -F prerelease=true >/dev/null
+          echo "$TAG hidden from releases/latest until its assets land"
+
+  # release-please rewrites the version in every workspace manifest but updates
+  # Cargo.lock only for the members its own discovery finds — its log reports
+  # "updating atlasctl / atlasctl-agent / atlasctl-core" and never
+  # atlasctl-protocol, whose lock entry therefore drifts one version behind on
+  # every release. That is what made v0.1.1 unbuildable, and adding protocol to
+  # .release-please-manifest.json did not change the set it updates.
+  #
+  # Rather than keep guessing at that discovery logic, the invariant is enforced
+  # on the artifact: after release-please writes the branch, the lock must match
+  # the manifests, and if it does not it is repaired in place. The tag is cut
+  # from this branch, so the tag then carries a lock that builds. The repair is
+  # idempotent (release-please rebuilds the branch each run, so this re-applies)
+  # and loud, so a silent recurrence is not possible.
+  sync-release-lock:
+    name: sync the release PR's Cargo.lock
+    needs: [release-please]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        id: co
+        continue-on-error: true
+        with:
+          ref: release-please--branches--main
+          fetch-depth: 1
+      - if: steps.co.outcome == 'success'
+        uses: dtolnay/rust-toolchain@stable
+      - if: steps.co.outcome == 'success'
+        name: repair what release-please leaves behind
+        run: |
+          set -eu
+          # release-please bumps `[package] version` and never rewrites the
+          # requirements pointing at it, so on the release branch they are
+          # stale by construction: atlasctl asks for `^0.1.3` while
+          # atlasctl-protocol has become 0.2.0, and nothing resolves. That
+          # failed every release attempt on 2026-08-26.
+          #
+          # Repairing it here rather than fighting release-please also makes a
+          # split release harmless — each requirement gets the version of the
+          # crate it actually names, whether or not the crates moved together.
+          # One list, shared by the "is there anything to do" test and the
+          # staging below. These were two separate literals, and
+          # .release-please-manifest.json was in neither — so --fix repaired
+          # the manifest, git add did not stage it, and the repair was thrown
+          # away while the job reported success. That is not a hypothetical:
+          # it is what happened to atlasctl-protocol on 2026-08-26, leaving the
+          # release PR recording 0.1.3 for a crate it was about to publish as
+          # 0.2.0.
+          REPAIRED=(.release-please-manifest.json Cargo.lock Cargo.toml crates/*/Cargo.toml)
+
+          python3 scripts/check-version-sync.py --fix
+
+          # The lock follows from the manifests, so it is regenerated after
+          # them, not before. --workspace resolves workspace members only, so
+          # external dependencies stay exactly as pinned and --locked keeps its
+          # meaning.
+          cargo metadata --locked --format-version 1 >/dev/null 2>&1 || cargo update --workspace
+
+          if git diff --quiet -- "${REPAIRED[@]}"; then
+            echo "release PR already consistent; nothing to repair"
+            exit 0
+          fi
+
+          # Whatever was repaired, the result has to actually resolve — this is
+          # the last point before publishing where that is cheap to find out.
+          cargo metadata --locked --format-version 1 >/dev/null
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "${REPAIRED[@]}"
+          git commit -m "chore: sync manifests and lock with the versions release-please wrote"
+          git push origin HEAD:release-please--branches--main
+
+          # Prove the push fixed what it set out to fix. A repair that stages
+          # nothing looked exactly like a successful one, which is how the
+          # stale manifest survived a green job.
+          python3 scripts/check-version-sync.py
+
+  # A pull request opened by the default GITHUB_TOKEN does not trigger
+  # workflows, so the standing release PR gets no CI — which is how three
+  # separate releases were cut from a tree that could not build. Push events do
+  # run, so the pending release branch is verified from here instead, after the
+  # repair above. Advisory (continue-on-error): this must surface a bad release
+  # PR, never block an unrelated push to main.
+  check-release-pr:
+    name: verify the pending release PR
+    needs: [release-please, sync-release-lock]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: release-please--branches--main
+          fetch-depth: 1
+        continue-on-error: true
+        id: co
+      - if: steps.co.outcome == 'success'
+        uses: dtolnay/rust-toolchain@stable
+      - if: steps.co.outcome == 'success'
+        name: the release PR's lock must match its manifests
+        run: |
+          set -eu
+          if ! cargo metadata --locked --format-version 1 >/dev/null; then
+            echo "::error::The pending release PR has a stale Cargo.lock."
+            echo "::error::Merging it would cut a tag that cannot build."
+            exit 1
+          fi
+          echo "pending release PR is publishable"
+
+  preflight:
+    name: preflight at the tag
+    needs: [resolve]
+    if: ${{ !cancelled() && needs.resolve.outputs.release == 'true' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # This step used to run `cargo update --workspace`, which REPAIRED a
+      # stale lock — so preflight passed while every job in the build matrix,
+      # which uses --locked without the repair, failed at the same tag. A
+      # preflight that hides the condition it exists to catch is worse than
+      # none. Assert instead: a tag whose lock does not already match its
+      # manifests is not publishable, and says so in eight seconds rather than
+      # after four runners have each rediscovered it.
+      - name: the lock must already match the manifests
+        run: |
+          set -eu
+          if ! cargo metadata --locked --format-version 1 >/dev/null; then
+            echo "::error::Cargo.lock at this tag does not match the manifests."
+            echo "::error::Run 'cargo update --workspace' on main and commit the result."
+            exit 1
+          fi
+
+      # Re-verify at the exact commit being published. CI passing on main is
+      # not the same statement as "this tag is good".
+      - run: cargo test --workspace --locked
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          rust-version: "1.93.1"
+          command: check advisories licenses sources bans
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: [resolve, preflight]
+    if: ${{ !cancelled() && needs.resolve.outputs.release == 'true' && needs.preflight.result == 'success' }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Native runners, no QEMU and no cross container: aarch64 is the
+          # primary target (GB10 / DGX Spark) and building it natively is both
+          # faster and one less image to trust.
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - target: aarch64-apple-darwin
+            runner: macos-14
+          - target: x86_64-apple-darwin
+            runner: macos-14
+          # x86_64 only. Windows-on-ARM exists, but Docker Desktop is what
+          # atlasctl drives and its ARM64 Windows story is not one we can
+          # test, so shipping a binary for it would be shipping a promise.
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+      # rust-toolchain.toml pins 1.93.1, and that override governs every cargo
+      # invocation in this job. The action's `targets:` input installed the std
+      # for the toolchain the ACTION picked (stable), which is then never used —
+      # so all three CROSS targets died with "can't find crate for `core`" while
+      # aarch64-apple-darwin, the one native target, passed. Add the target to
+      # the toolchain that actually runs.
+      - run: rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: musl toolchain
+        if: contains(matrix.target, 'linux-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      # Static musl: the binary's only system interaction is shelling out to
+      # docker, so one file per architecture runs on DGX OS, any Ubuntu, or a
+      # container, with no glibc version to match.
+      - run: cargo build --release --locked -p atlasctl --target ${{ matrix.target }}
+      - name: package
+        if: ${{ !contains(matrix.target, 'windows') }}
+        run: |
+          set -eu
+          out="atlasctl-${{ matrix.target }}"
+          mkdir -p "dist/$out"
+          cp "target/${{ matrix.target }}/release/atlasctl" "dist/$out/"
+          cp LICENSE README.md "dist/$out/" 2>/dev/null || true
+          tar -C "dist/$out" -cJf "dist/${out}.tar.xz" .
+      # A zip, not a tar.xz. Windows has shipped `tar` since 1803, but nothing
+      # in the shell expands one by double-click, and `Expand-Archive` — the
+      # one command an install script can rely on being there — reads zip and
+      # nothing else.
+      - name: package (windows)
+        if: ${{ contains(matrix.target, 'windows') }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = "atlasctl-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "dist/$out" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/atlasctl.exe" "dist/$out/"
+          foreach ($f in 'LICENSE', 'README.md') {
+            if (Test-Path $f) { Copy-Item $f "dist/$out/" }
+          }
+          Compress-Archive -Path "dist/$out/*" -DestinationPath "dist/$out.zip" -Force
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/atlasctl-${{ matrix.target }}.*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: |
+            dist/*.tar.xz
+            dist/*.zip
+
+  github-release:
+    name: publish release assets
+    needs: [resolve, build]
+    if: ${{ !cancelled() && needs.resolve.outputs.release == 'true' && needs.build.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: checksums
+        working-directory: dist
+        # Both extensions, one file: install.sh and install.ps1 each look up
+        # the archive they downloaded by name, so an omitted class of artifact
+        # fails as "refusing to install unverified binaries" rather than as a
+        # missing checksum.
+        run: sha256sum ./*.tar.xz ./*.zip | sed 's| \./| |' > SHA256SUMS
+      # install.sh rides along on every release so a user can diff the script
+      # the website served against the one attached to the release.
+      - run: cp scripts/install.sh dist/install.sh
+      - run: cp scripts/install.ps1 dist/install.ps1
+      - name: upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: gh release upload "$TAG" dist/* --clobber
+
+      # The assets are attached, so the release can stop hiding. Gated on `cut`
+      # so a recovery dispatch re-uploading an OLD tag cannot drag
+      # `releases/latest` backwards onto it.
+      - name: promote the release now that it is complete
+        if: ${{ needs.resolve.outputs.cut == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -eu
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" \
+            -F prerelease=false -f make_latest=true >/dev/null
+          echo "$TAG is now the latest release"
+
+  publish-crates:
+    name: crates.io
+    needs: [resolve, github-release]
+    if: ${{ !cancelled() && needs.resolve.outputs.release == 'true' && needs['github-release'].result == 'success' }}
+    runs-on: ubuntu-24.04
+    environment: crates-io
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+      # Trusted publishing: a short-lived token minted from this job's OIDC
+      # identity, so no long-lived registry token is stored in the repository.
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - name: publish in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          set -eu
+          # `cargo publish --workspace` walks the dependency graph itself and
+          # waits for the index between crates, so there is no ordering logic
+          # here to get wrong. The previous version hand-listed three of the
+          # five crates, in an order that could not work.
+          #
+          # It deliberately does NOT call a script from scripts/: this job
+          # checks out the TAG while the workflow comes from the dispatch ref,
+          # so anything added to the repo after a tag was cut does not exist in
+          # that checkout. v0.1.2 failed exactly that way — the workflow called
+          # a helper that postdated the tag. Keeping the step self-contained
+          # means re-publishing an older tag stays possible.
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c "import json,sys;print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='atlasctl'))")
+          # atlasctl publishes last, so its presence means the whole workspace
+          # went out. Makes a re-run after a fully successful publish a no-op.
+          #
+          # The User-Agent is REQUIRED, not politeness. crates.io answers a bare
+          # `curl` with 403 under its API data access policy, so this check used
+          # to fail every time and the guard never fired once: a re-run always
+          # fell through to `cargo publish`, which then died on the first crate
+          # that already existed, and `verify-published` reported the release
+          # had not shipped when in fact it had. That is exactly what v0.2.0 did.
+          ua='atlasctl-release (+https://github.com/Avarok-Cybersecurity/atlas-recipes)'
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -A "$ua" \
+                   "https://crates.io/api/v1/crates/atlasctl/$version" || echo 000)
+          case "$code" in
+            200)
+              echo "atlasctl $version already published; workspace is already out"
+              exit 0
+              ;;
+            404)
+              echo "atlasctl $version is not on crates.io yet; publishing"
+              ;;
+            *)
+              # Neither "there" nor "not there". Publishing anyway is safe —
+              # crates.io refuses a duplicate — but say why the guard could not
+              # answer, so a 403 like the one above is visible next time rather
+              # than silently turning every re-run into a failure.
+              echo "::warning::crates.io answered $code for the published-version check; \
+              proceeding, and a duplicate will be refused by the registry"
+              ;;
+          esac
+          cargo publish --workspace --locked
+
+  wheels:
+    name: wheel ${{ matrix.target }}
+    needs: [resolve, preflight]
+    if: ${{ !cancelled() && needs.resolve.outputs.release == 'true' && needs.preflight.result == 'success' }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: aarch64-unknown-linux-musl, runner: ubuntu-24.04-arm }
+          - { target: x86_64-unknown-linux-musl,  runner: ubuntu-24.04 }
+          - { target: aarch64-apple-darwin,       runner: macos-14 }
+          - { target: x86_64-apple-darwin,        runner: macos-14 }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+      # A statically-linked musl binary satisfies the manylinux policy trivially,
+      # so each Linux target is emitted twice from one build: manylinux for glibc
+      # hosts and musllinux for Alpine. The binary is identical; only the tag
+      # differs, which is what makes `uvx pyatlasctl` resolve on both.
+      # Built ONCE, in the musllinux container, because that is the only one
+      # of the two that has a musl cross-compiler. Building the same musl
+      # target again under manylinux_2_17 — which is glibc-based — failed in
+      # `ring`'s build script with `failed to find tool
+      # "x86_64-linux-musl-gcc"`, and took the whole PyPI leg of the v0.2.0
+      # release with it.
+      - name: build wheel (musllinux)
+        if: contains(matrix.target, 'linux-musl')
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --manifest-path crates/atlasctl/Cargo.toml
+          manylinux: musllinux_1_2
+      # The goal was always two TAGS on one artifact, not two builds. The
+      # binary is statically linked against musl and carries no interpreter
+      # dependency, so it runs on a glibc host as well — which is exactly what
+      # manylinux_2_17 asserts. Retagging a copy states that; rebuilding it in
+      # a glibc container never did.
+      - name: also publish it under the manylinux tag
+        if: contains(matrix.target, 'linux-musl')
+        run: |
+          set -eu
+          # Runner images are PEP 668 "externally managed", so a bare
+          # `pip install` refuses. A venv is the sanctioned way and costs a
+          # second.
+          python3 -m venv /tmp/whl
+          /tmp/whl/bin/pip install --quiet --upgrade wheel
+          arch="${{ matrix.target }}"; arch="${arch%%-*}"
+          shopt -s nullglob
+
+          built=(dist/*musllinux*.whl)
+          if [ ${#built[@]} -eq 0 ]; then
+            echo "::error::the musllinux build produced no wheel"; exit 1
+          fi
+          for w in "${built[@]}"; do
+            work=$(mktemp -d); cp "$w" "$work/"
+            # --remove leaves exactly the retagged copy behind in $work.
+            /tmp/whl/bin/wheel tags --platform-tag "manylinux_2_17_${arch}" \
+              --remove "$work/$(basename "$w")"
+            out=("$work"/*manylinux*.whl)
+            if [ ${#out[@]} -eq 0 ]; then
+              echo "::error::retagging $w produced no manylinux wheel"; exit 1
+            fi
+            mv "${out[@]}" dist/
+            rm -rf "$work"
+          done
+
+          # Counted, never `ls`-tested: with nullglob an unmatched glob expands
+          # to NOTHING, so `ls dist/*manylinux*.whl` degrades to a bare `ls` of
+          # the working directory and succeeds. That guard would have passed
+          # while publishing no manylinux wheel at all.
+          musl=(dist/*musllinux*.whl); many=(dist/*manylinux*.whl)
+          echo "wheels to publish: ${#musl[@]} musllinux, ${#many[@]} manylinux"
+          printf '  %s\n' "${musl[@]}" "${many[@]}"
+          if [ ${#musl[@]} -eq 0 ] || [ ${#many[@]} -eq 0 ]; then
+            echo "::error::both tags are required; pip picks by platform tag, so a"
+            echo "::error::missing one silently serves no wheel to that class of host."
+            exit 1
+          fi
+      - name: build wheel (macos)
+        if: contains(matrix.target, 'apple-darwin')
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --manifest-path crates/atlasctl/Cargo.toml
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.target }}
+          path: dist/*.whl
+
+  sdist:
+    name: sdist
+    needs: [resolve, preflight]
+    if: ${{ !cancelled() && needs.resolve.outputs.release == 'true' && needs.preflight.result == 'success' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+      # Published for source availability under the AGPL, and for platforms the
+      # wheel matrix does not cover. Building it needs a Rust toolchain, which
+      # the project README says.
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist --manifest-path crates/atlasctl/Cargo.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: dist/*.tar.gz
+
+  publish-pypi:
+    name: PyPI
+    needs: [resolve, github-release, wheels, sdist]
+    if: ${{ !cancelled() && needs.resolve.outputs.release == 'true' && needs['github-release'].result == 'success' && needs.wheels.result == 'success' && needs.sdist.result == 'success' }}
+    runs-on: ubuntu-24.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      # Trusted publishing, so no PyPI API token is stored in this repository.
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          # Re-running a partially-failed release must not fail on files that
+          # already went out.
+          skip-existing: true
+
+  smoke-install:
+    name: smoke ${{ matrix.runner }}
+    needs: [resolve, github-release]
+    if: ${{ !cancelled() && needs.resolve.outputs.release == 'true' && needs['github-release'].result == 'success' }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04-arm, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v7
+      # Prove the published artifacts actually install, on both architectures,
+      # before anyone follows the instructions on the website.
+      - env:
+          ATLASCTL_VERSION: ${{ needs.resolve.outputs.tag }}
+        run: |
+          sh scripts/install.sh
+          "$HOME/.local/bin/atlasctl" --version
+          "$HOME/.local/bin/atlasctl" list | head -5
+
+  # Twice now a release run reported success while every publish job was
+  # skipped. A green run that shipped nothing is the failure, so it is asserted
+  # here rather than left to be noticed by a 404 on the install path.
+  verify-published:
+    name: assert the release actually shipped
+    needs: [resolve, github-release, publish-crates, publish-pypi, smoke-install]
+    if: ${{ !cancelled() && needs.resolve.outputs.release == 'true' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: every publish job must have succeeded
+        env:
+          GH_RELEASE: ${{ needs['github-release'].result }}
+          CRATES: ${{ needs['publish-crates'].result }}
+          PYPI: ${{ needs['publish-pypi'].result }}
+          SMOKE: ${{ needs['smoke-install'].result }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -eu
+          fail=0
+          for pair in "github-release:$GH_RELEASE" "crates.io:$CRATES" \
+                      "PyPI:$PYPI" "smoke-install:$SMOKE"; do
+            name=${pair%%:*}; result=${pair#*:}
+            printf '%-16s %s\n' "$name" "$result"
+            [ "$result" = success ] || fail=1
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::release $TAG did not ship: at least one publish job did not succeed"
+            exit 1
+          fi
+          echo "release $TAG shipped on every channel"

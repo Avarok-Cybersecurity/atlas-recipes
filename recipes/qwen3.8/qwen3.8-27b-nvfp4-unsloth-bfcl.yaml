@@ -1,0 +1,75 @@
+recipe_version: "2"
+model: unsloth/Qwen3.8-27B-NVFP4
+runtime: atlas
+container: avarok/atlas-gb10:latest
+max_nodes: 1
+
+metadata:
+  description: |
+    Qwen3.8-27B (unsloth NVFP4, dense hybrid SSM+Attn) — the BFCL / tool-calling
+    config, and the config the `bfcl-subset` gate is measured under for this
+    checkpoint.
+
+    ⚠ SIBLING RECIPE, DIFFERENT JOB. `qwen3.8-27b-nvfp4-unsloth.yaml` is the
+    AGENTIC config (thinking ON, bf16 lm-head, slai, 0.85 util, SSM cache
+    256/16). This one is thinking OFF with the qwen3_coder parser and grammar
+    disabled. They are not interchangeable and neither substitutes for the
+    other — each is pinned to a different gate's measured config.
+
+    WHY THE FLAGS BELOW ARE A COPY, NOT A CHOICE.
+
+    Every value here is deliberately byte-identical to
+    `qwen3.6/qwen3.6-27b-nvfp4-unsloth` except the checkpoint. That recipe is
+    what every recorded Qwen3.6-27B `bfcl-subset` result was measured under,
+    and the entire point of this file is that 3.6 and 3.8 scores can be read
+    against each other — the generation-over-generation delta on one axis.
+    Change a serve flag here and that comparison silently stops meaning
+    anything, because BFCL's normalized score is sensitive to serve config as
+    well as to the draw (see the `_SERVE_CONFIG_ALSO_MOVES_THE_SCORE` note in
+    the benchmark-pr baselines: the same draw under two serve configs moved
+    normalized by 0.86 with overall unchanged). If you retune this, retune the
+    3.6 sibling in the same commit and re-measure both.
+
+    The architectures are identical, which is what makes the copy legitimate:
+    all 1968 tensors of Qwen3.8-27B match Qwen3.6-27B in name, shape and dtype,
+    and the quantization config differs only by a compressed-tensors version
+    string (verified 2026-08-14). Only the weights differ. So the flags
+    transfer exactly; only the score does not.
+
+    ★ ONE HONEST DISCONTINUITY vs the recorded 3.6 history. `num_drafts: 1`
+    means MTP K=2. On images predating the 2026-08-14 `--num-drafts`
+    precedence fix, this pin was silently discarded (a clap default of 1 also
+    served as the "flag not passed" sentinel) and the qwen3.6-27b kernel
+    target's `default_num_drafts = 3` won, so the recorded 3.6 numbers were
+    measured at K=4. Accuracy comparisons survive this — speculative decode is
+    lossless, the verify step only accepts tokens the target model would have
+    emitted, so BFCL scores are unaffected by K. WALL AND TPOT ARE NOT
+    comparable across that boundary. The site's BFCL panel plots accuracy, so
+    it reads correctly; do not read latency across it.
+
+    Draw pinning lives on the client side, not here: the golden draw is
+    62/10/10 with a 25-sample floor = exactly n=995, seed 42, temp 0.
+
+  maintainer: Atlas
+  category: function-calling
+  model_params: 27B dense hybrid (48 GDN linear-attn + 16 softmax-attn layers)
+  quantization: NVFP4 (mixed precision above layer 55)
+  kv_dtype: bf16
+  updated: "2026-08-14"
+
+defaults:
+  host: 0.0.0.0
+  port: 8888
+  max_model_len: 32768
+  max_batch_size: 1
+  gpu_memory_utilization: 0.70
+  kv_cache_dtype: bf16
+  enable_prefix_caching: true
+  ssm_cache_slots: 128
+  ssm_checkpoint_interval: 32
+  speculative: true
+  num_drafts: 1
+  mtp_quantization: bf16
+  tool_call_parser: qwen3_coder
+  disable_tool_grammar: true
+  disable_thinking: true

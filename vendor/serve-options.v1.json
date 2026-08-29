@@ -1,0 +1,1209 @@
+{
+  "schema_version": 1,
+  "spark_version": "1.0.0-beta-preview",
+  "flags": [
+    {
+      "key": "auto_swap",
+      "flag": "auto-swap",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": null,
+      "help": "Load a different model when a request names one, ollama-style",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "no_auto_swap",
+      "flag": "no-auto-swap",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": null,
+      "help": "Forbid request-triggered model loading outright",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "dangerously_allow_unresolved_kernel_lookups",
+      "flag": "dangerously-allow-unresolved-kernel-lookups",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": "false",
+      "help": "Serve even when kernel lookups this model's dispatch issued did not resolve",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "check_kernels",
+      "flag": "check-kernels",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": "false",
+      "help": "Resolve all kernels for the model and exit, reporting any that did not resolve. Does not start the server. The EXIT CODE IS THE NUMBER of unresolved kernels — 0 means every lookup resolved",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "model_from_path",
+      "flag": "model-from-path",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "Load model directly from this filesystem path (skips HF cache resolution)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "model_name",
+      "flag": "model-name",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "Override model name shown in /v1/models and API responses. Defaults to the positional MODEL argument, then config.json _name_or_path",
+      "cli_aliases": [
+        "served-model-name"
+      ],
+      "recipe_aliases": []
+    },
+    {
+      "key": "kernel_target",
+      "flag": "kernel-target",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "Pin kernel-target resolution to this compiled target directory name (e.g. \"qwen3.8-27b\")",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "cache_dir",
+      "flag": "cache-dir",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "Override HuggingFace cache directory (default: $HF_HUB_CACHE, $HF_HOME/hub, or ~/.cache/huggingface/hub)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "port",
+      "flag": "port",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "8888",
+      "help": "HTTP port",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "gpu_ordinal",
+      "flag": "gpu-ordinal",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "0",
+      "help": "GPU ordinal",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "max_seq_len",
+      "flag": "max-seq-len",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "32768",
+      "help": "Maximum sequence length",
+      "cli_aliases": [],
+      "recipe_aliases": [
+        "max_model_len"
+      ]
+    },
+    {
+      "key": "block_size",
+      "flag": "block-size",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "16",
+      "help": "KV cache block size (tokens per block)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "kv_cache_dtype",
+      "flag": "kv-cache-dtype",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [
+        "bf16",
+        "fp8",
+        "nvfp4",
+        "turbo4",
+        "turbo3",
+        "turbo2",
+        "turbo8",
+        "turbo4k_turbo3v",
+        "turbo4k_turbo8v",
+        "turbo3k_turbo8v",
+        "bf16k_turbo4v",
+        "bf16k_turbo3v",
+        "fp8k_turbo4v",
+        "fp8k_turbo3v",
+        "bf16k_turbo2v",
+        "fp8k_turbo2v"
+      ],
+      "default": null,
+      "help": "KV cache dtype (fp8, bf16, or nvfp4). Precedence (highest wins): this flag → MODEL.toml `[behavior].default_kv_dtype` → fp8 (the safe engine default, `DEFAULT_KV_CACHE_DTYPE`). An explicitly passed value always wins, including `fp8` itself. NVFP4 uses less memory but may lose coherence at long context without --kv-high-precision-layers",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "ssm_h_dtype",
+      "flag": "ssm-h-dtype",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [
+        "f32",
+        "f16",
+        "f16-pool"
+      ],
+      "default": null,
+      "help": "Storage dtype for the GDN decode h-state: `f32` (default), `f16`, or `f16-pool`",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "ssm_rollback_mode",
+      "flag": "ssm-rollback-mode",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "snapshot",
+      "help": "EXPERIMENTAL — SSM verify-rollback mode: `snapshot` (default) or `replay`",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "gdn_fused_norm",
+      "flag": "gdn-fused-norm",
+      "presence_only": false,
+      "is_bool": true,
+      "options": [
+        "true",
+        "false"
+      ],
+      "default": null,
+      "help": "Fused GDN output-norm kernel on the decode path (default: off)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "ssm_batched_recurrent",
+      "flag": "ssm-batched-recurrent",
+      "presence_only": false,
+      "is_bool": true,
+      "options": [
+        "true",
+        "false"
+      ],
+      "default": null,
+      "help": "Batched multi-sequence GDN recurrent decode kernel (default: off)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "prefill_varlen_batch",
+      "flag": "prefill-varlen-batch",
+      "presence_only": false,
+      "is_bool": true,
+      "options": [
+        "true",
+        "false"
+      ],
+      "default": null,
+      "help": "VARLEN (ragged) batched prefill — OPT-IN (default: off)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "exact_verify",
+      "flag": "exact-verify",
+      "presence_only": false,
+      "is_bool": true,
+      "options": [
+        "true",
+        "false"
+      ],
+      "default": null,
+      "help": "Sequential-decode-exact GDN/SSM verify chain — OPT-IN (default: off)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "ssm_tail_midchunk",
+      "flag": "ssm-tail-midchunk",
+      "presence_only": false,
+      "is_bool": true,
+      "options": [
+        "true",
+        "false"
+      ],
+      "default": null,
+      "help": "Mid-chunk SSM tail capture on the prefill path (default: on)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "mtp_gate",
+      "flag": "mtp-gate",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [
+        "auto",
+        "force"
+      ],
+      "default": null,
+      "help": "MTP throughput gate: `auto` (default) or `force`",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "lm_head_dtype",
+      "flag": "lm-head-dtype",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [
+        "default",
+        "bf16",
+        "nvfp4",
+        "fp8"
+      ],
+      "default": "default",
+      "help": "LM-head precision: `default` (the clap default — no override, the model config decides), `bf16` (final vocab projection in BF16 — the SAFE CHOICE, and what to pass when the config picks something lower; matches vLLM checkpoint precision), `nvfp4` (force the model's NVFP4-packed lm_head), or `fp8` (runtime-quantize the lm_head to FP8 E4M3 per-row, w8a16_gemv decode). The big vocab projection (~1.78 GB/token BF16 at a 248K vocab) is the single largest per-token weight read; `fp8` halves it and `nvfp4` quarters it for a real decode speedup (measured Qwen3.6-35B-A3B: bf16 72 → fp8 86 (+20%) → nvfp4 97 (+35%) tok/s)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "kv_high_precision_layers",
+      "flag": "kv-high-precision-layers",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "0",
+      "help": "Boundary attention layers to keep at BF16 KV cache precision (first N + last N). Protects attention sink tokens (early layers) and output quality (final layers) from quantization error while saving memory on middle layers. Accepts: number, \"auto\" (=2, recommended), \"max\"/\"all\" (all BF16). Default: 0 (all layers use --kv-cache-dtype)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "gpu_memory_utilization",
+      "flag": "gpu-memory-utilization",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "0.9",
+      "help": "Fraction of total GPU memory this process may consume (0.0-1.0). Weights, buffers, KV cache, and reserves all count against this cap. Matches vLLM / sparkrun semantics: 0.50 on a 120 GB device means Atlas will use at most ~60 GB in total",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "max_num_seqs",
+      "flag": "max-num-seqs",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "128",
+      "help": "Maximum concurrent sequences",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "disable_thinking",
+      "flag": "disable-thinking",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": "false",
+      "help": "Global kill-switch for chain-of-thought / reasoning output. When set, the server forces thinking OFF regardless of what the client requests (reasoning_effort, thinking.budget_tokens, etc.) or what MODEL.toml declares as the default. Precedence (highest wins): this flag → request body → MODEL.toml `[behavior]`.thinking_default",
+      "cli_aliases": [
+        "stupify"
+      ],
+      "recipe_aliases": []
+    },
+    {
+      "key": "max_thinking_budget",
+      "flag": "max-thinking-budget",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "Override MODEL.toml's `[behavior].max_thinking_budget` (tokens). Sets the per-request ceiling for thinking-block length, and anchors the client `reasoning_effort` ladder (minimal/low/medium/high/xhigh = 1/4x, 1/2x, 1x, 2x, 4x of this value). An explicit client token budget (`thinking.budget_tokens`, `thinking_token_budget`) still wins outright; the (max_tokens * 9 / 10) safety cap is enforced unless MODEL.toml sets `cap_thinking_at_max_tokens = false`",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "max_inter_tool_prose",
+      "flag": "max-inter-tool-prose",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "Override MODEL.toml's `[behavior].max_inter_tool_prose` (tokens): the cap on free-prose tokens between successive tool calls on a tool-armed request, after which the scheduler ends the response with finish_reason \"length\" (#328). 0 disables the guard entirely. Precedence (highest wins): this flag → ATLAS_MAX_INTER_TOOL_PROSE → MODEL.toml → built-in default (3072)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "content_loop_watchdog",
+      "flag": "content-loop-watchdog",
+      "presence_only": false,
+      "is_bool": true,
+      "options": [
+        "true",
+        "false"
+      ],
+      "default": null,
+      "help": "Arm or disarm the content-loop watchdog, overriding MODEL.toml's `[behavior].enable_loop_watchdog`. The watchdog ends (or rolls back) a response whose tail is a short-period token repeat; its built-in threshold (3 end-anchored repeats of a period-2..64 pattern) can false-positive on legitimately repetitive output such as code. Precedence (highest wins): this flag → ATLAS_CONTENT_LOOP_WATCHDOG → MODEL.toml. Runtime-toggleable from the TUI via `/watchdog on|off`",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "content_loop_min_repeats",
+      "flag": "content-loop-min-repeats",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "Override the content-loop watchdog's repeat threshold (end-anchored consecutive repeats that constitute a loop; built-in default 3). Raise it for models whose legitimate output is short-period repetitive (code, tables). A per-request `repetition_detection` object still outranks this. Precedence: this flag → ATLAS_CONTENT_LOOP_MIN_REPEATS → built-in default",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "disable_tool_grammar",
+      "flag": "disable-tool-grammar",
+      "presence_only": false,
+      "is_bool": true,
+      "options": [
+        "true",
+        "false"
+      ],
+      "default": null,
+      "help": "Override MODEL.toml's `[behavior].disable_tool_grammar`. When true, the server skips XGrammar structural-tag enforcement on `tool_choice=\"auto\"` requests; tools are still parsed from output post-hoc by the tool_call_parser. Matches vLLM's default behaviour in auto mode (vLLM only grammar-constrains when tool_choice=\"required\")",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "default_chat_template_kwargs",
+      "flag": "default-chat-template-kwargs",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "Default chat template kwargs applied when the client sends no thinking parameters (no `reasoning.effort`, `chat_template_kwargs`, or `enable_thinking` in the request body). A JSON object with optional keys: `enable_thinking` (bool), `thinking_budget` (u32), `reasoning_effort` (none|minimal|low|medium|high|xhigh|max — the served default effort tier when clients are silent; unset = the neutral \"medium\"), `preserve_thinking` (bool). Unknown keys or an unknown `reasoning_effort` value abort startup (fail-fast; they were silently ignored before 2026-08-15)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "disable_template_overrides",
+      "flag": "disable-template-overrides",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": "false",
+      "help": "Ignore the `jinja-templates/` override directory and render every model off its OWN chat template (`chat_template.jinja` / `tokenizer_config.json`), relying on the Rust message-preprocessing (`tokenizer/message_preprocess.rs`) for Atlas's cross-cutting chat behaviors. Default off: an override file's presence is the opt-in signal that a model needs a template fix Rust preprocessing can't express (see `jinja-templates/README.md`)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "speculative",
+      "flag": "speculative",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": "false",
+      "help": "Enable MTP speculative decoding. The scheduler then MEASURES the verify-step cost over the first decode steps of serving and auto-disables MTP if it is provably net-negative (verify multiplier ≥ 1 + num_drafts), so this flag never regresses decode on configs where MTP does not pay off. See `scheduler::mtp_gate`",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "self_speculative",
+      "flag": "self-speculative",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": "false",
+      "help": "Enable self-speculative decoding: draft via layer-skipping (no MTP weights needed). Skips SSM layers during drafting for cheap predictions, then verifies with full model",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "ngram_speculative",
+      "flag": "ngram-speculative",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": "false",
+      "help": "Enable N-gram speculative decoding: CPU-side pattern matching proposer with CUDA-graphed K=2 verification. No extra weights needed",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "dflash",
+      "flag": "dflash",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": "false",
+      "help": "Enable DFlash block-diffusion speculative decoding (Z Lab, arXiv 2602.06036). Pairs the target with a small Qwen3-architecture drafter (e.g. `z-lab/Qwen3.6-35B-A3B-DFlash`) that emits γ tokens per step via bidirectional in-block attention conditioned on captured target hidden states. Mutually exclusive with `--speculative`",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "draft_model",
+      "flag": "draft-model",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "HuggingFace id (or local path) of the DFlash drafter checkpoint. When `--dflash` is set without `--draft-model`, the value falls through from the target's MODEL.toml `[dflash].draft_model` field",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "dflash_gamma",
+      "flag": "dflash-gamma",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "16",
+      "help": "DFlash block size γ (parallel draft tokens per step). Default 16 — the `block_size` of every published Qwen3.6-DFlash drafter; override only for ablation. Higher γ increases per-step verify cost but raises peak speedup",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "dflash_window_size",
+      "flag": "dflash-window-size",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "4096",
+      "help": "DFlash drafter sliding-window size for long context. The drafter runs full-prefix attention by default; at Atlas's typical 16K `--max-seq-len`, drafter attention dominates per-step cost. The upstream sglang / vLLM default is 4096. Set to 0 to disable (full attention)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "num_drafts",
+      "flag": "num-drafts",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "Number of draft tokens per speculative step (1=K=2, 2=K=3, 3=K=4 verify). Higher K verifies more drafts per step. Uses WY-chunkwise GDN kernels. Precedence (highest wins): this flag → MODEL.toml `[behavior].default_num_drafts` → 1 (`DEFAULT_NUM_DRAFTS`). An explicitly passed value always wins, including `--num-drafts 1` on a model whose MODEL.toml defaults higher",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "max_batch_size",
+      "flag": "max-batch-size",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "8",
+      "help": "Maximum concurrent sequences batched into one GPU decode step",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "mtp_quantization",
+      "flag": "mtp-quantization",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [
+        "bf16",
+        "fp8",
+        "nvfp4"
+      ],
+      "default": "bf16",
+      "help": "MTP head weight precision: bf16 (default, highest acceptance rate = highest end-to-end throughput; the MTP head is small so the memory cost is modest), fp8 (1 byte/weight, balanced; slower draft due to a D2H sync in MoE dispatch), nvfp4 (0.5 byte/weight, fastest draft forward but lossier projections → lower acceptance rate, so end-to- end throughput is usually worse than bf16)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "mtp_vocab",
+      "flag": "mtp-vocab",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "100000",
+      "help": "MTP draft vocabulary size. Limits the LM head GEMV to the first N token IDs, reducing propose latency. BPE tokenizers place frequent tokens at low IDs — 100K covers >99% of English outputs while cutting propose time by 37% (2.15ms → 1.35ms) with zero acceptance loss. Set to 0 to use full vocabulary",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "enable_prefix_caching",
+      "flag": "enable-prefix-caching",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": "false",
+      "help": "Enable prefix caching via radix tree (RadixAttention). Caches KV blocks for recurring prompt prefixes. For SSM models, KV is recomputed when no SSM snapshot exists (safe but no TTFT speedup without Marconi snapshots). Block table reuse still avoids allocation",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "dump",
+      "flag": "dump",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "Dump every /v1/chat/completions, /v1/responses, and /v1/messages (Anthropic) request — plus the corresponding response (non-streaming) or aggregated stream — as JSONL to a file. Intended for extracting the exact system prompt and tool schema a client (opencode, Claude Code, etc.) is sending, and for replaying failure cases in fixtures",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "scheduling_policy",
+      "flag": "scheduling-policy",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [
+        "fifo",
+        "slai"
+      ],
+      "default": "fifo",
+      "help": "Scheduling policy: fifo (default) or slai (SLO-aware). SLAI prioritizes decode for sequences nearing TBT deadline and orders prefills shortest-prompt-first",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "tbt_deadline_ms",
+      "flag": "tbt-deadline-ms",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "100",
+      "help": "TBT deadline in milliseconds for SLAI scheduling policy. Sequences approaching this deadline trigger decode-first priority",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "max_prefill_tokens",
+      "flag": "max-prefill-tokens",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "8192",
+      "help": "Maximum tokens to prefill per scheduler iteration (chunked prefill). Long prompts are split into chunks of this size, interleaved with decode steps for active sequences. Set to 0 to disable chunking (process entire prompt in one shot, legacy behavior). Chunked prefill: split long prompts into chunks, interleaved with decode steps. 8192 default halves chunk count vs 4096, giving ~11% TTFT improvement at 32K with no decode regression on DGX Spark. Set to 0 to disable (process entire prompt at once)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "oom_guard_mb",
+      "flag": "oom-guard-mb",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "4096",
+      "help": "Minimum free GPU memory (in MB) to keep as a safety margin during model loading. If free memory drops below this threshold after any shard, loading is aborted to prevent system OOM. Default 4096 MB accounts for CUDA context, NCCL buffers, and allocator overhead",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "rank",
+      "flag": "rank",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "0",
+      "help": "Global rank (0=head, 1=worker, …). Only used when --world-size > 1",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "world_size",
+      "flag": "world-size",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "1",
+      "help": "Total physical ranks across all parallelism dims. Set to 2 for two-node deployment. Must satisfy `world_size == tp_size × ep_size` (orthogonal mesh) or `world_size == tp_size == ep_size` (overlapping groups on the same physical ranks — used for 2-GPU TP+EP composition)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "tp_size",
+      "flag": "tp-size",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "1",
+      "help": "Tensor-parallel dimension. Splits attention/MLP weights column- and row-parallel across `tp_size` ranks. 1 = no TP. Composes with EP: MoE expert weights stay EP-sharded; attention/MLP get TP-sharded",
+      "cli_aliases": [],
+      "recipe_aliases": [
+        "tensor_parallel"
+      ]
+    },
+    {
+      "key": "ep_size",
+      "flag": "ep-size",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "1",
+      "help": "Expert-parallel dimension. Splits MoE expert weights across `ep_size` ranks. 1 = no EP. Default of 1 keeps single-rank semantics",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "master_addr",
+      "flag": "master-addr",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "127.0.0.1",
+      "help": "NCCL bootstrap address (IP of rank 0 node)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "master_port",
+      "flag": "master-port",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "29500",
+      "help": "NCCL bootstrap port",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "tool_call_parser",
+      "flag": "tool-call-parser",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [
+        "hermes",
+        "qwen3_coder",
+        "qwen3_xml",
+        "gemma4",
+        "mistral",
+        "minimax_xml",
+        "bare_json",
+        "poolside_v1"
+      ],
+      "default": null,
+      "help": "Tool call parser format. Enables OpenAI-compatible tool calling. Supported: \"hermes\" (JSON `<tool_call>`, Qwen3-VL / Qwen3-Next), \"qwen3_coder\" (Qwen3-Coder XML `<function=...>`, Qwen3.5 family + Nemotron-H), \"qwen3_xml\", \"gemma4\", \"mistral\", \"minimax_xml\", \"bare_json\", \"poolside_v1\". See the `FromStr for ToolCallFormat` in tool_parser.rs. When set, tool definitions in requests are injected into the system prompt and model output is parsed for tool_call tags",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "tool_max_tokens",
+      "flag": "tool-max-tokens",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "8192",
+      "help": "Maximum output tokens per tool-calling request. Caps max_tokens from the client when tools are active to prevent unbounded generation if the model doesn't emit a </tool_call> stop token. Must be high enough for Write tool calls with large file content. Default 8192",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "ssm_cache_slots",
+      "flag": "ssm-cache-slots",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "16",
+      "help": "Number of SSM state snapshot slots for Marconi prefix caching. Each slot stores SSM h_state + conv_state for all SSM layers, enabling full prefix skip (KV + SSM) on cache hits. 0 = disabled. 16 = recommended for repeated-prefix and multi-turn workloads. Intermediate checkpoints (--ssm-checkpoint-interval) require extra slots: ~(max_context / checkpoint_interval_tokens) per cached sequence",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "ssm_checkpoint_interval",
+      "flag": "ssm-checkpoint-interval",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "256",
+      "help": "Save SSM state snapshots at regular block boundaries during prefill. When set to N > 0, a snapshot is saved at every chunked-prefill chunk boundary whose block index is a multiple of N. On future prefix cache hits, the deepest intermediate snapshot is restored, reducing SSM recomputation to the tokens between the checkpoint and the match point. Independent of this interval, a tail checkpoint is always saved at the prompt's last full-block boundary (plus a leaf snapshot at prompt end); warm multi-turn restores hit the tail checkpoint. Chunk size is never reduced to serve this interval. 0 = tail + leaf snapshots only. 256 = every 4096 tokens (block_size=16)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "auto_compact",
+      "flag": "auto-compact",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "Enable automatic context compaction for long conversations. **DISABLED BY DEFAULT** (2026-04-25): the auto-compactor has historically been a source of agent loops — synthesised continuation messages and middle-of-history truncation themselves trigger drift (cf. opencode issues #15533, #17169, #19339). Oversize requests get a clean 400 error (`Prompt too long`) rather than a silently-rewritten context",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "default_top_n_sigma",
+      "flag": "default-top-n-sigma",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "1",
+      "help": "Default top-n-sigma for sampling (filter tokens by logit z-score). 0.0 = disabled. Recommended: 1.0 for NVFP4 models AND for agent workloads — top-n-σ is temperature-invariant (Tang et al., arXiv:2411.07641) so it is more robust than top-p across the per-phase temperature drift agentic loops induce",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "default_min_p",
+      "flag": "default-min-p",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "0.08",
+      "help": "Default min-p for sampling (keep tokens with prob >= min_p * max_prob). 0.0 = disabled. Recommended: 0.05-0.1",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "swap_space_gb",
+      "flag": "swap-space-gb",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "3",
+      "help": "Swap space in GB for KV cache overflow to disk. When GPU blocks are exhausted, sequences are swapped to disk and resumed later. 0 = disabled. Swap files stored in /tmp/atlas-swap/",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "high_speed_swap",
+      "flag": "high-speed-swap",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": "false",
+      "help": null,
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "high_speed_swap_dir",
+      "flag": "high-speed-swap-dir",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "Directory for the per-layer NVMe-backed KV files. Required when --high-speed-swap is set; must be on a different mount than --swap-space-gb's /tmp/atlas-swap to avoid file collisions",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "high_speed_swap_gb",
+      "flag": "high-speed-swap-gb",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "Total disk budget for --high-speed-swap, in GiB",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "high_speed_swap_resident_blocks",
+      "flag": "high-speed-swap-resident-blocks",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "HBM scratch slot count (number of resident blocks)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "high_speed_swap_rank",
+      "flag": "high-speed-swap-rank",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "32",
+      "help": "Predictor low-rank dimension (Phase 1 ships at r=32)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "high_speed_swap_qd",
+      "flag": "high-speed-swap-qd",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "8",
+      "help": "io_uring submission queue depth (Phase 3 shows QD=8 reaches 3.4 GB/s on this DGX Spark image)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "high_speed_swap_graph",
+      "flag": "high-speed-swap-graph",
+      "presence_only": false,
+      "is_bool": true,
+      "options": [
+        "true",
+        "false"
+      ],
+      "default": null,
+      "help": "Capture the per-layer body in a CUDA graph and replay (Phase 4). Defaults to mirror --high-speed-swap",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "high_speed_swap_cache_blocks_per_seq",
+      "flag": "high-speed-swap-cache-blocks-per-seq",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "64",
+      "help": "Per-sequence HBM cache cap for `--high-speed-swap` (Phase 6.1). When set together with --high-speed-swap, each sequence is limited to N HBM-resident KV blocks; older blocks are evicted to disk and streamed back via the orchestrator on demand. The KV cache total allocation shrinks to roughly `max_batch_size × N` blocks. Default 64 (= 1024 tokens HBM-resident at block_size=16). Set to max_seq_len/block_size to disable HBM-shrink (no eviction; useful for diff-against-no-swap correctness checks)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "request_timeout",
+      "flag": "request-timeout",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "300",
+      "help": "Server-side deadline for a single request, in seconds. A request that exceeds it is CUT and the response is reported with `finish_reason=\"timeout\"` (never \"length\") plus a WARN log naming the slot, elapsed time and tokens emitted — a truncation must never look like a normal completion. `0` disables the deadline entirely. Overridable per request via the OpenAI `timeout` field",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "profile",
+      "flag": "profile",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": "false",
+      "help": "Enable per-kernel profiling: sync + time each operation within layers. Disables CUDA graphs for accurate per-op timing. Adds ~10% overhead",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "fp8_kv_calibration_tokens",
+      "flag": "fp8-kv-calibration-tokens",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "Number of warmup tokens for online FP8 KV cache scale calibration. During the first N tokens, tracks max |K| and max |V| values across all attention layers. After N tokens, computes per-tensor scales as max/448 (mapping the observed range to FP8 E4M3 [-448, 448]). 0 = disabled (use static scales from checkpoint, or uncalibrated 1.0). Only applies when --kv-cache-dtype is fp8. Precedence (highest wins): this flag → MODEL.toml `[behavior].fp8_kv_calibration_tokens` → 0. An explicit value always wins — passing 0 force-disables calibration even on a model whose MODEL.toml enables it",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "fp8_kv_headroom",
+      "flag": "fp8-kv-headroom",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "2",
+      "help": "Headroom multiplier applied to the first-observe absmax when the online FP8 KV scale freezes (calibration freezes on the FIRST observe so the write scale always equals the read scale). The first observe sees only the first prefill chunk, so the frozen scale covers headroom× its observed max — later tokens whose magnitude grows don't clip, at a cost of <1 bit of precision. Must be ≥ 1.0 (below 1.0 guarantees clipping; rejected at startup). Replaces `ATLAS_FP8_KV_HEADROOM`",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "warmup_prompt",
+      "flag": "warmup-prompt",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "Path to a warmup prompt file (JSON messages or plain text). At startup, the server tokenizes and prefills this prompt, inserting the resulting KV cache + SSM snapshot into the prefix cache. This eliminates the cold-start TTFT penalty (~196ms) on the first real request",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "adaptive_sampling",
+      "flag": "adaptive-sampling",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": "false",
+      "help": "Enable adaptive sampling (entropy-based greedy gating, zone detection). Computes Shannon entropy over the full vocabulary per token to dynamically switch between greedy and sampled decoding. Improves quality for mixed content (code + prose) at the cost of ~2-3x decode throughput reduction. Off by default for maximum throughput",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "no_fast_load",
+      "flag": "no-fast-load",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": "false",
+      "help": "Disable the InstantTensor-style fast weight loader and use the mmap loader instead. The fast loader (O_DIRECT + pipelined reader/copier, with a per-shard heuristic that picks between O_DIRECT and buffered reads) is on by default — this flag is an escape hatch for rare filesystems that misbehave with O_DIRECT or for A/B debugging. Setting `ATLAS_FAST_LOAD=0` has the same effect",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "no_tui",
+      "flag": "no-tui",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": "false",
+      "help": "Disable the interactive TUI dashboard even on a TTY, keeping the plain log stream. The TUI also auto-disables when stdout/stdin is not an interactive terminal (pipes, `docker -d`, CI) or `ATLAS_NO_TUI=1`",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "fast_load_prefetch_shards",
+      "flag": "fast-load-prefetch-shards",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": "false",
+      "help": "Ask the fast loader to prefetch each buffered shard before per-tensor reads. Useful on NFS-backed model stores with many small tensors per shard, where normal kernel readahead may not keep up. Also enabled by `ATLAS_FAST_LOAD_PREFETCH_SHARDS=1`",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "vision_max_pixels",
+      "flag": "vision-max-pixels",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "0",
+      "help": "Vision input AREA bound in pixels, applied before patching. Overrides the checkpoint in BOTH directions — it may raise the bound as well as lower it",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "vision_allow_remote_images",
+      "flag": "vision-allow-remote-images",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": "false",
+      "help": "Fetch `image_url` parts that carry an http(s) URL, instead of rejecting them",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "vision_remote_image_max_mb",
+      "flag": "vision-remote-image-max-mb",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "20",
+      "help": "Cap, in MiB, on a single fetched remote image. Enforced against bytes actually read, so a remote understating its `Content-Length` cannot exceed it. No effect unless `--vision-allow-remote-images` is set",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "vision_remote_image_timeout_s",
+      "flag": "vision-remote-image-timeout-s",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "10",
+      "help": "Wall-clock budget, in seconds, for fetching one remote image. Bounds a slow-loris response, which would otherwise hold a thread from the prepare pool for as long as the remote cared to keep the socket open. No effect unless `--vision-allow-remote-images` is set",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "vision_remote_image_allow_private",
+      "flag": "vision-remote-image-allow-private",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": "false",
+      "help": "Also permit remote images on loopback, private and link-local addresses",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "video_allow_ffmpeg",
+      "flag": "video-allow-ffmpeg",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": "false",
+      "help": "Decode video content parts with ffmpeg",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "video_ffmpeg_path",
+      "flag": "video-ffmpeg-path",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "ffmpeg",
+      "help": "Path to the ffmpeg binary. A bare name is resolved on PATH; an absolute path is used as given, so a deployment can pin a known build instead of inheriting whatever PATH offers. No effect unless `--video-allow-ffmpeg` is set",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "video_fps",
+      "flag": "video-fps",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "2",
+      "help": "Frames per second to sample a video at. The checkpoints' own `video_processor` blocks declare 2, and the sampling is done BY the decoder rather than by decoding everything and discarding most of it. Raising this multiplies the vision tokens a clip costs",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "video_max_frames",
+      "flag": "video-max-frames",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "768",
+      "help": "Hard cap on frames taken from one video, before temporal grouping. Matches the checkpoints' `max_frames`. At the default 2 fps this is just over six minutes of clip",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "video_decode_timeout_s",
+      "flag": "video-decode-timeout-s",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "120",
+      "help": "Wall-clock budget for decoding one video. Bounds a decoder that hangs on a malformed container; the child is killed when it expires",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "bind",
+      "flag": "bind",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "127.0.0.1",
+      "help": "Address to bind the HTTP listener to. Defaults to `127.0.0.1` so a fresh install is reachable only from the local machine; pass `0.0.0.0` to expose on all interfaces (the server logs a warning when it does, since combined with the permissive default CORS this makes the API reachable to anything on the LAN)",
+      "cli_aliases": [
+        "host"
+      ],
+      "recipe_aliases": [
+        "host"
+      ]
+    },
+    {
+      "key": "require_auth",
+      "flag": "require-auth",
+      "presence_only": true,
+      "is_bool": true,
+      "options": [],
+      "default": "false",
+      "help": "Require an `Authorization: Bearer <token>` header on `/v1/*`, `/tokenize`, and `/detokenize`. The token must match one loaded via `--auth-tokens-file` or `--auth-token`. `/health`, `/health/live`, and `/metrics` stay open as scrape targets",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "auth_tokens_file",
+      "flag": "auth-tokens-file",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "Path to a file containing valid bearer tokens, one per line. Blank lines and lines starting with `#` are ignored. Permissions should be `0600`. The file is read once at startup; SIGHUP reloading is not supported (restart the server to rotate keys)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "auth_token",
+      "flag": "auth-token",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "A single inline bearer token. Convenient for quick starts; not recommended for production because the token is visible in `ps`/`/proc/<pid>/cmdline`. Use `--auth-tokens-file` instead",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "lora_adapter",
+      "flag": "lora-adapter",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "LoRA adapter to serve, as NAME=PATH_OR_HF_ID (e.g. `holo-sft=/data/adapters/holo-sft` or `holo-sft=org/holo-31-08b-lora`). Repeatable: each adapter loads into its own pool slot at startup and is advertised by GET /v1/models; requests route per-slot via the `adapter` field (unset = the installed active adapter). Runtime BF16 delta — never merged into the base weights",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "src_lang",
+      "flag": "src-lang",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "NLLB/M2M-100 ONLY: source-language token for translation (e.g. `eng_Latn`). Prepended to the encoder input. Required when serving an `m2m_100`/`nllb` checkpoint; ignored otherwise",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "tgt_lang",
+      "flag": "tgt-lang",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "NLLB/M2M-100 ONLY: target-language token (`forced_bos`, e.g. `fra_Latn`, `gvn_Latn`). Forced as the first decoded token. Required when serving an `m2m_100`/`nllb` checkpoint; ignored otherwise",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "max_lora_rank",
+      "flag": "max-lora-rank",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "64",
+      "help": "Maximum LoRA adapter rank. The A/B slot pool and delta scratch buffers are allocated rank-padded to this value at startup (frozen v1 layout contract); an adapter whose `r` exceeds it is rejected at load",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "max_loras",
+      "flag": "max-loras",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": "8",
+      "help": "Maximum number of LoRA adapter slots in the rank-padded pool. Slots beyond the startup-resident adapters are cache headroom for demand promotion (`--lora-stageable`)",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "lora_stageable",
+      "flag": "lora-stageable",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "Task #27: a STAGEABLE (promotable-but-not-resident) LoRA adapter, as `NAME=PEER_STAGE_ID=CONFIG_DIR` (repeatable). NAME is what a request's `adapter` field asks for; PEER_STAGE_ID is the adapter's id on the `$ATLAS_LORA_PEER` weight peer; CONFIG_DIR is a local dir with `adapter_config.json` (the peer manifest carries no r/alpha, so the peft scaling is read from here at startup). A request naming a stageable adapter triggers an on-miss RDMA promotion into a cache pool slot instead of a 404. Requires `$ATLAS_LORA_PEER`. Empty = today's resident-only behaviour, byte-identical",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    },
+    {
+      "key": "lora_stageable_disk",
+      "flag": "lora-stageable-disk",
+      "presence_only": false,
+      "is_bool": false,
+      "options": [],
+      "default": null,
+      "help": "A DISK-stageable (promotable-but-not-resident, NO peer) LoRA adapter, as `NAME=PATH_OR_HF_ID` (repeatable). A request naming NAME triggers an on-miss DISK fault-in into a cache pool slot (LRU-evicted) instead of a 404 — the no-RDMA sibling of `--lora-stageable`. Needs `ATLAS_LORA_ROTATE=1` (so decode runs eager and the disk swap can re-point a cache slot) and `--max-loras > resident count` for cache headroom. Empty = today's behaviour, byte-identical",
+      "cli_aliases": [],
+      "recipe_aliases": []
+    }
+  ]
+}

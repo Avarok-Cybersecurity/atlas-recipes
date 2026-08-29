@@ -1,0 +1,60 @@
+# HELP atlas_generation_tokens_total Total tokens generated
+# TYPE atlas_generation_tokens_total counter
+atlas_generation_tokens_total 120
+# HELP atlas_http_bytes_in_total Total HTTP request body bytes
+# TYPE atlas_http_bytes_in_total counter
+atlas_http_bytes_in_total 114
+# HELP atlas_http_bytes_out_total Total HTTP response body bytes
+# TYPE atlas_http_bytes_out_total counter
+atlas_http_bytes_out_total 3772
+# HELP atlas_prompt_tokens_total Total prompt tokens processed
+# TYPE atlas_prompt_tokens_total counter
+atlas_prompt_tokens_total 19
+# HELP atlas_requests_active Currently active requests
+# TYPE atlas_requests_active gauge
+atlas_requests_active 0
+# HELP atlas_requests_total Total requests processed
+# TYPE atlas_requests_total counter
+atlas_requests_total 1
+# HELP atlas_spec_decode_verify_total MTP draft verify outcomes by K and result
+# TYPE atlas_spec_decode_verify_total counter
+atlas_spec_decode_verify_total{k="2",outcome="accept"} 5
+# HELP atlas_time_to_first_token_seconds Time to first token
+# TYPE atlas_time_to_first_token_seconds histogram
+atlas_time_to_first_token_seconds_bucket{model="Qwen/Qwen3.6-35B-A3B-FP8",le="0.05"} 0
+atlas_time_to_first_token_seconds_bucket{model="Qwen/Qwen3.6-35B-A3B-FP8",le="0.1"} 0
+atlas_time_to_first_token_seconds_bucket{model="Qwen/Qwen3.6-35B-A3B-FP8",le="0.25"} 1
+atlas_time_to_first_token_seconds_bucket{model="Qwen/Qwen3.6-35B-A3B-FP8",le="0.5"} 1
+atlas_time_to_first_token_seconds_bucket{model="Qwen/Qwen3.6-35B-A3B-FP8",le="1"} 1
+atlas_time_to_first_token_seconds_bucket{model="Qwen/Qwen3.6-35B-A3B-FP8",le="2.5"} 1
+atlas_time_to_first_token_seconds_bucket{model="Qwen/Qwen3.6-35B-A3B-FP8",le="5"} 1
+atlas_time_to_first_token_seconds_bucket{model="Qwen/Qwen3.6-35B-A3B-FP8",le="10"} 1
+atlas_time_to_first_token_seconds_bucket{model="Qwen/Qwen3.6-35B-A3B-FP8",le="30"} 1
+atlas_time_to_first_token_seconds_bucket{model="Qwen/Qwen3.6-35B-A3B-FP8",le="60"} 1
+atlas_time_to_first_token_seconds_bucket{model="Qwen/Qwen3.6-35B-A3B-FP8",le="+Inf"} 1
+atlas_time_to_first_token_seconds_sum{model="Qwen/Qwen3.6-35B-A3B-FP8"} 0.150161316
+atlas_time_to_first_token_seconds_count{model="Qwen/Qwen3.6-35B-A3B-FP8"} 1
+# HELP atlas_prefix_cache_hits_total Prefix cache lookups that found cached blocks
+# TYPE atlas_prefix_cache_hits_total counter
+atlas_prefix_cache_hits_total 0
+# HELP atlas_prefix_cache_misses_total Prefix cache lookups with no match
+# TYPE atlas_prefix_cache_misses_total counter
+atlas_prefix_cache_misses_total 1
+# HELP atlas_prefix_cache_hit_tokens_total Tokens reused from prefix cache
+# TYPE atlas_prefix_cache_hit_tokens_total counter
+atlas_prefix_cache_hit_tokens_total 0
+# HELP atlas_prefix_cache_hit_rate Prefix cache hit rate (0-1)
+# TYPE atlas_prefix_cache_hit_rate gauge
+atlas_prefix_cache_hit_rate 0.0000
+# HELP atlas_kernel_lookups_unresolved Kernel lookups that did not resolve for the live model
+# TYPE atlas_kernel_lookups_unresolved gauge
+atlas_kernel_lookups_unresolved 0
+# HELP atlas_token_entropy_last Most recent per-token entropy (nats)
+# TYPE atlas_token_entropy_last gauge
+atlas_token_entropy_last 0.0000
+# HELP atlas_low_entropy_tokens_total Tokens with entropy below 0.3
+# TYPE atlas_low_entropy_tokens_total counter
+atlas_low_entropy_tokens_total 103
+# HELP atlas_low_entropy_ratio Fraction of tokens with entropy below 0.3
+# TYPE atlas_low_entropy_ratio gauge
+atlas_low_entropy_ratio 0.8512

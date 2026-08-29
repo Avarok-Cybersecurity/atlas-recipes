@@ -1,36 +1,179 @@
-# Atlas Spark recipe registry
+# Atlas recipes and `atlasctl`
 
-Official sparkrun recipes for [Atlas Spark](https://github.com/Avarok-Cybersecurity/atlas) — the pure-Rust LLM inference server for NVIDIA DGX Spark GB10. Recipes target the public `avarok/atlas-gb10:latest` Docker image and the `atlas` runtime in [sparkrun](https://github.com/spark-arena/sparkrun).
+Recipes for [Atlas](https://github.com/Avarok-Cybersecurity/atlas), the pure-Rust
+LLM inference server for NVIDIA DGX Spark (GB10), plus **`atlasctl`**, the
+launcher that runs them.
 
-## Usage
+A recipe describes one model deployment — the checkpoint, the container image,
+and the serve settings it was validated under. `atlasctl` reads a recipe and
+runs the `docker run` it implies.
 
-The `@atlas` namespace is reserved in sparkrun and pre-registered in default installs, so no manual `sparkrun registry add` is needed:
+## Install
 
-```bash
-sparkrun run @atlas/qwen3.5-35b-a3b-nvfp4
-sparkrun run @atlas/minimax-m2.7-nvfp4-ep2          # 2-node EP=2
-sparkrun run @atlas/qwen3.5-122b-a10b-nvfp4-ep2     # 2-node EP=2
+Linux and macOS:
+
+```sh
+curl -fsSL https://atlasinference.io/install.sh | sh
 ```
 
-If you're on an older sparkrun release that doesn't ship the reservation yet, add it manually:
+Windows, in PowerShell:
 
-```bash
-sparkrun registry add https://github.com/Avarok-Cybersecurity/atlas-recipes.git
+```powershell
+irm https://atlasinference.io/install.ps1 | iex
 ```
 
-### Listing the recipes
+Or, if you already have the toolchains:
 
-The `atlas` registry ships **hidden** in sparkrun's defaults, so a bare `sparkrun list`
-filters its recipes out — even though `sparkrun run @atlas/<recipe>` works, because `run`
-resolves by qualified name and isn't visibility-gated. To see them:
-
-```bash
-sparkrun recipe list --registry atlas    # just the Atlas lineup
-sparkrun list -a                         # everything, including hidden registries
-sparkrun recipe show @atlas/qwen3.6-35b-a3b-nvfp4
+```sh
+cargo install atlasctl        # from crates.io
+uvx pyatlasctl list            # from PyPI, no install step
 ```
 
-`sparkrun search` has the same filter — pass `-a` or `--registry atlas`.
+The installer downloads a prebuilt binary, verifies its SHA-256 against the
+release, and puts it in `~/.local/bin` (`%LOCALAPPDATA%\Programs\atlasctl` on
+Windows). It needs no Python and no Rust toolchain. Running it again on a
+machine that already has atlasctl is an upgrade, or — when the version is
+already current — a way to start an agent that is installed but stopped.
+`sh scripts/install.sh --uninstall` reverses it; on Windows,
+`atlasctl agent uninstall` removes the task and the binary can be deleted from
+the install directory above.
+
+The background agent is a `systemd --user` service on Linux, a launchd
+LaunchAgent on macOS, and a Task Scheduler task at logon on Windows — a task
+rather than a service because a service runs in session 0, which cannot reach
+Docker Desktop's per-user named pipe.
+
+## Use
+
+```sh
+atlasctl list                              # what is available
+atlasctl show qwen3.6-35b-a3b-fp8-mtp      # what a recipe does
+atlasctl run qwen3.6-35b-a3b-fp8-mtp       # serve it
+atlasctl run <recipe> --print              # print the command instead of running it
+atlasctl logs <recipe> --follow
+atlasctl stop <recipe>
+atlasctl status
+atlasctl doctor                            # check this machine for problems (exit 1 if any)
+```
+
+`--print` is worth knowing about: it shows the exact `docker run` that `run`
+would execute, so you can read it before trusting it, or run it yourself.
+Add `--portable` to keep `$(id -u)` and `$HOME` symbolic for pasting elsewhere.
+
+Multi-node recipes need one invocation per node:
+
+```sh
+# on the head
+atlasctl run <recipe> --rank 0 --world-size 2 --master-addr 10.10.10.1
+# on the worker
+atlasctl run <recipe> --rank 1 --world-size 2 --master-addr 10.10.10.1
+```
+
+A multi-node recipe refuses to launch on a single node rather than quietly
+serving something smaller than the recipe describes.
+
+## Ports
+
+Two, and they fail independently, which is why they are worth telling apart.
+
+| port | bound on | who talks to it |
+|---|---|---|
+| 34333 | loopback only | the website, on this machine |
+| 34334 | all interfaces | other machines — pairing, joining, and cluster work |
+
+34333 never leaves the machine, so nothing in a firewall applies to it.
+
+**34334 has to be reachable between machines.** If it is blocked, or something
+else is holding it, everything local keeps working — the website still finds
+this machine and still offers to add another — and the failure appears on the
+OTHER machine, as:
+
+```
+joining the fleet at 192.168.68.67:34334…
+error: ... Connection refused
+```
+
+`atlasctl doctor` reports both, separately:
+
+```
+agent:    ok (listening on 127.0.0.1:34333)
+peers:    ok (accepting on 34334)
+```
+
+A `peers:` line that is not listening means this machine cannot be joined,
+however healthy the rest of the output looks. The agent retries that port, so
+the usual cause is another `atlasctl agent` already running here — and the
+usual fix is to use that one rather than start a second.
+
+## Where recipes come from
+
+**Recipes are compiled into `atlasctl`.** A fresh install performs no network
+access to find a recipe, because there is nothing to fetch — the corpus a binary
+ships with is the corpus it was built from. Updating recipes means updating
+`atlasctl`.
+
+You can add your own registry:
+
+```sh
+atlasctl registry add myteam https://github.com/myteam/recipes.git
+atlasctl run @myteam/my-recipe
+```
+
+A remote registry supplies recipe **data** and nothing else. It cannot cause a
+command to run on your machine:
+
+- recipe fields that executed code in the previous launcher — `pre_exec`,
+  `post_exec`, `post_commands`, `mods`, `builder` — are refused wherever they
+  appear, including in recipes we ship ourselves;
+- container isolation comes from one reviewed profile in `atlasctl`, never from
+  a recipe, so `executor_config` is refused too;
+- there is no "trusted registry" concept in `atlasctl` at all. The mechanism
+  does not exist, so no configuration edit can enable it.
+
+A recipe carrying refused keys still appears in `atlasctl list --all`, with the
+reason. A recipe that vanishes is harder to reason about than one that explains
+itself.
+
+Registry names are resolved locally: `atlas` is reserved for the built-in
+corpus, and a bare recipe name always resolves to a built-in recipe first, so a
+remote cannot shadow a shipped recipe by choosing its name.
+
+## Replacing sparkrun
+
+`atlasctl` replaces the `sparkrun` launcher. If you have sparkrun installed,
+run `atlasctl doctor` — and read [SECURITY.md](SECURITY.md), which explains why
+this exists and what to check.
+
+Serve commands are byte-identical to sparkrun's across the whole recipe corpus;
+see [docs/PARITY.md](docs/PARITY.md) for the comparison and for the differences
+that are deliberate.
+
+## Contributing a recipe
+
+Add a YAML file under `recipes/<family>/`. The filename stem is the recipe name.
+
+```yaml
+recipe_version: "2"
+model: org/Model-Name
+runtime: atlas
+container: avarok/atlas-gb10:latest
+max_nodes: 1
+
+metadata:
+  description: |
+    What this deployment is, and what it was measured at.
+  maintainer: you
+
+defaults:
+  port: 8888
+  max_model_len: 8192
+  gpu_memory_utilization: 0.85
+```
+
+CI parses and renders every recipe in this repository, so a malformed recipe
+fails the pull request rather than someone's machine. Please say in the
+description what the settings were validated against — the numbers in these
+files are the reason to trust them.
 
 ### A note on checkpoints
 
@@ -44,20 +187,20 @@ The default 27B/35B NVFP4 recipes therefore now track the **`nvidia/*`** checkpo
 whose on-disk format has been stable since 2026-05-29. Those are verified end-to-end on a
 GB10 and are what you should use.
 
-There is deliberately **no `-unsloth` recipe yet**, though the engine now supports those
-checkpoints. Loading the mixed-precision layout took two fixes: atlas#300 (the layer
-weights) and atlas#301 (the FP8 `lm_head`, plus per-row weight scales that were being fed
-to a 128×128 block-scaled kernel — in-bounds, so no crash, just silently wrong logits).
-Both are on `main` and verified on a GB10:
+`-unsloth` recipes now exist, but only where a gate is actually measured on one — they
+are deliberately not the defaults. Loading the mixed-precision layout took two fixes:
+atlas#300 (the layer weights) and atlas#301 (the FP8 `lm_head`, plus per-row weight scales
+that were being fed to a 128×128 block-scaled kernel — in-bounds, so no crash, just
+silently wrong logits). Both are on `main` and verified on a GB10:
 
 | checkpoint | throughput | correctness |
 |---|---|---|
 | `unsloth/Qwen3.6-27B-NVFP4` | 14.0 tok/s | pass |
 | `unsloth/Qwen3.6-35B-A3B-NVFP4` | 123.4 tok/s | pass |
 
-The recipes land once an `avarok/atlas-gb10:dev` image **carrying atlas#301** is published.
-Until then a recipe pointing at those checkpoints would still fail on the image you'd
-actually pull, and shipping a recipe that does not serve is worse than shipping none.
+The two shipped so far are `qwen3.6-27b-nvfp4-unsloth` (the BFCL gate config) and
+`qwen3.8-27b-nvfp4-unsloth` (the agentic gate config). Both pin an image that can load the
+layout; on anything older they fail with `weight_global_scale not found`.
 
 If a model suddenly fails to build with a missing `weight_global_scale` or a
 `weight_scale` dtype error, you are almost certainly on a newer checkpoint than your Atlas
@@ -69,6 +212,7 @@ image — pull a newer `avarok/atlas-gb10:dev`.
 |---|---|---|---|
 | `qwen3.6-35b-a3b-nvfp4` | nvidia/Qwen3.6-35B-A3B-NVFP4 | single | **DEFAULT 35B** — MTP K=1 (pinned; 116.5 tok/s), calibrated fp8 KV (128K), qwen3_coder agentic stack; requires :dev ≥ 2026-07-10 (atlas#287) |
 | `qwen3.6-27b-nvfp4` | nvidia/Qwen3.6-27B-NVFP4 | single | **DEFAULT 27B** — dense hybrid SSM+Attn, MTP K=1 (pinned), bf16 KV, qwen3_coder agentic stack; requires :dev ≥ 2026-07-10 (atlas#287) |
+| `qwen3.8-27b-nvfp4-unsloth` | unsloth/Qwen3.8-27B-NVFP4 | single | Dense hybrid SSM+Attn — the AGENTIC gate config: thinking ON, bf16 head + bf16 KV, 32K, MTP K=4, slai. Architecturally identical to Qwen3.6-27B (all 1968 tensors match); only the weights differ |
 | `qwen3.6-27b-w4a4-concurrency` | centml/Qwen3.6-27B-NVFP4-W4A4-mlpinf | single | **MANY-CLIENT 27B** — batch 128, MTP K=3, FP16 GDN h-state; 24.2/205.1/472.1 tok/s at C=1/16/128 and ahead of vLLM on all eight rungs. A THROUGHPUT config: the top two rungs invert on time-to-answer. Needs an image carrying the enterprise-concurrency merge |
 | `qwen3.6-35b-a3b-fp8-mtp` | Qwen/Qwen3.6-35B-A3B-FP8 | single | Flagship FP8 — native FP8, bf16 head + bf16 KV, 64K ctx, MTP K=2, live tool-call streaming |
 | `qwen3.6-35b-a3b-fp8-bf16head` | Qwen/Qwen3.6-35B-A3B-FP8 | single | 32K safe profile of the FP8 flagship (same bf16 head/KV) |
@@ -107,7 +251,7 @@ recipes/
 └── minimax-m2.7/minimax-m2.7-nvfp4-ep2.yaml
 ```
 
-sparkrun's recipe lookup is recursive within the `recipes` subtree, so the family-level grouping is purely cosmetic. Recipes are accessed by their file stem regardless of nesting.
+atlasctl's recipe lookup is recursive within the `recipes` subtree, so the family-level grouping is purely cosmetic. Recipes are accessed by their file stem regardless of nesting.
 
 ## Hardware constraints captured in the recipes
 
@@ -120,7 +264,7 @@ Each recipe carries the production-validated KV/seq/MoE settings drawn from Atla
 
 ## Related
 
-- Runtime: [`atlas` runtime in sparkrun](https://github.com/spark-arena/sparkrun) (PR #169)
+- Runtime: [`atlas` runtime in atlasctl](https://github.com/spark-arena/atlasctl) (PR #169)
 - Engine: https://github.com/Avarok-Cybersecurity/atlas
 - Docker image: [`avarok/atlas-gb10`](https://hub.docker.com/r/avarok/atlas-gb10)
 - Discord: [Atlas-Inference](https://atlasinference.io)
