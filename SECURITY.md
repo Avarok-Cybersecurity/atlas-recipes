@@ -81,6 +81,47 @@ machines on a domain, and `agent.key` is *this machine's* identity. Roaming it
 would give two machines one node identity, which is sharing a private key by
 copying a directory.
 
+## The join code
+
+Adding a machine to a fleet uses an 8-digit code. It is worth being explicit
+about what that code is, because it is the one credential a human carries
+between machines.
+
+**It travels TO the target.** The machine being added dials the machine that
+minted the code, so the code is pasted into a shell on the *new* machine — which
+means it lands in that shell's history. That is why it is time-boxed rather than
+durable.
+
+What bounds it:
+
+* **10 minutes.** After that the window is shut whether or not it was used.
+* **Single use.** A code that completed a pairing cannot complete a second.
+* **Three attempts, then a 60-second lockout.** A wrong code is not a free
+  guess, so 8 digits are not brute-forced in the window they are alive for.
+* **Revocable.** Closing the window in the browser takes effect immediately.
+
+What the code does *not* do is authenticate on its own. It authorises the
+ceremony; the ceremony itself is SPAKE2 over TLS bound to the channel, so a
+relay that sits in the middle fails key confirmation rather than learning
+anything. The code is what decides that a stranger may attempt the ceremony at
+all — outside an open window, an unpinned machine reaches no further than the
+TLS handshake.
+
+**A pairing is not a launch grant.** Pairing establishes identity. Whether a
+machine that joins may also *drive* this one is a separate flag, chosen when the
+code is minted rather than implied by the pairing.
+
+**The two directions confirm at different moments, and it is worth knowing
+which you are in.** When you pair a machine you can already see — the
+browser-driven flow — nothing is written until a human compares the
+verification words and confirms; the exchange is held until then, and if it is
+never confirmed no pin is written and there is nothing to undo. When a machine
+joins with a code, that machine writes its pin as soon as the ceremony
+succeeds: the code it carried *is* the authorisation, and the words are printed
+so the operator can compare them afterwards. If they do not match, unpair —
+that is a smaller window than the browser flow offers, and it is the price of a
+one-shot code that nobody has to be present to accept.
+
 ## Reproducing the parity claim
 
 Serve commands are byte-identical to the reference implementation's across the
