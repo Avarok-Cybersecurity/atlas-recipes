@@ -311,11 +311,23 @@ mod logs_finds_what_run_started {
     fn a_rank_container_is_found_by_label_after_the_name_guess_misses() {
         let r = RecordingRunner::new();
         // exact-name probe: nothing
-        r.push_result(Output { status: 0, stdout: String::new(), stderr: String::new() });
+        r.push_result(Output {
+            status: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
         // label lookup: the rank container run actually created
-        r.push_result(Output { status: 0, stdout: "atlas-x-rank0\n".into(), stderr: String::new() });
+        r.push_result(Output {
+            status: 0,
+            stdout: "atlas-x-rank0\n".into(),
+            stderr: String::new(),
+        });
         // `docker logs` itself
-        r.push_result(Output { status: 0, stdout: String::new(), stderr: String::new() });
+        r.push_result(Output {
+            status: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
 
         logs_with(&r, &args("x")).expect("must stream the rank container");
         let last = r.calls().last().cloned().unwrap_or_default();
@@ -330,7 +342,11 @@ mod logs_finds_what_run_started {
     #[test]
     fn several_ranks_are_listed_rather_than_chosen_between() {
         let r = RecordingRunner::new();
-        r.push_result(Output { status: 0, stdout: String::new(), stderr: String::new() });
+        r.push_result(Output {
+            status: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
         r.push_result(Output {
             status: 0,
             stdout: "atlas-x-rank0\natlas-x-rank1\n".into(),
@@ -338,16 +354,30 @@ mod logs_finds_what_run_started {
         });
         let err = logs_with(&r, &args("x")).expect_err("must refuse to pick one");
         let msg = format!("{err:#}");
-        assert!(msg.contains("atlas-x-rank0") && msg.contains("atlas-x-rank1"), "got: {msg}");
-        assert!(msg.contains("docker logs"), "must say how to read one: {msg}");
+        assert!(
+            msg.contains("atlas-x-rank0") && msg.contains("atlas-x-rank1"),
+            "got: {msg}"
+        );
+        assert!(
+            msg.contains("docker logs"),
+            "must say how to read one: {msg}"
+        );
     }
 
     /// Nothing running under that name at all keeps the original message.
     #[test]
     fn genuinely_absent_still_says_it_was_never_started_here() {
         let r = RecordingRunner::new();
-        r.push_result(Output { status: 0, stdout: String::new(), stderr: String::new() });
-        r.push_result(Output { status: 0, stdout: String::new(), stderr: String::new() });
+        r.push_result(Output {
+            status: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
+        r.push_result(Output {
+            status: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        });
         let err = logs_with(&r, &args("x")).expect_err("must refuse");
         assert!(format!("{err:#}").contains("has not been started here"));
     }
