@@ -516,8 +516,10 @@ main() {
     version="${ATLASCTL_VERSION:-latest}"
     if [ "$version" = "latest" ]; then
         base="https://github.com/$REPO/releases/latest/download"
+        release_page="https://github.com/$REPO/releases/latest"
     else
         base="https://github.com/$REPO/releases/download/$version"
+        release_page="https://github.com/$REPO/releases/tag/$version"
     fi
 
     tmp=$(mktemp -d)
@@ -526,8 +528,32 @@ main() {
 
     archive_name="${BIN_NAME}-${target}.tar.xz"
     info "downloading $archive_name"
-    fetch "$base/$archive_name" "$tmp/$archive_name" \
-        || die "could not download $base/$archive_name — is there a release for $target yet?"
+    if ! fetch "$base/$archive_name" "$tmp/$archive_name"; then
+        # A failed asset download has three very different causes, and the old
+        # message named only the least likely one: it asked whether this
+        # platform has a release at all, which reads as "atlasctl does not
+        # support your machine". The usual cause is far more boring -- the
+        # release was published a few minutes ago and its archives are still
+        # uploading, so `releases/latest` briefly resolves to a release with no
+        # assets. A user who is told their platform is unsupported gives up; a
+        # user who is told to retry in a few minutes succeeds.
+        #
+        # SHA256SUMS is written by the same step that uploads the archives, so
+        # its presence separates the cases with no API call and no jq.
+        # A tag that does not exist at all must not be reported as "still
+        # publishing" -- that would send someone who mistyped a version off to
+        # wait for an upload that is never coming.
+        if ! fetch "$release_page" "$tmp/release.probe" 2>/dev/null; then
+            die "there is no release named '$version' in $REPO. Available releases are listed at https://github.com/$REPO/releases"
+        fi
+        if fetch "$base/SHA256SUMS" "$tmp/SHA256SUMS.probe" 2>/dev/null; then
+            if grep -q "$archive_name" "$tmp/SHA256SUMS.probe" 2>/dev/null; then
+                die "downloading $archive_name failed, but this release does list it. That points at a network problem on the way to GitHub rather than a missing build — please retry."
+            fi
+            die "this release has no build for $target. The targets it does ship are listed at https://github.com/$REPO/releases"
+        fi
+        die "this release has not finished publishing its binaries yet — they are uploaded a few minutes after the release itself appears. Retry shortly, or pin a known-good version with ATLASCTL_VERSION=<tag> (see https://github.com/$REPO/releases)."
+    fi
     fetch "$base/SHA256SUMS" "$tmp/SHA256SUMS" \
         || die "could not download SHA256SUMS; refusing to install unverified binaries."
 
