@@ -261,9 +261,21 @@ fn logs_with(runner: &dyn ProcessRunner, args: &LogsArgs, resolved: &str) -> Res
             }
         }
         match found.len() {
+            // Two explanations, not one. "It has not been started here" was
+            // asserted, and it is FALSE in the case an operator is most likely
+            // to be in: recipes run with `--rm`, so a container that started and
+            // then died is removed, and looking for its logs is exactly what
+            // brought them here. Telling that person the launch never happened
+            // contradicts the "started" they just read.
             0 => bail!(
-                "no container for `{}` on this machine — it has not been started here. `atlasctl status` lists what is running",
-                args.recipe
+                "no container for `{recipe}` on this machine.\n\
+                 Either it was never started here — `atlasctl status` lists what is \
+                 running — or it started and exited: recipes run with `--rm`, so a \
+                 container that dies is removed and its logs go with it.\n\
+                 To see why one dies, run it in the foreground:\n    \
+                 atlasctl run {recipe} --print\n\
+                 then paste that command without `-d`.",
+                recipe = args.recipe
             ),
             1 => name = found.into_iter().next().unwrap_or_default(),
             // Several ranks on this box. Naming one for the operator would be a

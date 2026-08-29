@@ -220,7 +220,11 @@ mod absent_tests {
         )
         .expect_err("there is nothing to show");
         let msg = e.to_string();
-        assert!(msg.contains("has not been started here"), "{msg}");
+        // Both explanations, neither asserted: `--rm` means a container that
+        // started and died is gone, so "never started here" cannot be stated as
+        // fact to somebody who is reading logs precisely because one died.
+        assert!(msg.contains("never started here"), "{msg}");
+        assert!(msg.contains("--rm"), "{msg}");
         assert!(
             msg.contains("atlasctl status"),
             "points somewhere useful: {msg}"
