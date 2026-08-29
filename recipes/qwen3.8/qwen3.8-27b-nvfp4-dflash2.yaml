@@ -1,0 +1,85 @@
+recipe_version: "2"
+model: unsloth/Qwen3.8-27B-NVFP4
+runtime: atlas
+container: avarok/atlas-gb10:latest
+max_nodes: 1
+
+metadata:
+  description: |
+    Qwen3.8-27B (unsloth NVFP4) served with the DFlash2 block-diffusion
+    drafter — the config the `concurrency-sweep-dflash2` gate is measured
+    under, and the only recipe in this repo that speculates with DFlash
+    rather than MTP.
+
+    DFlash2 (inco.ai, 2026-08-18) adds two things to the DFlash drafter:
+    grouped dynamic two-tap causal convolutions around every attention and
+    MLP sublayer, and a candidate-selector tail that replaces per-row argmax
+    with a coherent path walk over top-16 candidates. Atlas arms it
+    automatically when the drafter checkpoint ships the components and the
+    kernels are compiled for the target; there is no `--dflash2` flag.
+
+    ⚠ THE DRAFTER IS NOT INTERCHANGEABLE. A DFlash drafter is trained against
+    one target's hidden states — incoai/Qwen3.8-27B-DFlash2 consumes
+    Qwen3.8-27B layers [5, 19, 33, 47, 61]. Pointed at other weights it does
+    not fail; it degrades to near-zero acceptance and decodes SLOWER than no
+    speculation at all. That is why `draft_model` is pinned here by full id
+    instead of relying on the target MODEL.toml fallback.
+
+    ⚠ dflash_gamma IS NOT OPTIONAL. `--dflash-gamma` has a CLI default of 16,
+    which shadows the drafter's own `dflash_config.block_size` of 8. Serving
+    this drafter at gamma 16 measured 0% accept on every verify step and
+    sized its per-sequence pools for twice the block it can ever use. The 8
+    below is the drafter's trained value, not a tuning choice.
+
+    ⚠ MTP AND DFLASH ARE MUTUALLY EXCLUSIVE. `--dflash` is declared
+    `conflicts_with = "speculative"`, so this recipe deliberately carries no
+    `speculative:` / `num_drafts:` / `mtp_quantization:` keys. Its sibling
+    qwen3.8-27b-nvfp4-unsloth.yaml is the MTP profile; the two are the two
+    speculation lanes for the same weights and are not comparable to each
+    other on throughput.
+
+    ★ CONCURRENCY: expect this to stop speculating at the wide rungs. The
+    batched verify path is bounded by the verify row cap over gamma-sized
+    rows per sequence, so above that width the served engine is the base
+    engine. The gate records that convergence rather than hiding it.
+  tags:
+    - qwen3.8
+    - nvfp4
+    - dflash2
+    - speculative
+    - gate
+
+defaults:
+  host: 0.0.0.0
+  port: 8888
+  # The concurrency instrument's operating point, matched to the plain
+  # concurrency gate's serve pin so the two ladders differ in ONE axis.
+  # 4096 leaves >4x headroom over the fixture's ~832-token sequences while
+  # keeping the per-sequence KV commitment small enough to admit 128 of them.
+  max_model_len: 4096
+  # Must cover the widest measured rung, or that rung measures the cap.
+  max_batch_size: 128
+  # 0.85 is the ceiling on GB10 — 0.90 has frozen a box and needed a
+  # powercycle. Do not raise it to buy drafter headroom; lower the batch.
+  gpu_memory_utilization: 0.85
+  # fp8 KV halves the per-sequence KV bytes, which is what this profile
+  # spends on concurrent sequences. The bf16 pin in the agentic sibling is a
+  # <=32K single-stream reproduction pin and does not apply here.
+  kv_cache_dtype: fp8
+  # Correctness pin inherited from the agentic profile: exact argmax over the
+  # 248K vocab. It is not a throughput knob and must not be lowered to make
+  # room for the drafter.
+  lm_head_dtype: bf16
+  kv_high_precision_layers: auto
+  scheduling_policy: slai
+  enable_prefix_caching: true
+  # A concurrency ladder issues independent sequences rather than replaying
+  # long shared prefixes, so 8 slots keep the warm-prefix value at a quarter
+  # of the reserve. Each slot holds one full per-sequence SSM blob.
+  ssm_cache_slots: 8
+  ssm_checkpoint_interval: 16
+  # ── DFlash2 ──
+  dflash: true
+  draft_model: incoai/Qwen3.8-27B-DFlash2
+  # The drafter's own trained block size. See the warning above.
+  dflash_gamma: 8
