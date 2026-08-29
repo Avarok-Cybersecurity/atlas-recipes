@@ -217,7 +217,6 @@ mod tests {
     // Placed first because it is the regression this module keeps getting:
     // a check that reports on a port it chose, without saying which.
 
-
     /// A machine with an agent on a non-default port must not be told there is
     /// no agent, full stop.
     ///
