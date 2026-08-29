@@ -304,7 +304,26 @@ try {
     try {
         Invoke-WebRequest -UseBasicParsing -Uri "$base/$archiveName" -OutFile $archive
     } catch {
-        Die "could not download $base/$archiveName - is there a release for $target yet?"
+        # Three very different causes; the old message named only the least
+        # likely one and read as "atlasctl does not support your machine". The
+        # usual cause is that the release was published minutes ago and its
+        # archives are still uploading, so releases/latest briefly resolves to a
+        # release with no assets. SHA256SUMS is written by the same step that
+        # uploads the archives, so its presence separates the cases.
+        $probe = Join-Path $tmp 'SHA256SUMS.probe'
+        $haveSums = $true
+        try {
+            Invoke-WebRequest -UseBasicParsing -Uri "$base/SHA256SUMS" -OutFile $probe
+        } catch {
+            $haveSums = $false
+        }
+        if (-not $haveSums) {
+            Die "this release has not finished publishing its binaries yet - they are uploaded a few minutes after the release itself appears. Retry shortly, or pin a known-good version by setting `$env:ATLASCTL_VERSION` to a tag (see https://github.com/$Repo/releases)."
+        }
+        if (Select-String -Path $probe -SimpleMatch $archiveName -Quiet) {
+            Die "downloading $archiveName failed, but this release does list it. That points at a network problem on the way to GitHub rather than a missing build - please retry."
+        }
+        Die "this release has no build for $target. The targets it does ship are listed at https://github.com/$Repo/releases"
     }
     $sums = Join-Path $tmp 'SHA256SUMS'
     try {
