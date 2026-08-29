@@ -29,17 +29,12 @@ async fn the_grant_is_checked_independently_at_relay_and_target() {
 
     let port = {
         let launcher = std::sync::Arc::clone(&relay.launcher);
-        spawn_serving(&mut relay, 0, Duration::from_secs(5), Box::new(launcher))
+        spawn_serving(&mut relay, 0, Duration::from_secs(5), launcher)
     }
     .await;
     {
         let launcher = std::sync::Arc::clone(&target.launcher);
-        spawn_serving(
-            &mut target,
-            port,
-            Duration::from_secs(5),
-            Box::new(launcher),
-        )
+        spawn_serving(&mut target, port, Duration::from_secs(5), launcher)
     }
     .await;
     poll(&relay, &target).await;
@@ -122,7 +117,7 @@ async fn a_directly_pinned_target_still_requires_its_own_grant() {
     pin(&target, &origin, false);
     let port = {
         let launcher = std::sync::Arc::clone(&target.launcher);
-        spawn_serving(&mut target, 0, Duration::from_secs(5), Box::new(launcher))
+        spawn_serving(&mut target, 0, Duration::from_secs(5), launcher)
     }
     .await;
     poll(&origin, &target).await;
@@ -197,7 +192,7 @@ async fn a_slow_target_times_out_at_the_relay_not_at_the_origin() {
     let relay_budget = Duration::from_millis(300);
     let port = {
         let launcher = std::sync::Arc::clone(&relay.launcher);
-        spawn_serving(&mut relay, 0, relay_budget, Box::new(launcher))
+        spawn_serving(&mut relay, 0, relay_budget, launcher)
     }
     .await;
     // The fake target answers a Control only after twice the relay budget.
@@ -305,14 +300,14 @@ async fn a_retried_launch_after_a_lost_reply_is_already_running_not_doubled() {
     });
     let port = {
         let launcher = std::sync::Arc::clone(&relay.launcher);
-        spawn_serving(&mut relay, 0, relay_budget, Box::new(launcher))
+        spawn_serving(&mut relay, 0, relay_budget, launcher)
     }
     .await;
     spawn_serving(
         &mut target,
         port,
         Duration::from_secs(5),
-        Box::new(Arc::clone(&launcher)),
+        Arc::clone(&launcher) as Arc<dyn crate::launcher::Launcher>,
     )
     .await;
     poll(&relay, &target).await;

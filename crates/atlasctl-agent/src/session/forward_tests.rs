@@ -141,7 +141,7 @@ impl ControlRelay for FakeRelay {
 }
 
 /// A ready session over a self-aware fleet and the given relay.
-fn routed_session<'a>(
+async fn routed_session<'a>(
     f: &'a Fixture,
     fleet: &'a SelfAwareFleet,
     relay: Option<&'a dyn ControlRelay>,
@@ -149,7 +149,7 @@ fn routed_session<'a>(
     let (mut s, _) = Session::new(SessionDeps {
         accelerator: "",
         registry: &f.registry,
-        launcher: &f.launcher,
+        launcher: f.launcher.clone(),
         token: TOKEN,
         can_launch: f.can_launch.clone(),
         fleet: Some(fleet),
@@ -158,10 +158,12 @@ fn routed_session<'a>(
         joining: None,
         relay,
     });
-    let out = s.handle(ClientMsg::Hello {
-        protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
-        token: TOKEN.into(),
-    });
+    let out = s
+        .handle(ClientMsg::Hello {
+            protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
+            token: TOKEN.into(),
+        })
+        .await;
     assert!(matches!(out[0], ServerMsg::Ready { .. }));
     s
 }
@@ -217,14 +219,14 @@ fn provenance(msg: &ServerMsg) -> (Option<NodeId>, Option<NodeId>) {
 
 /// No relay, no fleet: exactly the old refusal, so a single-node agent is
 /// not degraded by the router existing.
-#[test]
-fn a_verb_aimed_at_another_node_is_refused_not_executed_here() {
+#[tokio::test]
+async fn a_verb_aimed_at_another_node_is_refused_not_executed_here() {
     // The dangerous failure mode is a Launch{on: dgx2} starting a model on
     // THIS box while the page reports it running on dgx2. Every forwardable
     // verb must come back as a typed refusal naming the node, with the
     // launcher untouched.
     let f = Fixture::new();
-    let mut s = f.ready();
+    let mut s = f.ready().await;
     for msg in forwarded(target()) {
         let sent_id = match &msg {
             ClientMsg::ListRecipes { id, .. }
@@ -236,7 +238,7 @@ fn a_verb_aimed_at_another_node_is_refused_not_executed_here() {
             | ClientMsg::LaunchLogs { id, .. } => *id,
             other => panic!("not a forwardable verb: {other:?}"),
         };
-        let out = s.handle(msg);
+        let out = s.handle(msg).await;
         match &out[0] {
             ServerMsg::Error {
                 id: Some(id),
@@ -267,17 +269,19 @@ fn a_verb_aimed_at_another_node_is_refused_not_executed_here() {
     );
 }
 
-#[test]
-fn an_unauthenticated_socket_cannot_probe_the_routing_surface() {
+#[tokio::test]
+async fn an_unauthenticated_socket_cannot_probe_the_routing_surface() {
     // The routing happens after the handshake gate, so an unauthenticated
     // client gets the same NotReady-and-close as for any other verb — it
     // must not learn whether this agent can route anywhere.
     let f = Fixture::new();
     let mut s = f.session();
-    let out = s.handle(ClientMsg::Status {
-        id: 1,
-        on: Some(target()),
-    });
+    let out = s
+        .handle(ClientMsg::Status {
+            id: 1,
+            on: Some(target()),
+        })
+        .await;
     assert!(matches!(
         out[0],
         ServerMsg::Error {
@@ -290,17 +294,19 @@ fn an_unauthenticated_socket_cannot_probe_the_routing_surface() {
 
 /// O1 — `on: Some(local id)` is this machine: executed locally through the
 /// unchanged path, relay never consulted, provenance `(None, None)`.
-#[test]
-fn a_verb_aimed_at_this_machine_by_id_runs_locally_and_never_dials() {
+#[tokio::test]
+async fn a_verb_aimed_at_this_machine_by_id_runs_locally_and_never_dials() {
     let f = Fixture::new();
     let fleet = SelfAwareFleet;
     let relay = FakeRelay::new(|_| panic!("O1 must never reach the relay"));
-    let mut s = routed_session(&f, &fleet, Some(&relay));
+    let mut s = routed_session(&f, &fleet, Some(&relay)).await;
 
-    let out = s.handle(ClientMsg::Status {
-        id: 5,
-        on: Some(local_id()),
-    });
+    let out = s
+        .handle(ClientMsg::Status {
+            id: 5,
+            on: Some(local_id()),
+        })
+        .await;
     assert_eq!(
         provenance(&out[0]),
         (None, None),
@@ -318,15 +324,15 @@ fn a_verb_aimed_at_this_machine_by_id_runs_locally_and_never_dials() {
 
 /// Every forwardable verb maps onto its `ControlReq` twin and comes back as
 /// the matching reply with honest provenance `(Some(target), via)`.
-#[test]
-fn each_remote_verb_maps_to_its_control_twin_with_stated_provenance() {
+#[tokio::test]
+async fn each_remote_verb_maps_to_its_control_twin_with_stated_provenance() {
     let f = Fixture::new();
     let fleet = SelfAwareFleet;
     let relay = FakeRelay::new(answer_in_kind);
-    let mut s = routed_session(&f, &fleet, Some(&relay));
+    let mut s = routed_session(&f, &fleet, Some(&relay)).await;
 
     for msg in forwarded(target()) {
-        let out = s.handle(msg);
+        let out = s.handle(msg).await;
         assert_eq!(
             provenance(&out[0]),
             (Some(target()), Some(relay_id())),
@@ -364,24 +370,26 @@ fn each_remote_verb_maps_to_its_control_twin_with_stated_provenance() {
 
 /// A direct dial reports `via: None` — the page may claim end-to-end
 /// authentication only then.
-#[test]
-fn a_direct_answer_reports_no_relay() {
+#[tokio::test]
+async fn a_direct_answer_reports_no_relay() {
     let f = Fixture::new();
     let fleet = SelfAwareFleet;
     let relay = FakeRelay::new(|req| answer_in_kind(req).map(|(rep, _)| (rep, None)));
-    let mut s = routed_session(&f, &fleet, Some(&relay));
+    let mut s = routed_session(&f, &fleet, Some(&relay)).await;
 
-    let out = s.handle(ClientMsg::Status {
-        id: 5,
-        on: Some(target()),
-    });
+    let out = s
+        .handle(ClientMsg::Status {
+            id: 5,
+            on: Some(target()),
+        })
+        .await;
     assert_eq!(provenance(&out[0]), (Some(target()), None));
 }
 
 /// A refusal from the chain surfaces typed, under the browser's correlation
 /// id — never dressed up as a successful reply.
-#[test]
-fn a_chain_refusal_surfaces_typed_under_the_request_id() {
+#[tokio::test]
+async fn a_chain_refusal_surfaces_typed_under_the_request_id() {
     let f = Fixture::new();
     let fleet = SelfAwareFleet;
     let relay = FakeRelay::new(|_| {
@@ -397,13 +405,15 @@ fn a_chain_refusal_surfaces_typed_under_the_request_id() {
             Some(relay_id()),
         ))
     });
-    let mut s = routed_session(&f, &fleet, Some(&relay));
+    let mut s = routed_session(&f, &fleet, Some(&relay)).await;
 
-    let out = s.handle(ClientMsg::Stop {
-        id: 4,
-        recipe: recipe(),
-        on: Some(target()),
-    });
+    let out = s
+        .handle(ClientMsg::Stop {
+            id: 4,
+            recipe: recipe(),
+            on: Some(target()),
+        })
+        .await;
     assert!(
         matches!(
             &out[0],
@@ -419,8 +429,8 @@ fn a_chain_refusal_surfaces_typed_under_the_request_id() {
 
 /// A relay answering `Stop` with someone's `Recipes` is lying or confused;
 /// rendering the mismatch as the reply would misattribute it. Fail closed.
-#[test]
-fn a_mismatched_answer_shape_is_refused_not_rendered() {
+#[tokio::test]
+async fn a_mismatched_answer_shape_is_refused_not_rendered() {
     let f = Fixture::new();
     let fleet = SelfAwareFleet;
     let relay = FakeRelay::new(|_| {
@@ -431,13 +441,15 @@ fn a_mismatched_answer_shape_is_refused_not_rendered() {
             Some(relay_id()),
         ))
     });
-    let mut s = routed_session(&f, &fleet, Some(&relay));
+    let mut s = routed_session(&f, &fleet, Some(&relay)).await;
 
-    let out = s.handle(ClientMsg::Stop {
-        id: 4,
-        recipe: recipe(),
-        on: Some(target()),
-    });
+    let out = s
+        .handle(ClientMsg::Stop {
+            id: 4,
+            recipe: recipe(),
+            on: Some(target()),
+        })
+        .await;
     assert!(
         matches!(
             &out[0],

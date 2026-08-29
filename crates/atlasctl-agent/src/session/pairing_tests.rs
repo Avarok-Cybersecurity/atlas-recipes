@@ -20,16 +20,18 @@ use atlasctl_protocol::{ClientMsg, ServerMsg};
 /// reconnected tab, a replayed frame, a second click after the socket dropped —
 /// has no exchange to be about, and treating it as consent would trust a
 /// machine on the strength of a message that names no key.
-#[test]
-fn confirming_with_no_exchange_in_flight_trusts_nothing() {
+#[tokio::test]
+async fn confirming_with_no_exchange_in_flight_trusts_nothing() {
     let f = Fixture::new();
-    let mut s = f.ready();
+    let mut s = f.ready().await;
     let node = atlasctl_protocol::fleet::NodeId::from_bytes([3u8; 32]);
-    let out = s.handle(ClientMsg::ConfirmPairing {
-        id: 7,
-        node,
-        allow_control: false,
-    });
+    let out = s
+        .handle(ClientMsg::ConfirmPairing {
+            id: 7,
+            node,
+            allow_control: false,
+        })
+        .await;
     match &out[0] {
         ServerMsg::PairDecision {
             trusted, detail, ..
@@ -46,12 +48,12 @@ fn confirming_with_no_exchange_in_flight_trusts_nothing() {
 
 /// Rejecting with nothing pending is also honest about it, and still trusts
 /// nothing.
-#[test]
-fn rejecting_with_no_exchange_in_flight_is_not_an_error() {
+#[tokio::test]
+async fn rejecting_with_no_exchange_in_flight_is_not_an_error() {
     let f = Fixture::new();
-    let mut s = f.ready();
+    let mut s = f.ready().await;
     let node = atlasctl_protocol::fleet::NodeId::from_bytes([4u8; 32]);
-    match &s.handle(ClientMsg::RejectPairing { id: 8, node })[0] {
+    match &s.handle(ClientMsg::RejectPairing { id: 8, node }).await[0] {
         ServerMsg::PairDecision { trusted, .. } => assert!(!trusted),
         other => panic!("expected a decision, got {other:?}"),
     }
@@ -62,14 +64,14 @@ fn rejecting_with_no_exchange_in_flight_is_not_an_error() {
 /// It runs no exchange, so a `PairResult` would have to claim `exchanged:
 /// false` — true only in the sense that nothing happened, which is not what
 /// that field is for.
-#[test]
-fn unpair_answers_a_decision_rather_than_an_exchange() {
+#[tokio::test]
+async fn unpair_answers_a_decision_rather_than_an_exchange() {
     let f = Fixture::new();
-    let mut s = f.ready();
+    let mut s = f.ready().await;
     let node = atlasctl_protocol::fleet::NodeId::from_bytes([5u8; 32]);
     // No fleet on this fixture, so it reports NotReady — the point here is only
     // that nothing in the pairing path answers with the wrong shape.
-    let out = s.handle(ClientMsg::UnpairPeer { id: 9, node });
+    let out = s.handle(ClientMsg::UnpairPeer { id: 9, node }).await;
     assert!(
         !matches!(out[0], ServerMsg::PairResult { .. }),
         "unpair must not answer with an exchange-shaped reply: {out:?}"
@@ -81,14 +83,16 @@ fn unpair_answers_a_decision_rather_than_an_exchange() {
 /// It would read `exchanged` as the old `paired` and show a machine as trusted
 /// that this agent has not accepted. Refusing at the handshake is the point of
 /// the bump, not an inconvenience.
-#[test]
-fn a_protocol_1_client_is_refused_because_it_would_misread_exchanged() {
+#[tokio::test]
+async fn a_protocol_1_client_is_refused_because_it_would_misread_exchanged() {
     let f = Fixture::new();
     let mut s = f.session();
-    let out = s.handle(ClientMsg::Hello {
-        protocol_version: 1,
-        token: TOKEN.into(),
-    });
+    let out = s
+        .handle(ClientMsg::Hello {
+            protocol_version: 1,
+            token: TOKEN.into(),
+        })
+        .await;
     assert!(
         !matches!(out[0], ServerMsg::Ready { .. }),
         "an older client must not complete the handshake: {out:?}"
@@ -111,11 +115,14 @@ use crate::fleet::{FleetView, PairOutcome};
 use atlasctl_protocol::fleet::{NodeDescriptor, NodeId};
 
 /// A handshaken session wired to `fleet`.
-pub(super) fn ready_with_fleet<'a>(f: &'a Fixture, fleet: &'a dyn FleetView) -> super::Session<'a> {
+pub(super) async fn ready_with_fleet<'a>(
+    f: &'a Fixture,
+    fleet: &'a dyn FleetView,
+) -> super::Session<'a> {
     let (mut s, _) = super::Session::new(super::SessionDeps {
         accelerator: "",
         registry: &f.registry,
-        launcher: &f.launcher,
+        launcher: f.launcher.clone(),
         token: TOKEN,
         can_launch: f.can_launch.clone(),
         fleet: Some(fleet),
@@ -127,17 +134,20 @@ pub(super) fn ready_with_fleet<'a>(f: &'a Fixture, fleet: &'a dyn FleetView) -> 
     s.handle(ClientMsg::Hello {
         protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
         token: TOKEN.into(),
-    });
+    })
+    .await;
     s
 }
 
 /// Run the exchange, returning the words the operator would be shown.
-pub(super) fn exchange(s: &mut super::Session<'_>, node: NodeId) -> String {
-    let out = s.handle(ClientMsg::PairPeer {
-        id: 1,
-        node,
-        code: "123456".to_owned(),
-    });
+pub(super) async fn exchange(s: &mut super::Session<'_>, node: NodeId) -> String {
+    let out = s
+        .handle(ClientMsg::PairPeer {
+            id: 1,
+            node,
+            code: "123456".to_owned(),
+        })
+        .await;
     match &out[0] {
         ServerMsg::PairResult {
             exchanged,
@@ -155,14 +165,14 @@ pub(super) fn exchange(s: &mut super::Session<'_>, node: NodeId) -> String {
 
 /// THE claim. Before protocol 2 this vector held a key at this point, and the
 /// dialog asking the operator to compare words was deciding nothing.
-#[test]
-fn a_completed_exchange_writes_no_pin() {
+#[tokio::test]
+async fn a_completed_exchange_writes_no_pin() {
     let f = Fixture::new();
     let node = NodeId::from_bytes([6; 32]);
     let fleet = RecordingFleet::new(node);
-    let mut s = ready_with_fleet(&f, &fleet);
+    let mut s = ready_with_fleet(&f, &fleet).await;
 
-    let words = exchange(&mut s, node);
+    let words = exchange(&mut s, node).await;
 
     assert!(!words.is_empty(), "the operator needs something to compare");
     assert!(
@@ -175,19 +185,21 @@ fn a_completed_exchange_writes_no_pin() {
 /// The pin must name the key whose words were shown — not merely *a* key. A
 /// confirm that pinned something else would make the comparison theatre: the
 /// operator would have verified one machine and trusted another.
-#[test]
-fn confirming_pins_exactly_the_key_whose_words_were_shown() {
+#[tokio::test]
+async fn confirming_pins_exactly_the_key_whose_words_were_shown() {
     let f = Fixture::new();
     let node = NodeId::from_bytes([6; 32]);
     let fleet = RecordingFleet::new(node);
-    let mut s = ready_with_fleet(&f, &fleet);
-    exchange(&mut s, node);
+    let mut s = ready_with_fleet(&f, &fleet).await;
+    exchange(&mut s, node).await;
 
-    let out = s.handle(ClientMsg::ConfirmPairing {
-        id: 2,
-        node,
-        allow_control: false,
-    });
+    let out = s
+        .handle(ClientMsg::ConfirmPairing {
+            id: 2,
+            node,
+            allow_control: false,
+        })
+        .await;
 
     match &out[0] {
         ServerMsg::PairDecision { trusted, .. } => assert!(trusted, "{out:?}"),
@@ -198,24 +210,27 @@ fn confirming_pins_exactly_the_key_whose_words_were_shown() {
 
 /// A replayed or double-clicked confirm must not pin twice, and must not leave
 /// the words live for a third.
-#[test]
-fn a_second_confirm_pins_nothing_further() {
+#[tokio::test]
+async fn a_second_confirm_pins_nothing_further() {
     let f = Fixture::new();
     let node = NodeId::from_bytes([6; 32]);
     let fleet = RecordingFleet::new(node);
-    let mut s = ready_with_fleet(&f, &fleet);
-    exchange(&mut s, node);
+    let mut s = ready_with_fleet(&f, &fleet).await;
+    exchange(&mut s, node).await;
 
     s.handle(ClientMsg::ConfirmPairing {
         id: 2,
         node,
         allow_control: false,
-    });
-    let again = s.handle(ClientMsg::ConfirmPairing {
-        id: 3,
-        node,
-        allow_control: false,
-    });
+    })
+    .await;
+    let again = s
+        .handle(ClientMsg::ConfirmPairing {
+            id: 3,
+            node,
+            allow_control: false,
+        })
+        .await;
 
     match &again[0] {
         ServerMsg::PairDecision { trusted, .. } => {
@@ -234,31 +249,35 @@ fn a_second_confirm_pins_nothing_further() {
 /// Confirming a *different* machine than the one that was verified must pin
 /// nothing — and must also spend the exchange, so the mismatch cannot be
 /// retried into a success.
-#[test]
-fn confirming_a_node_the_exchange_was_not_about_pins_nothing() {
+#[tokio::test]
+async fn confirming_a_node_the_exchange_was_not_about_pins_nothing() {
     let f = Fixture::new();
     let paired = NodeId::from_bytes([6; 32]);
     let other = NodeId::from_bytes([9; 32]);
     let fleet = RecordingFleet::new(paired);
-    let mut s = ready_with_fleet(&f, &fleet);
-    exchange(&mut s, paired);
+    let mut s = ready_with_fleet(&f, &fleet).await;
+    exchange(&mut s, paired).await;
 
-    let out = s.handle(ClientMsg::ConfirmPairing {
-        id: 2,
-        node: other,
-        allow_control: false,
-    });
+    let out = s
+        .handle(ClientMsg::ConfirmPairing {
+            id: 2,
+            node: other,
+            allow_control: false,
+        })
+        .await;
     match &out[0] {
         ServerMsg::PairDecision { trusted, .. } => assert!(!trusted, "{out:?}"),
         other => panic!("expected a decision, got {other:?}"),
     }
 
     // Spent, not merely refused.
-    let retry = s.handle(ClientMsg::ConfirmPairing {
-        id: 3,
-        node: paired,
-        allow_control: false,
-    });
+    let retry = s
+        .handle(ClientMsg::ConfirmPairing {
+            id: 3,
+            node: paired,
+            allow_control: false,
+        })
+        .await;
     match &retry[0] {
         ServerMsg::PairDecision { trusted, .. } => assert!(!trusted, "{retry:?}"),
         other => panic!("expected a decision, got {other:?}"),
@@ -268,20 +287,22 @@ fn confirming_a_node_the_exchange_was_not_about_pins_nothing() {
 
 /// Rejecting is the whole point of the change: it must leave no pin, and it
 /// must consume the exchange so a later confirm cannot resurrect it.
-#[test]
-fn rejecting_pins_nothing_and_spends_the_exchange() {
+#[tokio::test]
+async fn rejecting_pins_nothing_and_spends_the_exchange() {
     let f = Fixture::new();
     let node = NodeId::from_bytes([6; 32]);
     let fleet = RecordingFleet::new(node);
-    let mut s = ready_with_fleet(&f, &fleet);
-    exchange(&mut s, node);
+    let mut s = ready_with_fleet(&f, &fleet).await;
+    exchange(&mut s, node).await;
 
-    s.handle(ClientMsg::RejectPairing { id: 2, node });
-    let after = s.handle(ClientMsg::ConfirmPairing {
-        id: 3,
-        node,
-        allow_control: false,
-    });
+    s.handle(ClientMsg::RejectPairing { id: 2, node }).await;
+    let after = s
+        .handle(ClientMsg::ConfirmPairing {
+            id: 3,
+            node,
+            allow_control: false,
+        })
+        .await;
 
     match &after[0] {
         ServerMsg::PairDecision { trusted, .. } => {
@@ -296,20 +317,22 @@ fn rejecting_pins_nothing_and_spends_the_exchange() {
 /// success here would tell the operator a machine is paired when this side has
 /// no pin for it — and the peer, which did complete the exchange, may well
 /// trust them back. That asymmetry is invisible unless this says so.
-#[test]
-fn a_pin_that_cannot_be_written_is_not_reported_as_trust() {
+#[tokio::test]
+async fn a_pin_that_cannot_be_written_is_not_reported_as_trust() {
     let f = Fixture::new();
     let node = NodeId::from_bytes([6; 32]);
     let mut fleet = RecordingFleet::new(node);
     fleet.fail_pin = true;
-    let mut s = ready_with_fleet(&f, &fleet);
-    exchange(&mut s, node);
+    let mut s = ready_with_fleet(&f, &fleet).await;
+    exchange(&mut s, node).await;
 
-    let out = s.handle(ClientMsg::ConfirmPairing {
-        id: 2,
-        node,
-        allow_control: false,
-    });
+    let out = s
+        .handle(ClientMsg::ConfirmPairing {
+            id: 2,
+            node,
+            allow_control: false,
+        })
+        .await;
 
     match &out[0] {
         ServerMsg::PairDecision {
@@ -329,13 +352,13 @@ fn a_pin_that_cannot_be_written_is_not_reported_as_trust() {
 /// Words go stale. An exchange left open for hours — a tab forgotten on a
 /// screen — must not still be confirmable, because nobody can now say what was
 /// on the other machine when those words were produced.
-#[test]
-fn an_exchange_older_than_the_ttl_cannot_be_confirmed() {
+#[tokio::test]
+async fn an_exchange_older_than_the_ttl_cannot_be_confirmed() {
     let f = Fixture::new();
     let node = NodeId::from_bytes([6; 32]);
     let fleet = RecordingFleet::new(node);
-    let mut s = ready_with_fleet(&f, &fleet);
-    exchange(&mut s, node);
+    let mut s = ready_with_fleet(&f, &fleet).await;
+    exchange(&mut s, node).await;
 
     // Age it past the window rather than waiting ten minutes. Reaching into the
     // field keeps the test honest about WHICH clock the production code reads:
@@ -349,11 +372,13 @@ fn an_exchange_older_than_the_ttl_cannot_be_confirmed() {
     // more recently than that, which is every CI runner.
     pending.expires_at = std::time::Instant::now();
 
-    let out = s.handle(ClientMsg::ConfirmPairing {
-        id: 2,
-        node,
-        allow_control: false,
-    });
+    let out = s
+        .handle(ClientMsg::ConfirmPairing {
+            id: 2,
+            node,
+            allow_control: false,
+        })
+        .await;
 
     match &out[0] {
         ServerMsg::PairDecision {
@@ -430,15 +455,15 @@ impl FleetView for WirelessFleet {
 /// run models — usually a laptop, usually on Wi-Fi. Offering it no address left
 /// the page building an empty command and drawing an empty box with a Copy
 /// button beside it, which is what an operator reported.
-#[test]
-fn an_invitation_from_a_wireless_machine_still_carries_an_address() {
+#[tokio::test]
+async fn an_invitation_from_a_wireless_machine_still_carries_an_address() {
     let f = Fixture::new();
     let fleet = WirelessFleet::new();
     let window = crate::joining::JoinWindow::default();
     let (mut s, _) = super::Session::new(super::SessionDeps {
         accelerator: "",
         registry: &f.registry,
-        launcher: &f.launcher,
+        launcher: f.launcher.clone(),
         token: TOKEN,
         can_launch: f.can_launch.clone(),
         fleet: Some(&fleet),
@@ -450,12 +475,15 @@ fn an_invitation_from_a_wireless_machine_still_carries_an_address() {
     s.handle(ClientMsg::Hello {
         protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
         token: TOKEN.into(),
-    });
+    })
+    .await;
 
-    let out = s.handle(ClientMsg::MintJoinCode {
-        id: 1,
-        allow_control: false,
-    });
+    let out = s
+        .handle(ClientMsg::MintJoinCode {
+            id: 1,
+            allow_control: false,
+        })
+        .await;
 
     match &out[0] {
         ServerMsg::JoinInvitation {

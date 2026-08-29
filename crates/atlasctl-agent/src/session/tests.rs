@@ -26,7 +26,7 @@ pub(super) struct Fixture {
     // 500-line cap can build their own `SessionDeps`. The split was mechanical;
     // the visibility should not have narrowed what the tests can reach.
     pub(super) registry: RegistrySet,
-    pub(super) launcher: RecordingLauncher,
+    pub(super) launcher: std::sync::Arc<RecordingLauncher>,
     pub(super) can_launch: Result<(), String>,
 }
 
@@ -34,7 +34,7 @@ impl Fixture {
     pub(super) fn new() -> Self {
         Self {
             registry: RegistrySet::builtin_only(),
-            launcher: RecordingLauncher::new(),
+            launcher: std::sync::Arc::new(RecordingLauncher::new()),
             can_launch: Ok(()),
         }
     }
@@ -50,7 +50,7 @@ impl Fixture {
         let (s, _welcome) = Session::new(SessionDeps {
             accelerator: "",
             registry: &self.registry,
-            launcher: &self.launcher,
+            launcher: self.launcher.clone(),
             token: TOKEN,
             can_launch: self.can_launch.clone(),
             fleet: None,
@@ -63,12 +63,14 @@ impl Fixture {
     }
 
     /// A session that has already completed the handshake.
-    pub(super) fn ready(&self) -> Session<'_> {
+    pub(super) async fn ready(&self) -> Session<'_> {
         let mut s = self.session();
-        let out = s.handle(ClientMsg::Hello {
-            protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
-            token: TOKEN.into(),
-        });
+        let out = s
+            .handle(ClientMsg::Hello {
+                protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
+                token: TOKEN.into(),
+            })
+            .await;
         assert!(
             matches!(out[0], ServerMsg::Ready { .. }),
             "handshake failed: {out:?}"
@@ -83,7 +85,7 @@ fn the_agent_speaks_first_with_a_version_range() {
     let (_s, welcome) = Session::new(SessionDeps {
         accelerator: "",
         registry: &f.registry,
-        launcher: &f.launcher,
+        launcher: f.launcher.clone(),
         token: TOKEN,
         can_launch: Ok(()),
         fleet: None,
@@ -95,8 +97,8 @@ fn the_agent_speaks_first_with_a_version_range() {
     assert!(matches!(welcome, ServerMsg::Welcome { .. }));
 }
 
-#[test]
-fn nothing_is_answered_before_the_handshake() {
+#[tokio::test]
+async fn nothing_is_answered_before_the_handshake() {
     // Not even the inventory: an unauthenticated client should not learn what
     // this machine can run.
     for msg in [
@@ -111,7 +113,7 @@ fn nothing_is_answered_before_the_handshake() {
     ] {
         let f = Fixture::new();
         let mut s = f.session();
-        let out = s.handle(msg);
+        let out = s.handle(msg).await;
         assert!(
             matches!(
                 out[0],
@@ -127,14 +129,16 @@ fn nothing_is_answered_before_the_handshake() {
     }
 }
 
-#[test]
-fn a_wrong_token_is_refused_and_ends_the_session() {
+#[tokio::test]
+async fn a_wrong_token_is_refused_and_ends_the_session() {
     let f = Fixture::new();
     let mut s = f.session();
-    let out = s.handle(ClientMsg::Hello {
-        protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
-        token: "f".repeat(64),
-    });
+    let out = s
+        .handle(ClientMsg::Hello {
+            protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
+            token: "f".repeat(64),
+        })
+        .await;
     assert!(matches!(
         out[0],
         ServerMsg::Error {
@@ -146,18 +150,21 @@ fn a_wrong_token_is_refused_and_ends_the_session() {
     // And a follow-up gets nothing at all.
     assert!(
         s.handle(ClientMsg::ListRecipes { id: 1, on: None })
+            .await
             .is_empty()
     );
 }
 
-#[test]
-fn an_empty_token_does_not_pass() {
+#[tokio::test]
+async fn an_empty_token_does_not_pass() {
     let f = Fixture::new();
     let mut s = f.session();
-    let out = s.handle(ClientMsg::Hello {
-        protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
-        token: String::new(),
-    });
+    let out = s
+        .handle(ClientMsg::Hello {
+            protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
+            token: String::new(),
+        })
+        .await;
     assert!(matches!(
         out[0],
         ServerMsg::Error {
@@ -167,14 +174,16 @@ fn an_empty_token_does_not_pass() {
     ));
 }
 
-#[test]
-fn a_protocol_mismatch_is_reported_rather_than_hung() {
+#[tokio::test]
+async fn a_protocol_mismatch_is_reported_rather_than_hung() {
     let f = Fixture::new();
     let mut s = f.session();
-    let out = s.handle(ClientMsg::Hello {
-        protocol_version: 99,
-        token: TOKEN.into(),
-    });
+    let out = s
+        .handle(ClientMsg::Hello {
+            protocol_version: 99,
+            token: TOKEN.into(),
+        })
+        .await;
     assert!(matches!(
         out[0],
         ServerMsg::Error {
@@ -184,14 +193,16 @@ fn a_protocol_mismatch_is_reported_rather_than_hung() {
     ));
 }
 
-#[test]
-fn a_successful_handshake_returns_the_schema_and_the_inventory() {
+#[tokio::test]
+async fn a_successful_handshake_returns_the_schema_and_the_inventory() {
     let f = Fixture::new();
     let mut s = f.session();
-    let out = s.handle(ClientMsg::Hello {
-        protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
-        token: TOKEN.into(),
-    });
+    let out = s
+        .handle(ClientMsg::Hello {
+            protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
+            token: TOKEN.into(),
+        })
+        .await;
     let ServerMsg::Ready {
         schema,
         recipes,
@@ -211,16 +222,18 @@ fn a_successful_handshake_returns_the_schema_and_the_inventory() {
     assert!(!schema.iter().any(|s| s.key == "model_from_path"));
 }
 
-#[test]
-fn an_unknown_recipe_is_refused_without_reaching_the_launcher() {
+#[tokio::test]
+async fn an_unknown_recipe_is_refused_without_reaching_the_launcher() {
     let f = Fixture::new();
-    let mut s = f.ready();
-    let out = s.handle(ClientMsg::Launch {
-        id: 1,
-        recipe: id("no-such-recipe"),
-        settings: BTreeMap::new(),
-        on: None,
-    });
+    let mut s = f.ready().await;
+    let out = s
+        .handle(ClientMsg::Launch {
+            id: 1,
+            recipe: id("no-such-recipe"),
+            settings: BTreeMap::new(),
+            on: None,
+        })
+        .await;
     assert!(matches!(
         out[0],
         ServerMsg::Error {
@@ -234,16 +247,18 @@ fn an_unknown_recipe_is_refused_without_reaching_the_launcher() {
     );
 }
 
-#[test]
-fn a_denied_setting_blocks_the_launch_and_is_recorded() {
+#[tokio::test]
+async fn a_denied_setting_blocks_the_launch_and_is_recorded() {
     let f = Fixture::new();
-    let mut s = f.ready();
-    let out = s.handle(ClientMsg::Launch {
-        id: 1,
-        recipe: id(REAL),
-        settings: set(&[("model_from_path", SettingValue::Str("/etc/shadow".into()))]),
-        on: None,
-    });
+    let mut s = f.ready().await;
+    let out = s
+        .handle(ClientMsg::Launch {
+            id: 1,
+            recipe: id(REAL),
+            settings: set(&[("model_from_path", SettingValue::Str("/etc/shadow".into()))]),
+            on: None,
+        })
+        .await;
     let ServerMsg::Error {
         error: AgentError::BadSettings { errors },
         ..
@@ -261,19 +276,21 @@ fn a_denied_setting_blocks_the_launch_and_is_recorded() {
     assert_eq!(s.denied_attempts, ["model_from_path"]);
 }
 
-#[test]
-fn an_out_of_range_setting_blocks_the_launch() {
+#[tokio::test]
+async fn an_out_of_range_setting_blocks_the_launch() {
     let f = Fixture::new();
-    let mut s = f.ready();
-    let out = s.handle(ClientMsg::Launch {
-        id: 1,
-        recipe: id(REAL),
-        // 1 was the example here until `port`'s bound was corrected to the
-        // real TCP domain; it is a valid port. This test is about an
-        // out-of-range value, so it needs one that actually is.
-        settings: set(&[("port", SettingValue::Int(99_999))]),
-        on: None,
-    });
+    let mut s = f.ready().await;
+    let out = s
+        .handle(ClientMsg::Launch {
+            id: 1,
+            recipe: id(REAL),
+            // 1 was the example here until `port`'s bound was corrected to the
+            // real TCP domain; it is a valid port. This test is about an
+            // out-of-range value, so it needs one that actually is.
+            settings: set(&[("port", SettingValue::Int(99_999))]),
+            on: None,
+        })
+        .await;
     assert!(matches!(
         out[0],
         ServerMsg::Error {
@@ -284,16 +301,18 @@ fn an_out_of_range_setting_blocks_the_launch() {
     assert!(!f.launcher.launched_anything());
 }
 
-#[test]
-fn a_valid_launch_reaches_the_launcher_with_exactly_the_checked_settings() {
+#[tokio::test]
+async fn a_valid_launch_reaches_the_launcher_with_exactly_the_checked_settings() {
     let f = Fixture::new();
-    let mut s = f.ready();
-    let out = s.handle(ClientMsg::Launch {
-        id: 7,
-        recipe: id(REAL),
-        settings: set(&[("port", SettingValue::Int(9001))]),
-        on: None,
-    });
+    let mut s = f.ready().await;
+    let out = s
+        .handle(ClientMsg::Launch {
+            id: 7,
+            recipe: id(REAL),
+            settings: set(&[("port", SettingValue::Int(9001))]),
+            on: None,
+        })
+        .await;
     assert!(
         matches!(out[0], ServerMsg::Started { id: 7, .. }),
         "got {out:?}"
@@ -312,21 +331,23 @@ fn a_valid_launch_reaches_the_launcher_with_exactly_the_checked_settings() {
     }
 }
 
-#[test]
-fn a_multi_node_recipe_is_refused_with_its_reason() {
+#[tokio::test]
+async fn a_multi_node_recipe_is_refused_with_its_reason() {
     let f = Fixture::new();
-    let mut s = f.ready();
+    let mut s = f.ready().await;
     // A two-node recipe cannot be started from a page on one box.
-    let out = s.handle(ClientMsg::Launch {
-        id: 1,
-        recipe: id("qwen3.5-122b-a10b-nvfp4-ep2"),
-        settings: BTreeMap::new(),
-        on: None,
-    });
+    let out = s
+        .handle(ClientMsg::Launch {
+            id: 1,
+            recipe: id("qwen3.5-122b-a10b-nvfp4-ep2"),
+            settings: BTreeMap::new(),
+            on: None,
+        })
+        .await;
     // It is launchable in principle, so what matters here is that the inventory
     // told the client it needs two nodes before it ever asked.
     assert!(!out.is_empty());
-    let inv = match &s.handle(ClientMsg::ListRecipes { id: 2, on: None })[0] {
+    let inv = match &s.handle(ClientMsg::ListRecipes { id: 2, on: None }).await[0] {
         ServerMsg::Recipes { recipes, .. } => recipes.clone(),
         other => panic!("wrong reply: {other:?}"),
     };
@@ -337,16 +358,18 @@ fn a_multi_node_recipe_is_refused_with_its_reason() {
     assert_eq!(ep2.nodes, 2, "the client must be told this needs two nodes");
 }
 
-#[test]
-fn a_recipe_carrying_executable_content_is_never_launched() {
+#[tokio::test]
+async fn a_recipe_carrying_executable_content_is_never_launched() {
     let f = Fixture::new();
-    let mut s = f.ready();
-    let out = s.handle(ClientMsg::Launch {
-        id: 1,
-        recipe: id("diffusion-gemma-bf16"),
-        settings: BTreeMap::new(),
-        on: None,
-    });
+    let mut s = f.ready().await;
+    let out = s
+        .handle(ClientMsg::Launch {
+            id: 1,
+            recipe: id("diffusion-gemma-bf16"),
+            settings: BTreeMap::new(),
+            on: None,
+        })
+        .await;
     assert!(matches!(
         out[0],
         ServerMsg::Error {
@@ -357,16 +380,18 @@ fn a_recipe_carrying_executable_content_is_never_launched() {
     assert!(!f.launcher.launched_anything());
 }
 
-#[test]
-fn a_machine_that_cannot_launch_says_so_and_refuses() {
+#[tokio::test]
+async fn a_machine_that_cannot_launch_says_so_and_refuses() {
     let f = Fixture::cannot_launch("docker is not available");
-    let mut s = f.ready();
-    let out = s.handle(ClientMsg::Launch {
-        id: 1,
-        recipe: id(REAL),
-        settings: BTreeMap::new(),
-        on: None,
-    });
+    let mut s = f.ready().await;
+    let out = s
+        .handle(ClientMsg::Launch {
+            id: 1,
+            recipe: id(REAL),
+            settings: BTreeMap::new(),
+            on: None,
+        })
+        .await;
     assert!(matches!(
         out[0],
         ServerMsg::Error {
@@ -377,16 +402,18 @@ fn a_machine_that_cannot_launch_says_so_and_refuses() {
     assert!(!f.launcher.launched_anything());
 }
 
-#[test]
-fn preview_renders_without_launching_anything() {
+#[tokio::test]
+async fn preview_renders_without_launching_anything() {
     let f = Fixture::new();
-    let mut s = f.ready();
-    let out = s.handle(ClientMsg::Preview {
-        id: 1,
-        recipe: id(REAL),
-        settings: BTreeMap::new(),
-        on: None,
-    });
+    let mut s = f.ready().await;
+    let out = s
+        .handle(ClientMsg::Preview {
+            id: 1,
+            recipe: id(REAL),
+            settings: BTreeMap::new(),
+            on: None,
+        })
+        .await;
     assert!(matches!(out[0], ServerMsg::Preview { id: 1, .. }));
     assert!(
         !f.launcher.launched_anything(),
@@ -395,10 +422,10 @@ fn preview_renders_without_launching_anything() {
     assert_eq!(f.launcher.calls(), [Call::Preview(REAL.to_string())]);
 }
 
-#[test]
-fn a_malformed_frame_ends_the_session() {
+#[tokio::test]
+async fn a_malformed_frame_ends_the_session() {
     let f = Fixture::new();
-    let mut s = f.ready();
+    let mut s = f.ready().await;
     let out = s.on_malformed("trailing garbage".into());
     assert!(matches!(
         out,

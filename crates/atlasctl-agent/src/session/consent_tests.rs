@@ -57,19 +57,21 @@ impl crate::fleet::FleetView for SelfAwareFleet {
 
 /// Confirming with `allow_control` writes the grant with the pin — one
 /// human decision, recorded atomically.
-#[test]
-fn confirming_with_allow_control_records_the_grant_with_the_trust() {
+#[tokio::test]
+async fn confirming_with_allow_control_records_the_grant_with_the_trust() {
     let f = Fixture::new();
     let node = NodeId::from_bytes([6; 32]);
     let fleet = RecordingFleet::new(node);
-    let mut s = ready_with_fleet(&f, &fleet);
-    exchange(&mut s, node);
+    let mut s = ready_with_fleet(&f, &fleet).await;
+    exchange(&mut s, node).await;
 
-    let out = s.handle(ClientMsg::ConfirmPairing {
-        id: 2,
-        node,
-        allow_control: true,
-    });
+    let out = s
+        .handle(ClientMsg::ConfirmPairing {
+            id: 2,
+            node,
+            allow_control: true,
+        })
+        .await;
     assert!(
         matches!(
             &out[0],
@@ -86,19 +88,21 @@ fn confirming_with_allow_control_records_the_grant_with_the_trust() {
 }
 
 /// And without it, nothing is granted — consent must be said, not implied.
-#[test]
-fn confirming_without_allow_control_grants_nothing() {
+#[tokio::test]
+async fn confirming_without_allow_control_grants_nothing() {
     let f = Fixture::new();
     let node = NodeId::from_bytes([6; 32]);
     let fleet = RecordingFleet::new(node);
-    let mut s = ready_with_fleet(&f, &fleet);
-    exchange(&mut s, node);
+    let mut s = ready_with_fleet(&f, &fleet).await;
+    exchange(&mut s, node).await;
 
-    let out = s.handle(ClientMsg::ConfirmPairing {
-        id: 2,
-        node,
-        allow_control: false,
-    });
+    let out = s
+        .handle(ClientMsg::ConfirmPairing {
+            id: 2,
+            node,
+            allow_control: false,
+        })
+        .await;
     assert!(matches!(
         &out[0],
         ServerMsg::PairDecision { trusted: true, .. }
@@ -109,15 +113,15 @@ fn confirming_without_allow_control_grants_nothing() {
 
 /// Minting with `allow_control` stamps the window, so the machine that
 /// joins through it is pinned WITH the grant the human chose.
-#[test]
-fn minting_with_allow_control_stamps_the_join_window() {
+#[tokio::test]
+async fn minting_with_allow_control_stamps_the_join_window() {
     let f = Fixture::new();
     let fleet = SelfAwareFleet;
     let joining = crate::joining::JoinWindow::default();
     let (mut s, _) = Session::new(SessionDeps {
         accelerator: "",
         registry: &f.registry,
-        launcher: &f.launcher,
+        launcher: f.launcher.clone(),
         token: TOKEN,
         can_launch: f.can_launch.clone(),
         fleet: Some(&fleet),
@@ -126,16 +130,20 @@ fn minting_with_allow_control_stamps_the_join_window() {
         joining: Some(&joining),
         relay: None,
     });
-    let out = s.handle(ClientMsg::Hello {
-        protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
-        token: TOKEN.into(),
-    });
+    let out = s
+        .handle(ClientMsg::Hello {
+            protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
+            token: TOKEN.into(),
+        })
+        .await;
     assert!(matches!(out[0], ServerMsg::Ready { .. }));
 
-    let out = s.handle(ClientMsg::MintJoinCode {
-        id: 9,
-        allow_control: true,
-    });
+    let out = s
+        .handle(ClientMsg::MintJoinCode {
+            id: 9,
+            allow_control: true,
+        })
+        .await;
     assert!(
         matches!(&out[0], ServerMsg::JoinInvitation { code: Some(_), .. }),
         "got {out:?}"

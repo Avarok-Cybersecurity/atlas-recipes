@@ -128,8 +128,7 @@ where
                 PeerFrame::Aborted { epoch }
             }
             PeerFrame::Control { req } => PeerFrame::ControlReply {
-                rep: terminal_control(&ctx.control.control(), sender, &ctx.pins, local, req)
-                    .await,
+                rep: terminal_control(&ctx.control.control(), sender, &ctx.pins, local, req).await,
             },
             PeerFrame::ControlTo { node, req } => PeerFrame::ControlReply {
                 rep: relay_control(ctx, sender, node, req).await,

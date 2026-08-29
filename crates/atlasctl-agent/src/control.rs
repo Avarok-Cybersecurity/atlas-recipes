@@ -44,7 +44,6 @@ pub struct LocalControl<'a> {
     pub accelerator: &'a str,
 }
 
-
 /// Run a blocking launcher call on tokio's blocking pool.
 ///
 /// A panic inside the launcher becomes a `LaunchFailed` rather than taking the

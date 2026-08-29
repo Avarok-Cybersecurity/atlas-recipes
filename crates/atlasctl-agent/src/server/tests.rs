@@ -12,7 +12,7 @@ fn state(port: u16) -> Arc<AgentState> {
     Arc::new(AgentState {
         accelerator: String::new(),
         registry: RegistrySet::builtin_only(),
-        launcher: Box::new(RecordingLauncher::new()),
+        launcher: std::sync::Arc::new(RecordingLauncher::new()),
         token: TOKEN.to_string(),
         can_launch: Ok(()),
         joining: None,
@@ -176,19 +176,18 @@ impl crate::launcher::Launcher for SleepyLauncher {
 
 /// A launch must not park the runtime's only worker.
 ///
-/// `Session::handle` is synchronous all the way down to
-/// `std::process::Command::output()` in the launcher, so a `Launch` does not
-/// return until `docker run` does — seconds, or minutes behind an image pull.
-/// In production that call happens inside the websocket task, which runs ON a
-/// runtime worker, and the cost lands on everything else sharing the runtime:
-/// other sessions, and the timers that are supposed to BOUND these operations.
+/// `Launcher::launch` shells out to `docker run` and does not return until the
+/// container is up — seconds, or minutes behind an image pull. Run inline on the
+/// websocket task, that parks a runtime worker for the whole launch, and the
+/// cost lands on everything else sharing the runtime: other sessions, and the
+/// timers that are supposed to BOUND these operations.
 ///
-/// The launch therefore runs inside `tokio::spawn` here, not in the test body.
-/// That distinction is the whole test: `#[tokio::test]` drives the body with
+/// The launch runs inside `tokio::spawn` here, not in the test body. That
+/// distinction is the entire test: `#[tokio::test]` drives the body with
 /// `block_on` on the *main* thread, so blocking there leaves the worker free and
-/// a timer fires on time whether or not the fix is present. An earlier version
-/// of this test did exactly that and passed against the unfixed code — it
-/// proved nothing. Only work spawned onto the worker can starve it.
+/// the timer fires on time with or without the fix. An earlier version of this
+/// test did exactly that and passed against the unfixed code — it proved
+/// nothing. Only work spawned onto the worker can starve it.
 ///
 /// `worker_threads = 1` makes the starvation deterministic rather than a race.
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -197,7 +196,8 @@ async fn a_launch_does_not_park_the_only_worker() {
     const LAUNCH: Duration = Duration::from_millis(900);
     const TIMER: Duration = Duration::from_millis(50);
 
-    // Started first, so its timer is already registered when the launch begins.
+    // Registered before the launch begins, so it is genuinely waiting on the
+    // runtime rather than being created after the block started.
     let timer = tokio::spawn(async move {
         let t = Instant::now();
         tokio::time::sleep(TIMER).await;
@@ -205,15 +205,15 @@ async fn a_launch_does_not_park_the_only_worker() {
     });
     tokio::task::yield_now().await;
 
-    // Owns everything it borrows, so the task is 'static and can run on the
-    // worker — which is exactly where the real websocket loop calls `handle`.
+    // Owns everything it borrows, so the task is 'static and runs ON the worker
+    // — which is where the real websocket loop calls `handle`.
     let launch = tokio::spawn(async move {
         let registry = RegistrySet::builtin_only();
-        let launcher = SleepyLauncher { delay: LAUNCH };
+        let launcher = std::sync::Arc::new(SleepyLauncher { delay: LAUNCH });
         let (mut session, _welcome) = Session::new(SessionDeps {
             accelerator: "",
             registry: &registry,
-            launcher: &launcher,
+            launcher,
             token: TOKEN,
             can_launch: Ok(()),
             fleet: None,
@@ -222,34 +222,32 @@ async fn a_launch_does_not_park_the_only_worker() {
             joining: None,
             relay: None,
         });
-        let out = handle_off_the_worker(
-            &mut session,
-            ClientMsg::Hello {
+        let out = session
+            .handle(ClientMsg::Hello {
                 protocol_version: atlasctl_protocol::PROTOCOL_VERSION,
                 token: TOKEN.into(),
-            },
-        );
+            })
+            .await;
         assert!(
             matches!(out[0], ServerMsg::Ready { .. }),
             "handshake failed: {out:?}"
         );
         let t0 = Instant::now();
-        let _ = handle_off_the_worker(
-            &mut session,
-            ClientMsg::Launch {
+        let _ = session
+            .handle(ClientMsg::Launch {
                 id: 1,
                 recipe: atlasctl_protocol::RecipeId::parse("qwen3.6-27b-fp8").expect("valid id"),
                 settings: std::collections::BTreeMap::new(),
                 on: None,
-            },
-        );
+            })
+            .await;
         t0.elapsed()
     });
 
     let launch_took = launch.await.expect("launch task");
     let timer_took = timer.await.expect("timer task");
 
-    // Guard against a pass earned by the launcher never blocking at all.
+    // Guards against a pass earned by the launcher never blocking at all.
     assert!(
         launch_took >= LAUNCH,
         "the launcher did not actually block ({launch_took:?}); this test would prove nothing"

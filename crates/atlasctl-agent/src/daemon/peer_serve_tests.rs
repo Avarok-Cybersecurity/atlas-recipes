@@ -132,7 +132,7 @@ fn rig(tag: &str) -> Rig {
         rank: Arc::new(Unreachable),
         control: Arc::new(ControlHost::new(
             RegistrySet::builtin_only(),
-            Box::new(SharedLauncher(Arc::clone(&launcher))),
+            Arc::new(SharedLauncher(Arc::clone(&launcher))),
             None,
             Ok(()),
             "NVIDIA GB10".to_owned(),

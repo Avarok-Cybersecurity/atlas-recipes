@@ -20,7 +20,7 @@ fn id(s: &str) -> RecipeId {
 
 struct Fixture {
     registry: RegistrySet,
-    launcher: RecordingLauncher,
+    launcher: std::sync::Arc<RecordingLauncher>,
     can_launch: Result<(), String>,
 }
 
@@ -28,7 +28,7 @@ impl Fixture {
     fn new() -> Self {
         Self {
             registry: RegistrySet::builtin_only(),
-            launcher: RecordingLauncher::new(),
+            launcher: std::sync::Arc::new(RecordingLauncher::new()),
             can_launch: Ok(()),
         }
     }
@@ -37,7 +37,7 @@ impl Fixture {
         LocalControl {
             accelerator,
             registry: &self.registry,
-            launcher: &self.launcher,
+            launcher: self.launcher.clone(),
             telemetry: None,
             can_launch: &self.can_launch,
         }
@@ -47,7 +47,7 @@ impl Fixture {
         LocalControl {
             accelerator: "",
             registry: &self.registry,
-            launcher: &self.launcher,
+            launcher: self.launcher.clone(),
             telemetry: None,
             can_launch: &self.can_launch,
         }
@@ -75,35 +75,37 @@ impl LaunchTelemetry for CapRecorder {
     }
 }
 
-#[test]
-fn every_verb_reaches_the_launcher_through_the_same_core() {
+#[tokio::test]
+async fn every_verb_reaches_the_launcher_through_the_same_core() {
     let f = Fixture::new();
     let c = f.control();
 
     assert!(matches!(
-        c.execute(ControlReq::ListRecipes),
+        c.execute(ControlReq::ListRecipes).await,
         Ok(ControlRep::Recipes { .. })
     ));
     assert!(matches!(
         c.execute(ControlReq::Preview {
             recipe: id(REAL),
             settings: BTreeMap::new(),
-        }),
+        })
+        .await,
         Ok(ControlRep::Previewed { .. })
     ));
     assert!(matches!(
         c.execute(ControlReq::Launch {
             recipe: id(REAL),
             settings: BTreeMap::new(),
-        }),
+        })
+        .await,
         Ok(ControlRep::Started { .. })
     ));
     assert!(matches!(
-        c.execute(ControlReq::Stop { recipe: id(REAL) }),
+        c.execute(ControlReq::Stop { recipe: id(REAL) }).await,
         Ok(ControlRep::Stopped { .. })
     ));
     assert!(matches!(
-        c.execute(ControlReq::Status),
+        c.execute(ControlReq::Status).await,
         Ok(ControlRep::Status { .. })
     ));
     // The launcher saw the same calls the browser path would have made.
@@ -118,18 +120,21 @@ fn every_verb_reaches_the_launcher_through_the_same_core() {
     assert!(calls.iter().any(|c| matches!(c, Call::Running)));
 }
 
-#[test]
-fn a_relayed_launch_cannot_skip_the_can_launch_gate() {
+#[tokio::test]
+async fn a_relayed_launch_cannot_skip_the_can_launch_gate() {
     // The exact validation-skip the shared core exists to prevent: the local
     // path refuses on `can_launch`, so the relayed path must too.
     let f = Fixture {
         can_launch: Err("no docker here".into()),
         ..Fixture::new()
     };
-    let out = f.control().execute(ControlReq::Launch {
-        recipe: id(REAL),
-        settings: BTreeMap::new(),
-    });
+    let out = f
+        .control()
+        .execute(ControlReq::Launch {
+            recipe: id(REAL),
+            settings: BTreeMap::new(),
+        })
+        .await;
     assert!(
         matches!(out, Err(AgentError::NotLaunchable { .. })),
         "got {out:?}"
@@ -137,15 +142,18 @@ fn a_relayed_launch_cannot_skip_the_can_launch_gate() {
     assert!(!f.launcher.launched_anything());
 }
 
-#[test]
-fn a_relayed_launch_cannot_skip_schema_validation() {
+#[tokio::test]
+async fn a_relayed_launch_cannot_skip_schema_validation() {
     let f = Fixture::new();
-    let out = f.control().execute(ControlReq::Launch {
-        recipe: id(REAL),
-        settings: [("no_such_setting".to_owned(), SettingValue::Bool(true))]
-            .into_iter()
-            .collect(),
-    });
+    let out = f
+        .control()
+        .execute(ControlReq::Launch {
+            recipe: id(REAL),
+            settings: [("no_such_setting".to_owned(), SettingValue::Bool(true))]
+                .into_iter()
+                .collect(),
+        })
+        .await;
     assert!(
         matches!(out, Err(AgentError::BadSettings { .. })),
         "got {out:?}"
@@ -153,21 +161,24 @@ fn a_relayed_launch_cannot_skip_schema_validation() {
     assert!(!f.launcher.launched_anything());
 }
 
-#[test]
-fn an_unknown_recipe_is_refused_by_name() {
+#[tokio::test]
+async fn an_unknown_recipe_is_refused_by_name() {
     let f = Fixture::new();
-    let out = f.control().execute(ControlReq::Preview {
-        recipe: id("not-a-recipe"),
-        settings: BTreeMap::new(),
-    });
+    let out = f
+        .control()
+        .execute(ControlReq::Preview {
+            recipe: id("not-a-recipe"),
+            settings: BTreeMap::new(),
+        })
+        .await;
     assert!(
         matches!(out, Err(AgentError::UnknownRecipe { .. })),
         "got {out:?}"
     );
 }
 
-#[test]
-fn the_target_caps_the_log_lines_whatever_the_wire_asked() {
+#[tokio::test]
+async fn the_target_caps_the_log_lines_whatever_the_wire_asked() {
     // A relay-supplied count must not bypass this machine's own bound: the
     // cap is applied HERE, after deserialization, exactly as the local
     // `LaunchLogs` path applies it.
@@ -178,7 +189,7 @@ fn the_target_caps_the_log_lines_whatever_the_wire_asked() {
     let c = LocalControl {
         accelerator: "",
         registry: &f.registry,
-        launcher: &f.launcher,
+        launcher: f.launcher.clone(),
         telemetry: Some(&telemetry),
         can_launch: &f.can_launch,
     };
@@ -186,6 +197,7 @@ fn the_target_caps_the_log_lines_whatever_the_wire_asked() {
         recipe: id(REAL),
         lines: u32::MAX,
     })
+    .await
     .expect("logs");
     assert_eq!(
         telemetry.asked.lock().expect("lock").as_slice(),
@@ -194,19 +206,20 @@ fn the_target_caps_the_log_lines_whatever_the_wire_asked() {
     );
 }
 
-#[test]
-fn stats_and_logs_without_a_telemetry_source_say_so() {
+#[tokio::test]
+async fn stats_and_logs_without_a_telemetry_source_say_so() {
     let f = Fixture::new();
     let c = f.control();
     assert!(matches!(
-        c.execute(ControlReq::Stats { recipe: id(REAL) }),
+        c.execute(ControlReq::Stats { recipe: id(REAL) }).await,
         Err(AgentError::NotReady)
     ));
     assert!(matches!(
         c.execute(ControlReq::Logs {
             recipe: id(REAL),
             lines: 10,
-        }),
+        })
+        .await,
         Err(AgentError::NotReady)
     ));
 }
@@ -215,8 +228,8 @@ fn stats_and_logs_without_a_telemetry_source_say_so() {
 /// surface: the browser and a granted remote controller drive it, and there
 /// is no operator at the keyboard to read a warning. On a GB10 the failure it
 /// warns about is a hard freeze needing a power cycle.
-#[test]
-fn a_remote_override_above_the_gb10_caution_is_refused_not_warned() {
+#[tokio::test]
+async fn a_remote_override_above_the_gb10_caution_is_refused_not_warned() {
     let f = Fixture::new();
     let c = f.control_on("NVIDIA GB10");
     let mut req = std::collections::BTreeMap::new();
@@ -224,7 +237,7 @@ fn a_remote_override_above_the_gb10_caution_is_refused_not_warned() {
         "gpu_memory_utilization".to_owned(),
         atlasctl_protocol::settings::SettingValue::Float(0.95),
     );
-    let err = c.launch(&id(REAL), &req).expect_err("must refuse");
+    let err = c.launch(&id(REAL), &req).await.expect_err("must refuse");
     // Structured, not prose: `BadSettings`'s Display is a summary ("1
     // setting(s) rejected"), and the browser renders the errors themselves.
     let atlasctl_protocol::msg::AgentError::BadSettings { errors } = &err else {
@@ -246,8 +259,8 @@ fn a_remote_override_above_the_gb10_caution_is_refused_not_warned() {
 
 /// The bound is hardware-aware, not a blanket cap: the same value on hardware
 /// the caution does not know is none of its business.
-#[test]
-fn the_same_value_is_untouched_on_hardware_the_caution_does_not_claim() {
+#[tokio::test]
+async fn the_same_value_is_untouched_on_hardware_the_caution_does_not_claim() {
     let f = Fixture::new();
     let c = f.control_on("NVIDIA H100");
     let mut req = std::collections::BTreeMap::new();
@@ -257,7 +270,7 @@ fn the_same_value_is_untouched_on_hardware_the_caution_does_not_claim() {
     );
     // Reaches the launcher — it may still fail there for unrelated reasons,
     // but it must not be refused by the GB10 caution.
-    let out = c.launch(&id(REAL), &req);
+    let out = c.launch(&id(REAL), &req).await;
     if let Err(atlasctl_protocol::msg::AgentError::BadSettings { errors }) = &out {
         assert!(
             !errors.iter().any(|e| matches!(
