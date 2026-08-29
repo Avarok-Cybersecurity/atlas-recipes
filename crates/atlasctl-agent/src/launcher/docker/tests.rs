@@ -318,3 +318,50 @@ fn a_metadata_only_cache_entry_is_refused_and_named_as_such() {
 
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// A recipe that brings its own weights is NOT refused for a cache miss.
+///
+/// `--model-from-path` points the engine at a directory, so the Hub cache is
+/// never consulted and a "missing model" refusal would block a launch that was
+/// going to work. That escape hatch is the whole reason the guard reads the
+/// rendered argv rather than the model field, and nothing tested it: the guard
+/// could have been tightened later — or the flag renamed — and the only symptom
+/// would be a refusal nobody could explain.
+#[test]
+fn a_recipe_that_brings_its_own_weights_is_not_refused() {
+    let runner = Arc::new(RecordingRunner::new());
+    // A cache with nothing in it at all, so the guard would certainly fire.
+    let mut h = host();
+    h.hf_cache_dir = std::env::temp_dir()
+        .join(format!("atlasctl-byo-weights-{}", std::process::id()))
+        .display()
+        .to_string();
+    let l = DockerLauncher::new(runner.clone(), h, &ROOTLESS_V1, Box::new(NvidiaDevices));
+
+    let r = Recipe::parse(
+        "r",
+        concat!(
+            "model: org/m\n",
+            "container: img:tag\n",
+            "runtime: atlas\n",
+            "defaults:\n",
+            "  port: 8888\n",
+            "  model_from_path: /models/local\n",
+        ),
+        Provenance::Builtin {
+            path: "r.yaml".into(),
+        },
+    )
+    .expect("fixture parses");
+
+    let started = l.launch(&r, &BTreeMap::new()).expect("must not be refused");
+    assert_eq!(started.container, "atlas-r");
+    // The guard is skipped by reading the RENDERED command, so prove the flag
+    // actually reached it — a recipe whose setting was silently dropped would
+    // pass this test for the wrong reason.
+    let ran = runner.calls().concat().join(" ");
+    assert!(
+        ran.contains("--model-from-path"),
+        "the flag must reach the command: {ran}"
+    );
+}
