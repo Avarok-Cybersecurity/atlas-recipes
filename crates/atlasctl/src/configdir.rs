@@ -121,6 +121,28 @@ pub fn advice(dir: &Path, f: DirFacts) -> Option<String> {
 ///
 /// # Errors
 /// If the directory cannot be created, or exists but is not writable.
+/// Why this directory would stop an agent from starting, if anything would.
+///
+/// The same question [`ensure_usable`] answers, asked without the side effect,
+/// so a caller that has ALREADY failed can report the real reason instead of
+/// guessing one. `None` means the directory is not the problem.
+///
+/// This exists because `agent install` used to announce "the usual cause is the
+/// port" whenever the agent did not come up — and then a later step printed the
+/// actual cause, which was this directory being owned by another uid. Two
+/// confident, contradictory explanations is worse than one honest "I do not
+/// know": the operator acts on the first and it does nothing.
+#[must_use]
+pub fn diagnose(dir: &Path) -> Option<String> {
+    if !dir.exists() {
+        return None;
+    }
+    if !dir.is_dir() {
+        return Some(format!("{} exists but is not a directory", dir.display()));
+    }
+    advice(dir, facts(dir).ok()?)
+}
+
 pub fn ensure_usable(dir: &Path) -> Result<()> {
     if !dir.exists() {
         std::fs::create_dir_all(dir).with_context(|| cannot_create(dir))?;
