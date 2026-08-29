@@ -266,7 +266,10 @@ impl<'a> Session<'a> {
                     head,
                     settings,
                 },
-            ) => self.preview_cluster(id, &recipe, &nodes, head, &settings),
+            ) => {
+                self.preview_cluster(id, &recipe, &nodes, head, &settings)
+                    .await
+            }
 
             // Two phases, because a single-phase launch cannot fail cleanly:
             // the third machine's refusal would leave two containers waiting
@@ -280,15 +283,20 @@ impl<'a> Session<'a> {
                     head,
                     settings,
                 },
-            ) => self.prepare_cluster(id, &recipe, &nodes, head, &settings),
-
-            (Phase::Ready, ClientMsg::CommitCluster { id, epoch }) => {
-                self.commit_cluster(id, &epoch)
+            ) => {
+                self.prepare_cluster(id, &recipe, &nodes, head, &settings)
+                    .await
             }
 
-            (Phase::Ready, ClientMsg::AbortCluster { id, epoch }) => self.abort_cluster(id, &epoch),
+            (Phase::Ready, ClientMsg::CommitCluster { id, epoch }) => {
+                self.commit_cluster(id, &epoch).await
+            }
 
-            (Phase::Ready, ClientMsg::StopCluster { id }) => self.stop_cluster(id),
+            (Phase::Ready, ClientMsg::AbortCluster { id, epoch }) => {
+                self.abort_cluster(id, &epoch).await
+            }
+
+            (Phase::Ready, ClientMsg::StopCluster { id }) => self.stop_cluster(id).await,
 
             (Phase::Ready, ClientMsg::LaunchStats { id, recipe, on: _ }) => {
                 self.launch_stats(id, &recipe)
@@ -415,6 +423,9 @@ mod join_tests;
 #[cfg(test)]
 #[path = "session/pair_at_tests.rs"]
 mod pair_at_tests;
+#[cfg(test)]
+#[path = "session/pairing_address_tests.rs"]
+mod pairing_address_tests;
 #[cfg(test)]
 #[path = "session/pairing_tests.rs"]
 mod pairing_tests;

@@ -186,49 +186,97 @@ impl FixtureTransport {
 }
 
 impl RankTransport for FixtureTransport {
-    fn preview(
-        &self,
+    fn preview<'a>(
+        &'a self,
         node: NodeId,
         _: SocketAddr,
-        a: &RankAssignment,
-    ) -> anyhow::Result<(String, Vec<String>)> {
-        self.note(format!("{}.preview(rank={})", node.short(), a.rank));
-        Ok((format!("docker run rank{}", a.rank), Vec::new()))
+        a: &'a RankAssignment,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = anyhow::Result<(String, Vec<String>)>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            self.note(format!("{}.preview(rank={})", node.short(), a.rank));
+            Ok((format!("docker run rank{}", a.rank), Vec::new()))
+        })
     }
-    fn prepare(&self, node: NodeId, _: SocketAddr, _: &str, a: &RankAssignment) -> PrepareReply {
-        self.note(format!("{}.prepare(rank={})", node.short(), a.rank));
-        self.prepare
-            .get(&node)
-            .cloned()
-            .unwrap_or(PrepareReply::Prepared)
+
+    fn prepare<'a>(
+        &'a self,
+        node: NodeId,
+        _: SocketAddr,
+        _: &'a str,
+        a: &'a RankAssignment,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PrepareReply> + Send + 'a>> {
+        Box::pin(async move {
+            self.note(format!("{}.prepare(rank={})", node.short(), a.rank));
+            self.prepare
+                .get(&node)
+                .cloned()
+                .unwrap_or(PrepareReply::Prepared)
+        })
     }
-    fn commit(&self, node: NodeId, _: SocketAddr, _: &str) -> anyhow::Result<String> {
-        self.note(format!("{}.commit", node.short()));
-        self.commit
-            .get(&node)
-            .cloned()
-            .unwrap_or_else(|| Ok(format!("{}-container", node.short())))
-            .map_err(|e| anyhow::anyhow!(e))
+
+    fn commit<'a>(
+        &'a self,
+        node: NodeId,
+        _: SocketAddr,
+        _: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            self.note(format!("{}.commit", node.short()));
+            self.commit
+                .get(&node)
+                .cloned()
+                .unwrap_or_else(|| Ok(format!("{}-container", node.short())))
+                .map_err(|e| anyhow::anyhow!(e))
+        })
     }
-    fn abort(&self, node: NodeId, _: SocketAddr, _: &str) {
-        self.note(format!("{}.abort", node.short()));
+
+    fn abort<'a>(
+        &'a self,
+        node: NodeId,
+        _: SocketAddr,
+        _: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            self.note(format!("{}.abort", node.short()));
+        })
     }
-    fn alive(&self, node: NodeId, _: SocketAddr, container: &str) -> anyhow::Result<bool> {
-        self.note(format!("{}.alive({container})", node.short()));
-        if self.killed.lock().expect("killed lock").contains(&node) {
-            return Ok(false);
-        }
-        Ok(!self.dead.get(&node).copied().unwrap_or(false))
+
+    fn alive<'a>(
+        &'a self,
+        node: NodeId,
+        _: SocketAddr,
+        container: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            self.note(format!("{}.alive({container})", node.short()));
+            if self.killed.lock().expect("killed lock").contains(&node) {
+                return Ok(false);
+            }
+            Ok(!self.dead.get(&node).copied().unwrap_or(false))
+        })
     }
-    fn stop(&self, node: NodeId, _: SocketAddr, container: &str) -> anyhow::Result<()> {
-        self.note(format!("{}.stop({container})", node.short()));
-        // A killed rank is one this transport cannot reach, which is exactly the
-        // case that used to be reported as a successful stop.
-        if self.killed.lock().expect("killed lock").contains(&node) {
-            anyhow::bail!("{} is unreachable", node.short());
-        }
-        Ok(())
+
+    fn stop<'a>(
+        &'a self,
+        node: NodeId,
+        _: SocketAddr,
+        container: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            self.note(format!("{}.stop({container})", node.short()));
+            // A killed rank is one this transport cannot reach, which is exactly
+            // the case that used to be reported as a successful stop.
+            if self.killed.lock().expect("killed lock").contains(&node) {
+                anyhow::bail!("{} is unreachable", node.short());
+            }
+            Ok(())
+        })
     }
+
     fn kill_for_test(&self, node: NodeId) {
         self.killed.lock().expect("killed lock").insert(node);
     }

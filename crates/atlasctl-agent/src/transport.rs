@@ -24,17 +24,23 @@ use std::net::SocketAddr;
 /// treat the head no differently from a worker. Where the two diverge is where
 /// a bug hides: a head that skipped its own prepare would commit a rank nobody
 /// validated.
+/// Every method returns a boxed future rather than being an `async fn`: this
+/// trait is used as `dyn RankTransport`, and an `async fn` in a trait is not
+/// dyn-compatible. Boxing is what lets the implementation await its peer calls
+/// instead of blocking a runtime worker to run them.
 pub trait RankTransport: Send + Sync {
     /// What this rank would run.
     ///
     /// # Errors
     /// If the peer cannot be reached or refuses.
-    fn preview(
-        &self,
+    fn preview<'a>(
+        &'a self,
         node: NodeId,
         addr: SocketAddr,
-        assignment: &RankAssignment,
-    ) -> Result<(String, Vec<String>)>;
+        assignment: &'a RankAssignment,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(String, Vec<String>)>> + Send + 'a>,
+    >;
 
     /// Ask this rank to validate and reserve.
     ///
@@ -42,23 +48,33 @@ pub trait RankTransport: Send + Sync {
     /// reached: a machine that did not answer has not agreed to anything, and
     /// the ranks that already accepted still hold reservations the driver must
     /// release.
-    fn prepare(
-        &self,
+    fn prepare<'a>(
+        &'a self,
         node: NodeId,
         addr: SocketAddr,
-        epoch: &str,
-        assignment: &RankAssignment,
-    ) -> PrepareReply;
+        epoch: &'a str,
+        assignment: &'a RankAssignment,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PrepareReply> + Send + 'a>>;
 
     /// Start what this rank prepared.
     ///
     /// # Errors
     /// If the peer cannot be reached, holds no such reservation, or its
     /// container runtime refuses.
-    fn commit(&self, node: NodeId, addr: SocketAddr, epoch: &str) -> Result<String>;
+    fn commit<'a>(
+        &'a self,
+        node: NodeId,
+        addr: SocketAddr,
+        epoch: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>>;
 
     /// Release this rank's reservation. Failures are the driver's to ignore.
-    fn abort(&self, node: NodeId, addr: SocketAddr, epoch: &str);
+    fn abort<'a>(
+        &'a self,
+        node: NodeId,
+        addr: SocketAddr,
+        epoch: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
 
     /// Whether a container this rank started is still running.
     ///
@@ -67,7 +83,12 @@ pub trait RankTransport: Send + Sync {
     ///
     /// # Errors
     /// If the peer cannot be reached.
-    fn alive(&self, node: NodeId, addr: SocketAddr, container: &str) -> Result<bool>;
+    fn alive<'a>(
+        &'a self,
+        node: NodeId,
+        addr: SocketAddr,
+        container: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool>> + Send + 'a>>;
 
     /// Stop a container this rank started.
     ///
@@ -76,7 +97,12 @@ pub trait RankTransport: Send + Sync {
     /// swallow both, so `stop_cluster` reported every rank stopped while an
     /// unreachable machine kept its container -- and its GPU. A fleet view that
     /// cannot be trusted about what is running is worse than no fleet view.
-    fn stop(&self, node: NodeId, addr: SocketAddr, container: &str) -> Result<()>;
+    fn stop<'a>(
+        &'a self,
+        node: NodeId,
+        addr: SocketAddr,
+        container: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>>;
 
     /// Mark a rank dead, so a test can exercise supervision.
     #[cfg(test)]

@@ -274,7 +274,6 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         Arc::new(crate::peertransport::PeerTransport::new(
             Arc::clone(&identity),
             pins.clone(),
-            rt.handle().clone(),
             atlasctl_agent::peer::link::SelfIntro::new(can_launch.is_ok(), &accelerator),
         )),
         atlasctl_agent::peer::DEFAULT_PEER_PORT,
@@ -348,10 +347,11 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
             loop {
                 tick.tick().await;
                 let cluster = Arc::clone(&cluster);
-                // Asking a peer dials the network, so it must not run on the
-                // async runtime's worker threads.
-                let torn = tokio::task::spawn_blocking(move || cluster.supervise()).await;
-                if let Ok(Some(torn)) = torn {
+                // Asking a peer dials the network. That is now awaited rather
+                // than run on a blocking thread: `ClusterControl::supervise` is
+                // async, so the dial yields the worker instead of occupying one.
+                let torn = cluster.supervise().await;
+                if let Some(torn) = torn {
                     eprintln!("cluster: {}", torn.why);
                     // And say it where an operator is looking. This used to go
                     // only to the head agent's stderr, so a cluster could die

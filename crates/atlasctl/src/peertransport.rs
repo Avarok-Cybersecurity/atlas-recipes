@@ -14,7 +14,6 @@ use atlasctl_agent::peer::cluster;
 use atlasctl_agent::peer::link::SelfIntro;
 use atlasctl_agent::transport::RankTransport;
 use atlasctl_protocol::fleet::NodeId;
-use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -22,7 +21,6 @@ use std::sync::Arc;
 pub struct PeerTransport {
     identity: Arc<Identity>,
     pins: PinStore,
-    runtime: tokio::runtime::Handle,
     /// How this agent introduces itself to a rank. Built once, from the same
     /// launchability the rest of the agent reports, so a control-only head
     /// cannot describe itself as able to run a model.
@@ -38,39 +36,25 @@ impl std::fmt::Debug for PeerTransport {
 impl PeerTransport {
     /// Build a transport.
     #[must_use]
-    pub fn new(
-        identity: Arc<Identity>,
-        pins: PinStore,
-        runtime: tokio::runtime::Handle,
-        intro: SelfIntro,
-    ) -> Self {
+    pub fn new(identity: Arc<Identity>, pins: PinStore, intro: SelfIntro) -> Self {
         Self {
             identity,
             pins,
-            runtime,
             intro,
         }
-    }
-
-    /// Run one peer call to completion.
-    ///
-    /// `block_on` alone would deadlock: this runs inside a task on the very
-    /// runtime it would block. `block_in_place` moves this thread out of the
-    /// async pool first, which is only sound on a multi-threaded runtime — and
-    /// that is what the agent builds.
-    fn blocking<F: Future>(&self, fut: F) -> F::Output {
-        tokio::task::block_in_place(|| self.runtime.block_on(fut))
     }
 }
 
 impl RankTransport for PeerTransport {
-    fn preview(
-        &self,
+    fn preview<'a>(
+        &'a self,
         node: NodeId,
         addr: SocketAddr,
-        assignment: &RankAssignment,
-    ) -> Result<(String, Vec<String>)> {
-        self.blocking(cluster::preview_rank(
+        assignment: &'a RankAssignment,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(String, Vec<String>)>> + Send + 'a>,
+    > {
+        Box::pin(cluster::preview_rank(
             &self.identity,
             self.pins.clone(),
             addr,
@@ -80,32 +64,40 @@ impl RankTransport for PeerTransport {
         ))
     }
 
-    fn prepare(
-        &self,
+    fn prepare<'a>(
+        &'a self,
         node: NodeId,
         addr: SocketAddr,
-        epoch: &str,
-        assignment: &RankAssignment,
-    ) -> PrepareReply {
-        self.blocking(cluster::prepare_rank(
-            &self.identity,
-            self.pins.clone(),
-            addr,
-            node,
-            &self.intro,
-            epoch,
-            assignment.clone(),
-        ))
-        // A machine that could not be reached has not agreed to anything. Said
-        // as a refusal rather than an error so the driver still releases the
-        // reservations the ranks before it are holding.
-        .unwrap_or_else(|e| PrepareReply::Refused {
-            reason: format!("could not be reached: {e:#}"),
+        epoch: &'a str,
+        assignment: &'a RankAssignment,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PrepareReply> + Send + 'a>> {
+        Box::pin(async move {
+            cluster::prepare_rank(
+                &self.identity,
+                self.pins.clone(),
+                addr,
+                node,
+                &self.intro,
+                epoch,
+                assignment.clone(),
+            )
+            .await
+            // A machine that could not be reached has not agreed to anything.
+            // Said as a refusal rather than an error so the driver still
+            // releases the reservations the ranks before it are holding.
+            .unwrap_or_else(|e| PrepareReply::Refused {
+                reason: format!("could not be reached: {e:#}"),
+            })
         })
     }
 
-    fn commit(&self, node: NodeId, addr: SocketAddr, epoch: &str) -> Result<String> {
-        self.blocking(cluster::commit_rank(
+    fn commit<'a>(
+        &'a self,
+        node: NodeId,
+        addr: SocketAddr,
+        epoch: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
+        Box::pin(cluster::commit_rank(
             &self.identity,
             self.pins.clone(),
             addr,
@@ -115,19 +107,32 @@ impl RankTransport for PeerTransport {
         ))
     }
 
-    fn abort(&self, node: NodeId, addr: SocketAddr, epoch: &str) {
-        let _ = self.blocking(cluster::abort_rank(
-            &self.identity,
-            self.pins.clone(),
-            addr,
-            node,
-            &self.intro,
-            epoch,
-        ));
+    fn abort<'a>(
+        &'a self,
+        node: NodeId,
+        addr: SocketAddr,
+        epoch: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            let _ = cluster::abort_rank(
+                &self.identity,
+                self.pins.clone(),
+                addr,
+                node,
+                &self.intro,
+                epoch,
+            )
+            .await;
+        })
     }
 
-    fn alive(&self, node: NodeId, addr: SocketAddr, container: &str) -> Result<bool> {
-        self.blocking(cluster::rank_alive(
+    fn alive<'a>(
+        &'a self,
+        node: NodeId,
+        addr: SocketAddr,
+        container: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool>> + Send + 'a>> {
+        Box::pin(cluster::rank_alive(
             &self.identity,
             self.pins.clone(),
             addr,
@@ -137,8 +142,13 @@ impl RankTransport for PeerTransport {
         ))
     }
 
-    fn stop(&self, node: NodeId, addr: SocketAddr, container: &str) -> anyhow::Result<()> {
-        self.blocking(cluster::stop_rank(
+    fn stop<'a>(
+        &'a self,
+        node: NodeId,
+        addr: SocketAddr,
+        container: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(cluster::stop_rank(
             &self.identity,
             self.pins.clone(),
             addr,
