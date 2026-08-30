@@ -22,7 +22,7 @@ clap = { version = "4", features = ["derive"] }
 rustix = { version = "1", features = ["process"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 serde_yaml_ng.workspace = true
-atlasctl-protocol = { version = "0.6.1", path = "../atlasctl-protocol" } # x-release-please-version
+atlasctl-protocol = { version = "0.7.0", path = "../atlasctl-protocol" } # x-release-please-version
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
