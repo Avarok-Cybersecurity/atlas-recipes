@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.0](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.6.1...v0.7.0) (2026-08-30)
+
+
+### Features
+
+* **qwen3.8:** a DFlash2 serve profile, for the new speculation gate ([#173](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/173)) ([cf7ec41](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/cf7ec41c268a583a741146f9cedce4f56c695e97))
+
+
+### Bug Fixes
+
+* **release:** attach the wheels instead of racing them ([#168](https://github.com/Avarok-Cybersecurity/atlas-recipes/issues/168)) ([6f4325c](https://github.com/Avarok-Cybersecurity/atlas-recipes/commit/6f4325ccf35bd02999aaa1a506808a0726e0298d))
+
 ## [0.6.1](https://github.com/Avarok-Cybersecurity/atlas-recipes/compare/v0.6.0...v0.6.1) (2026-08-29)
 
 
