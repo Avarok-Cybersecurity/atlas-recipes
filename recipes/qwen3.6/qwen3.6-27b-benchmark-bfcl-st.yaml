@@ -1,0 +1,72 @@
+recipe_version: "2"
+model: unsloth/Qwen3.6-27B-NVFP4
+runtime: atlas
+container: avarok/atlas-gb10:latest
+max_nodes: 1
+
+metadata:
+  description: |
+    Qwen3.6-27B (unsloth uniform NVFP4) — reference serve config for the
+    BFCL v4 single-turn accuracy benchmark on a single GB10. This is the
+    SSOT for "what flags were the BFCL-ST numbers measured with" so it
+    never has to be reverse-engineered from session logs again.
+
+    TWO CONFIG LESSONS baked in (both learned the hard way, 2026-07-03):
+      1. tool_call_parser = qwen3_coder (auto-detected; DO NOT pass
+         --tool-call-parser hermes). Hermes' trigger never matches this
+         model's native XML tool-call format, so the XGrammar grammar
+         never engages and parallel/extraction collapses. Auto-selection
+         picks qwen3_coder, which engages constrained decoding.
+      2. Tool grammar ON (do NOT set --disable-tool-grammar). Grammar-off
+         emits only ONE call for a multi-call ("parallel") request.
+         Grammar-on emits all calls correctly — but is ONLY safe on a
+         build carrying Avarok-Cybersecurity/atlas #231 (b87bd483+),
+         which fixed the never-terminating-grammar EOS bug (pre-#231,
+         grammar-on tool turns ran on to 600-800 tokens / finish=length).
+      3. KV = BF16 (NOT fp8). FP8 KV degrades this NVFP4 model; BF16 gave
+         the best stable simple_python and is the safer default.
+
+    RESULTS (merged main b87bd483, seed 42, subset simple_python+parallel,
+    ~24/subset, this config):
+      simple_python 87.50   parallel 0.00*   overall 58.33
+    Historical full ST-995 reference (Jun 15, code 5838c8cf, OLD harness
+    4f2a21d): overall 89.04, simple_python 95.65, parallel 95.65.
+
+    *IMPORTANT — the parallel BFCL number is currently UNRELIABLE and is
+    NOT a model signal. A direct (non-harness) request on this exact
+    config emits 3 correct parallel calls (Paris/Berlin/Tokyo, indices
+    0/1/2, finish=tool_calls), but the harness scorer (endpoints
+    6a2894c "merge streaming tool-call deltas") mis-merges/rejects them
+    and captures markup (</parameters>) into argument values. Trust
+    simple_python; treat parallel as blocked on the harness scorer fix.
+    The Jun15->now drop is a harness/dataset confound (dataset re-hosted
+    to MLCommons R2 via endpoints cf1b932; scorer changed via 6a2894c;
+    harness 4f2a21d -> 8ba5298), NOT an Atlas code regression: the Jun15
+    binary under its own config scores parallel 0.00 today too.
+
+    Harness: inference-endpoint benchmark from-config
+      --config <edge-agentic>/bfcl_st_pr223.yaml --accuracy-only --seed 42
+    (full ST-995; use a subsets:[...] + sample_pct override for fast
+    config A/Bs per the benchmark-subset convention).
+  maintainer: avarok
+  category: agent
+  model_params: 27B
+  model_dtype: nvfp4
+  quantization: nvfp4
+  kv_dtype: bf16
+
+defaults:
+  port: 8903
+  host: 0.0.0.0
+  max_model_len: 32768
+  max_batch_size: 1
+  kv_cache_dtype: bf16
+  gpu_memory_utilization: 0.85
+  speculative: true
+  num_drafts: 1
+  mtp_quantization: bf16
+  enable_prefix_caching: true
+  ssm_cache_slots: 64
+  disable_thinking: true
+  # tool_call_parser: intentionally UNSET -> auto-detects qwen3_coder.
+  # tool grammar: intentionally left ON (do not disable).
