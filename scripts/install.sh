@@ -331,6 +331,7 @@ check_sparkrun() {
 
 do_uninstall() {
     dir="${ATLASCTL_INSTALL_DIR:-$HOME/.local/bin}"
+    dir=${dir%/}   # so ATLASCTL_INSTALL_DIR=~/.local/bin/ cannot yield dir//atlasctl
     if [ -f "$dir/$BIN_NAME" ]; then
         # The service MUST come out before the binary does. `main` installs the
         # agent service by default, and its unit carries Restart=on-failure with
@@ -388,6 +389,25 @@ rc_file() {
 # and the comparison here silently stops matching, handing a fish user an
 # `export PATH=...` line that fails when pasted -- exactly the defect the
 # sentinel was added to prevent, reintroduced without a failing test.
+# Is a directory already on PATH, allowing for a trailing slash?
+#
+# `case ":$PATH:" in *":$dir:"*` looked exact and was not: a PATH entry of
+# `/home/u/.local/bin/` does not match `/home/u/.local/bin`, so an operator who
+# already had the directory on PATH was told to add it again. Following that
+# advice appends a second, duplicate entry -- and it is that duplicate,
+# trailing-slash entry that makes `which` print `/home/u/.local/bin//atlasctl`,
+# which is what someone reported and reasonably read as our bug.
+#
+# Both forms are compared, and $1 is normalised first so a caller-supplied
+# ATLASCTL_INSTALL_DIR with a trailing slash behaves the same as without.
+on_path() { # dir -> 0 if already on PATH
+    op_dir=${1%/}
+    case ":$PATH:" in
+        *":$op_dir:"* | *":$op_dir/:"*) return 0 ;;
+    esac
+    return 1
+}
+
 path_advice() { # dir  -- writes the two warn lines
     pa_rc=$(rc_file)
     warn "$1 is not on your PATH. Add it, e.g.:"
@@ -564,17 +584,15 @@ main() {
     tar -xf "$tmp/$archive_name" -C "$tmp"
 
     dir="${ATLASCTL_INSTALL_DIR:-$HOME/.local/bin}"
+    dir=${dir%/}   # so ATLASCTL_INSTALL_DIR=~/.local/bin/ cannot yield dir//atlasctl
     mkdir -p "$dir"
     [ -f "$tmp/$BIN_NAME" ] || die "the archive did not contain $BIN_NAME"
 
     same_version=$(place_binary "$dir" "$tmp")
 
-    case ":$PATH:" in
-        *":$dir:"*) ;;
-        *)
-            path_advice "$dir"
-            ;;
-    esac
+    if ! on_path "$dir"; then
+        path_advice "$dir"
+    fi
 
     check_docker
     check_sparkrun
@@ -584,10 +602,11 @@ main() {
     # `atlasctl` only resolves if its directory is on PATH. Printing the bare
     # name to someone we warned about PATH a few lines ago is a command that
     # fails the moment they paste it, which reads as a broken install.
-    case ":$PATH:" in
-        *":$dir:"*) try="$BIN_NAME" ;;
-        *) try="$dir/$BIN_NAME" ;;
-    esac
+    if on_path "$dir"; then
+        try="$BIN_NAME"
+    else
+        try="$dir/$BIN_NAME"
+    fi
 
     # Do not congratulate a failed run. The old code printed "done. Try:"
     # unconditionally, so an operator whose agent had NOT started read a

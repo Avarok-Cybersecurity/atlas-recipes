@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use atlasctl_agent::launcher::DockerLauncher;
 use atlasctl_agent::server::AgentState;
 use atlasctl_agent::token;
+use atlasctl_core::docker::DockerFault;
 use atlasctl_core::docker::profile::{NvidiaDevices, ROOTLESS_V1};
 use atlasctl_core::io::{ProcessRunner, StdProcessRunner};
 use std::sync::Arc;
@@ -73,11 +74,17 @@ impl atlasctl_agent::fleet::FleetView for FleetHandle {
 fn probe_can_launch(runner: &dyn ProcessRunner) -> Result<(), String> {
     match runner.run(&atlasctl_agent::fleet::docker_probe_argv()) {
         Ok(out) if out.success() => Ok(()),
-        Ok(out) => Err(format!(
-            "the docker daemon did not answer: {}",
-            out.stderr.trim()
-        )),
-        Err(e) => Err(format!("docker is not available: {e}")),
+        // Classified rather than passed through. This string is what the
+        // browser renders when it says a machine cannot run models, and the
+        // previous wording — "the docker daemon did not answer" — was wrong for
+        // the commonest case by far: a user not in the `docker` group, where
+        // the daemon answers and refuses. Being told the daemon is down sends
+        // them to restart a service that is running, and the site turned it
+        // into a verdict about the hardware.
+        Ok(out) => Err(DockerFault::classify(&out.stderr).summary()),
+        // The runner itself could not spawn the process, so there is no stderr
+        // to classify: `docker` is not there.
+        Err(e) => Err(format!("{}: {e}", DockerFault::NotInstalled.summary())),
     }
 }
 
@@ -149,6 +156,10 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         Ok(()) => atlasctl_protocol::fleet::Launchability::yes(),
         Err(why) => atlasctl_protocol::fleet::Launchability::no(why.clone()),
     };
+    // The closure below needs the startup answer for --client mode, where
+    // there is nothing to re-probe; `launchability` itself is moved into the
+    // fleet.
+    let launchability_seed = launchability.clone();
     eprintln!("node identity: {}", identity.id().short());
     eprintln!(
         "{}",
@@ -228,6 +239,26 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         accelerator.clone(),
     )
     .with_vitals(Box::new(vitals))
+    // Re-answer "can this machine launch?" instead of trusting the value
+    // probed at startup. The commonest reason a Spark reports that it cannot —
+    // its owner not being in the `docker` group — is a one-line fix, and
+    // before this the fix did not take effect until the agent was restarted,
+    // which nothing told the operator to do. In --client mode the refusal is a
+    // policy, not a probe result, so it is left alone.
+    .with_relaunch_probe({
+        let runner = Arc::clone(&runner);
+        let client_mode = args.client;
+        let initial = launchability_seed.clone();
+        Box::new(move || {
+            if client_mode {
+                return initial.clone();
+            }
+            match probe_can_launch(runner.as_ref()) {
+                Ok(()) => atlasctl_protocol::fleet::Launchability::yes(),
+                Err(why) => atlasctl_protocol::fleet::Launchability::no(why),
+            }
+        })
+    })
     .with_running(Box::new(atlasctl_agent::fleet::DockerRunning(Arc::clone(
         &runner,
     ))))

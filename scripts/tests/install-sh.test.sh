@@ -440,6 +440,40 @@ contains "--join= with an empty value refuses" \
     "$parse_out" "--join= needs a value"
 check "and refusing is non-zero, so a wrapper notices" "1" "$parse_rc"
 
+# --- PATH membership, with and without a trailing slash -----------------------
+# A DGX Spark owner reported `which atlasctl` printing
+# `/home/user/.local/bin//atlasctl`. The doubled slash is not ours — `which`
+# joins the PATH ENTRY with `/name`, so the trailing slash was already in their
+# PATH. But `on_path` used to compare only the exact form, so that operator was
+# told to add a directory they already had; following the advice appends the
+# duplicate entry that produces exactly what they saw.
+( . "$WORK/lib.sh"
+  PATH="/usr/bin:/home/u/.local/bin:/bin" on_path "/home/u/.local/bin" ) \
+    && ok "an exact PATH entry is recognised" \
+    || { fail=$((fail+1)); printf '  FAIL %s\n' "an exact PATH entry is recognised"; }
+
+( . "$WORK/lib.sh"
+  PATH="/usr/bin:/home/u/.local/bin/:/bin" on_path "/home/u/.local/bin" ) \
+    && ok "a PATH entry with a trailing slash is recognised too" \
+    || { fail=$((fail+1)); printf '  FAIL %s\n' "a PATH entry with a trailing slash is recognised too"; }
+
+( . "$WORK/lib.sh"
+  PATH="/usr/bin:/home/u/.local/bin:/bin" on_path "/home/u/.local/bin/" ) \
+    && ok "a caller-supplied dir with a trailing slash is normalised" \
+    || { fail=$((fail+1)); printf '  FAIL %s\n' "a caller-supplied dir with a trailing slash is normalised"; }
+
+# The check must still be able to say no, or it is not a check.
+( . "$WORK/lib.sh"
+  PATH="/usr/bin:/bin" on_path "/home/u/.local/bin" ) \
+    && { fail=$((fail+1)); printf '  FAIL %s\n' "a directory genuinely absent from PATH is reported absent"; } \
+    || ok "a directory genuinely absent from PATH is reported absent"
+
+# And a near-miss must not count as a match, or every prefix would.
+( . "$WORK/lib.sh"
+  PATH="/usr/bin:/home/u/.local/binaries:/bin" on_path "/home/u/.local/bin" ) \
+    && { fail=$((fail+1)); printf '  FAIL %s\n' "a directory that merely shares a prefix is not a match"; } \
+    || ok "a directory that merely shares a prefix is not a match"
+
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 # Explicit, not inherited. `[ "$fail" -eq 0 ]` as the last command happens to
 # be right here, but the PowerShell counterpart made exactly this mistake —

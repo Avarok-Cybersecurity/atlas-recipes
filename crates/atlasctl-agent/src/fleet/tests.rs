@@ -465,3 +465,85 @@ fn an_unverified_link_is_usable_but_never_preferred_and_never_warns() {
     assert!(LinkClass::Unverified.rank() < LinkClass::Ethernet.rank());
     assert!(LinkClass::Unverified.rank() > LinkClass::Virtual.rank());
 }
+
+/// A machine that starts unable to launch must not stay that way.
+///
+/// The DGX Spark report this covers: the owner was not in the `docker` group,
+/// the agent probed once at startup, and the browser showed "this machine
+/// cannot run models" as though it were a fact about the hardware. Adding
+/// themselves to the group changed nothing until the agent was restarted, and
+/// nothing told them to restart it.
+mod relaunch_probe {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn a_machine_that_becomes_able_to_launch_is_reported_as_able() {
+        let dir = Tmp::new("relaunch-heals");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = Arc::clone(&calls);
+        // First answer is the startup one: refused. Every answer after it is
+        // the operator having fixed their group membership.
+        let fleet = LocalFleet::new(
+            Identity::generate(),
+            PinStore::new(&dir.0),
+            DisplayName::new("spark-256a"),
+            vec![roce("10.10.10.9")],
+            Launchability::no("Docker refused this user".to_owned()),
+            "GB10".to_owned(),
+        )
+        .with_relaunch_probe(Box::new(move || {
+            if c.fetch_add(1, Ordering::SeqCst) == 0 {
+                Launchability::no("Docker refused this user".to_owned())
+            } else {
+                Launchability::yes()
+            }
+        }))
+        // Zero, so the test measures the re-probe rather than the clock. The
+        // caching behaviour has its own test below.
+        .with_launch_ttl(Duration::ZERO);
+
+        assert!(!fleet.can_launch(), "first probe still refuses");
+        assert!(
+            fleet.can_launch(),
+            "after the operator fixed Docker the agent must say so without a restart"
+        );
+    }
+
+    #[test]
+    fn the_answer_is_cached_so_a_listing_does_not_probe_per_node() {
+        let dir = Tmp::new("relaunch-cached");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = Arc::clone(&calls);
+        let fleet = fleet_at(&dir.0).with_relaunch_probe(Box::new(move || {
+            c.fetch_add(1, Ordering::SeqCst);
+            Launchability::yes()
+        }));
+        for _ in 0..25 {
+            let _ = fleet.can_launch();
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "25 reads inside the TTL must cost one probe, not 25 `docker info` spawns"
+        );
+    }
+
+    #[test]
+    fn without_a_probe_the_startup_answer_is_kept_verbatim() {
+        // Every existing construction, and every test, takes this path: no
+        // probe, no processes, no behaviour change.
+        let dir = Tmp::new("relaunch-none");
+        let fleet = LocalFleet::new(
+            Identity::generate(),
+            PinStore::new(&dir.0),
+            DisplayName::new("laptop"),
+            vec![roce("10.10.10.9")],
+            Launchability::no("control-only".to_owned()),
+            "none".to_owned(),
+        );
+        assert!(!fleet.can_launch());
+        assert_eq!(fleet.launchability().reason, "control-only");
+    }
+}
