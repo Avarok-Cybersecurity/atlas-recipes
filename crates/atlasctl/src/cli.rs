@@ -157,6 +157,15 @@ pub struct AgentInstallArgs {
     /// it can be read before it is run.
     #[arg(long, requires = "join")]
     pub grant_control: bool,
+
+    /// Let the fleet you are joining submit BENCHMARK JOBS to this machine:
+    /// build its configured Atlas checkout at a commit and run one gate.
+    ///
+    /// Only meaningful with `--join`, and separate from `--grant-control`:
+    /// this is the stronger right (it runs code from a git history here), so
+    /// it is said on its own, on the line the operator reads before running.
+    #[arg(long, requires = "join")]
+    pub grant_bench: bool,
 }
 
 /// `agent pair` arguments.
@@ -187,6 +196,14 @@ pub enum PeerCmd {
     GrantControl(PeerNodeArgs),
     /// Withdraw that grant. Takes effect on the machine's next connection.
     RevokeControl(PeerNodeArgs),
+    /// Let a paired machine submit benchmark jobs here: build this machine's
+    /// configured Atlas checkout at a commit its remote already has, run one
+    /// certification gate, and take the records. A stronger right than
+    /// control — it runs code from a git history on this box — and a
+    /// separate one: neither grant implies the other.
+    GrantBench(PeerNodeArgs),
+    /// Withdraw the bench grant. Takes effect on the machine's next request.
+    RevokeBench(PeerNodeArgs),
 }
 
 /// `peer add` arguments.
@@ -328,12 +345,40 @@ mod tests {
         .expect("valid");
 
         let grant = |c: Cli| match c.command {
-            Command::Agent(AgentCmd::Install(a)) => (a.grant_control, a.join),
+            Command::Agent(AgentCmd::Install(a)) => (a.grant_control, a.join, a.grant_bench),
             other => panic!("expected agent install, got {other:?}"),
         };
         assert!(grant(with).0);
         // Off unless asked: a privilege must never arrive by upgrading, and the
         // joiner's pin is written from this value.
         assert!(!grant(without).0);
+    }
+
+    /// The bench grant is its own flag with the same shape: refused without
+    /// `--join`, off by default, and independent of `--grant-control`.
+    #[test]
+    fn grant_bench_is_separate_and_needs_join() {
+        assert!(Cli::try_parse_from(["atlasctl", "agent", "install", "--grant-bench"]).is_err());
+        let c = Cli::try_parse_from([
+            "atlasctl",
+            "agent",
+            "install",
+            "--join",
+            "12345678@10.10.10.1",
+            "--grant-bench",
+        ])
+        .expect("valid");
+        match c.command {
+            Command::Agent(AgentCmd::Install(a)) => {
+                assert!(a.grant_bench && !a.grant_control);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            Cli::try_parse_from(["atlasctl", "peer", "grant-bench", "abcd"])
+                .expect("valid")
+                .command,
+            Command::Peer(PeerCmd::GrantBench(_))
+        ));
     }
 }

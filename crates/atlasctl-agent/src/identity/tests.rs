@@ -85,6 +85,7 @@ fn pin_for(id: NodeId, key: &VerifyingKey) -> Pin {
         paired_at: 1_756_000_000,
         last_address: None,
         controller: false,
+        bench: false,
     }
 }
 
@@ -222,6 +223,50 @@ fn a_pin_file_written_before_the_grant_existed_loads_ungranted() {
     assert!(
         !pins[&peer.id()].controller,
         "an upgrade must never mint a control grant out of an old pin"
+    );
+    assert!(
+        !pins[&peer.id()].bench,
+        "nor a bench grant: running code from a git history is the stronger right"
+    );
+}
+
+/// The bench grant is its own bit: granting control does not grant bench,
+/// granting bench does not grant control, and both persist and revoke
+/// through the file every connection re-reads.
+#[test]
+fn the_bench_grant_is_separate_from_control_and_revocable() {
+    let tmp = Tmp::new("benchgrant");
+    let store = PinStore::new(&tmp.0);
+    let peer = Identity::generate();
+    store.add(pin_for(peer.id(), &peer.public())).expect("add");
+
+    assert!(
+        store
+            .set_controller(peer.id(), true)
+            .expect("grants control")
+    );
+    let reread = PinStore::new(&tmp.0).load().expect("reads");
+    assert!(reread[&peer.id()].controller && !reread[&peer.id()].bench);
+
+    assert!(store.set_bench(peer.id(), true).expect("grants bench"));
+    let reread = PinStore::new(&tmp.0).load().expect("reads");
+    assert!(reread[&peer.id()].bench);
+
+    assert!(
+        store
+            .set_controller(peer.id(), false)
+            .expect("revokes control")
+    );
+    let reread = PinStore::new(&tmp.0).load().expect("reads");
+    assert!(reread[&peer.id()].bench && !reread[&peer.id()].controller);
+
+    assert!(store.set_bench(peer.id(), false).expect("revokes bench"));
+    assert!(!PinStore::new(&tmp.0).load().expect("reads")[&peer.id()].bench);
+    // No pin, no grant.
+    assert!(
+        !store
+            .set_bench(Identity::generate().id(), true)
+            .expect("answers")
     );
 }
 

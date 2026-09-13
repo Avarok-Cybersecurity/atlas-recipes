@@ -49,6 +49,7 @@ fn pin_of(store: &PinStore, who: &Identity) {
             paired_at: 0,
             last_address: None,
             controller: false,
+            bench: false,
         })
         .expect("pin");
 }

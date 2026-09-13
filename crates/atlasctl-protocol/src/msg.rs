@@ -421,5 +421,18 @@ pub use error::AgentError;
 mod control;
 pub use control::{ControlRep, ControlReq};
 
+// The benchmark-job vocabulary: what a `bench`-granted peer may ask a node to
+// build and run, the event stream it gets back, and the node's own capability
+// report. Closed enums, like `control`, and its own files for the same reason.
+pub mod bench;
+pub mod bench_event;
+pub mod bench_node;
+pub use bench::{BenchRefusal, BenchRep, BenchReq, GateId, JobId, JobKey, JobState, Sha};
+pub use bench_event::{BenchEvent, EventKind, Outcome};
+pub use bench_node::BenchNodeInfo;
+
+#[cfg(test)]
+mod bench_tests;
+
 #[cfg(test)]
 mod tests;

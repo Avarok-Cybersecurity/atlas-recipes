@@ -17,7 +17,7 @@
 use crate::cluster::{PrepareReply, RankAssignment};
 use anyhow::{Context, Result, bail};
 use atlasctl_protocol::fleet::{NodeId, VouchedPeer};
-use atlasctl_protocol::msg::{ControlRep, ControlReq};
+use atlasctl_protocol::msg::{BenchEvent, BenchRep, BenchReq, ControlRep, ControlReq};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -251,6 +251,31 @@ pub enum PeerFrame {
         /// The answer.
         rep: ControlRep,
     },
+
+    /// A benchmark-job request, executed HERE. Honored only from a sender
+    /// whose pin carries `bench: true` — a separate right from `controller`,
+    /// because this one lets a peer have this machine build and run its
+    /// configured Atlas checkout at a commit. Deliberately no `BenchTo`
+    /// relay: a submitter must be pinned by every node it uses, so the
+    /// one-hop rule is structural.
+    Bench {
+        /// What to do.
+        req: BenchReq,
+    },
+
+    /// The answer to a `Bench` request that is not `Attach`.
+    BenchReply {
+        /// The answer.
+        rep: BenchRep,
+    },
+
+    /// One event of an attached job stream. After `Bench { Attach }` the
+    /// connection carries only these until `Done`, with a heartbeat when
+    /// nothing else has been written for a while.
+    BenchEvent {
+        /// The event.
+        event: BenchEvent,
+    },
 }
 
 /// Version of the peer protocol this build speaks.
@@ -263,7 +288,12 @@ pub const PEER_PROTOCOL_VERSION: u32 = 1;
 /// `Hello.version_max` while `version` stays 1, so a v1 peer's strict
 /// equality check keeps passing and a rolling upgrade degrades instead of
 /// partitioning.
-pub const PEER_PROTOCOL_MAX: u32 = 2;
+///
+/// Version 3 = the three bench frames (`Bench` / `BenchReply` / `BenchEvent`)
+/// and the `bench` pin right. Same rolling-upgrade story: advertised in
+/// `version_max`, `version` still 1, refused locally by
+/// `ensure_bench_capable` when a peer says less.
+pub const PEER_PROTOCOL_MAX: u32 = 3;
 
 /// Write one frame, length-prefixed.
 ///

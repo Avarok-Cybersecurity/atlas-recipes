@@ -68,6 +68,8 @@ fn run() -> Result<()> {
         Command::Peer(PeerCmd::Remove(a)) => commands::peer::remove(&a),
         Command::Peer(PeerCmd::GrantControl(a)) => commands::peer::grant_control(&a),
         Command::Peer(PeerCmd::RevokeControl(a)) => commands::peer::revoke_control(&a),
+        Command::Peer(PeerCmd::GrantBench(a)) => commands::peer::grant_bench(&a),
+        Command::Peer(PeerCmd::RevokeBench(a)) => commands::peer::revoke_bench(&a),
         Command::Doctor => commands::doctor::run(),
     }
 }

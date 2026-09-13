@@ -42,6 +42,10 @@ pub fn record_pairing(
         // never as a side effect of the ceremony itself, and otherwise the
         // grant stays a separate act (`atlasctl peer grant-control`).
         controller,
+        // Same rule, stronger right: `bench` is granted by a separate act
+        // (`atlasctl peer grant-bench`, or `--grant-bench` at join) and never
+        // by pairing.
+        bench: false,
     })
 }
 

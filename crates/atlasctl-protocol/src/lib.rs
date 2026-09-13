@@ -18,7 +18,10 @@ pub use fleet::{
     NodeDescriptor, NodeId, NodeIdError, NodeVitals, PairingState, Severity,
 };
 pub use id::{RecipeId, RecipeIdError};
-pub use msg::{AgentError, ClientMsg, RecipeInfo, RunningLaunch, ServerMsg};
+pub use msg::{
+    AgentError, BenchEvent, BenchNodeInfo, BenchRefusal, BenchRep, BenchReq, ClientMsg, GateId,
+    JobId, JobKey, JobState, RecipeInfo, RunningLaunch, ServerMsg, Sha,
+};
 pub use settings::{Bound, Group, SettingError, SettingSpec, SettingValue};
 pub use telemetry::{DeviceStats, EngineStats, LaunchPhase, Stats, TelemetryCaps};
 
