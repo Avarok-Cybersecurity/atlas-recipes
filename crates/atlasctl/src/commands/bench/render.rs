@@ -53,6 +53,25 @@ pub fn node_block(given: &str, info: &BenchNodeInfo) -> String {
         }
         None => s.push_str("  gpu      none reported\n"),
     }
+    if let Some(t) = &info.thermal {
+        s.push_str(&format!(
+            "  thermal  chassis {}  throttle {}  clock max {}  mem {}\n",
+            t.chassis_temps_c
+                .iter()
+                .cloned()
+                .fold(None::<f64>, |m, x| Some(m.map_or(x, |m| m.max(x))))
+                .map_or("n/a".to_owned(), |c| format!("{c:.0} °C")),
+            match t.throttle_thermal {
+                Some(true) => "ACTIVE",
+                Some(false) => "none",
+                None => "n/a",
+            },
+            t.sm_clock_max_mhz
+                .map_or("n/a".to_owned(), |c| format!("{c:.0} MHz")),
+            t.mem_total_kb
+                .map_or("n/a".to_owned(), |kb| gib(kb as f64 * 1024.0)),
+        ));
+    }
     if let Some(class) = &info.hardware_class {
         s.push_str(&format!("  class    {class}\n"));
     }

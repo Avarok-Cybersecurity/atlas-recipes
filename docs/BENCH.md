@@ -28,6 +28,18 @@ the protocol for a filter to miss. The grant is separate from
 `controller` and never implied by it. See `SECURITY.md`, "The bench
 grant".
 
+## What a node reports
+
+`bench nodes` returns, per node: identity and agent version, whether bench
+is on (and why not), the GPU (name, count, driver, CUDA, clock, temperature,
+memory), **the live thermal facts** (`chassis_temps_c` from every sysfs
+thermal zone, `throttle_thermal` from `nvidia-smi -q -d PERFORMANCE`,
+`sm_clock_max_mhz`, `mem_total_kb`), alerts, the box class, the repo and its
+remote, `ATLAS_HOME` and the signer fingerprint it would sign with, cached
+builds, busy/queue state, disk and memory floors. Facts only: whether two
+nodes are "the same box" for a speed-class gate is decided by the submitter
+(Atlas, from these fields and again from the records), never by the node.
+
 ## `bench.yaml`
 
 In the agent's config directory (`~/.config/atlasctl/` or `--config-dir`).

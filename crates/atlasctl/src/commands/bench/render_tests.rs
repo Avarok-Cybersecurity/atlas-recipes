@@ -44,6 +44,12 @@ fn info() -> BenchNodeInfo {
             memory_used_frac: Metric::reading(0.1),
             memory_is_unified: true,
         }),
+        thermal: Some(atlasctl_protocol::msg::bench_node::HostThermal {
+            chassis_temps_c: vec![65.0, 62.0],
+            throttle_thermal: Some(false),
+            sm_clock_max_mhz: Some(3003.0),
+            mem_total_kb: Some(127_601_452),
+        }),
         alerts: vec![NodeAlert {
             kind: AlertKind::ThermalThrottle,
             severity: Severity::Warning,
@@ -87,6 +93,7 @@ fn the_node_block_says_what_a_scheduler_would_ask_first() {
         "dgx2  spark-43fa (",
         "atlasctl 0.5.0  bench on",
         "gpu      1×NVIDIA GB10  driver 580.95  cuda ?  clock 1500 MHz  temp n/a  mem 128.0 GiB",
+        "thermal  chassis 65 °C  throttle none  clock max 3003 MHz  mem 121.7 GiB",
         "class    gb10",
         "repo     /workspace/atlas  avarok=git@github.com:Avarok-Cybersecurity/atlas.git  head 1a0dc88a8c\n",
         "signer   ab12cd34",

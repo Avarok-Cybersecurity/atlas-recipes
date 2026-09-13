@@ -11,6 +11,7 @@
 //! * [`ports_std`] — the Linux ports: git, cargo, a process group, `/proc`.
 //! * [`child`] — the gate child: pid identity, signals, output lines.
 //! * [`exclusive`] — why the box is busy.
+//! * [`thermal`] — the live facts an equivalence check reads.
 //! * [`runner`] — the single worker, recovery after a restart, retention.
 //! * [`host`] — what the peer-serving path calls.
 
@@ -25,6 +26,7 @@ pub mod nodeinfo;
 pub mod ports;
 pub mod ports_std;
 pub mod runner;
+pub mod thermal;
 
 pub use config::BenchConfig;
 pub use host::BenchHost;

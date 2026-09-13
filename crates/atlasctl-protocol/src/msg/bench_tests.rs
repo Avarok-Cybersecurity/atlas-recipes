@@ -228,6 +228,12 @@ fn node_info_round_trips() {
         peer_version_max: 3,
         bench_enabled: true,
         disabled_reason: None,
+        thermal: Some(super::bench_node::HostThermal {
+            chassis_temps_c: vec![65.0, 62.0],
+            throttle_thermal: Some(false),
+            sm_clock_max_mhz: Some(3003.0),
+            mem_total_kb: Some(127_601_452),
+        }),
         gpu: Some(GpuInfo {
             name: "NVIDIA GB10".into(),
             count: 1,

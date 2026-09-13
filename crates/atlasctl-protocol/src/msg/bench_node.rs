@@ -28,6 +28,27 @@ pub struct GpuInfo {
     pub memory_is_unified: bool,
 }
 
+/// The live thermal and capacity facts a speed-class equivalence check
+/// reads: the two GB10s that read 0.66 tok/s apart differed in nothing
+/// static — only in these.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct HostThermal {
+    /// Every `/sys/class/thermal/thermal_zone*` reading, °C, in zone order.
+    #[serde(default)]
+    pub chassis_temps_c: Vec<f64>,
+    /// Whether any THERMAL clock-event reason is asserted right now
+    /// (`SW Thermal Slowdown`, `HW Thermal Slowdown`, `HW Power Braking`);
+    /// `None` when `nvidia-smi -q -d PERFORMANCE` did not answer.
+    #[serde(default)]
+    pub throttle_thermal: Option<bool>,
+    /// The part's SM clock ceiling, MHz (`clocks.max.sm`).
+    #[serde(default)]
+    pub sm_clock_max_mhz: Option<f64>,
+    /// `MemTotal` from `/proc/meminfo`, kB.
+    #[serde(default)]
+    pub mem_total_kb: Option<u64>,
+}
+
 /// The Atlas checkout the node builds from.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RepoInfo {
@@ -57,6 +78,10 @@ pub struct BenchNodeInfo {
     pub bench_enabled: bool,
     pub disabled_reason: Option<String>,
     pub gpu: Option<GpuInfo>,
+    /// Live thermal and capacity facts; absent on a node that cannot read
+    /// them, which an equivalence check treats as "not the same box".
+    #[serde(default)]
+    pub thermal: Option<HostThermal>,
     /// Live alerts (clock clamped, thermal throttle, memory pressure, …).
     pub alerts: Vec<NodeAlert>,
     /// The configured box class the records will name, e.g. `gb10`.
