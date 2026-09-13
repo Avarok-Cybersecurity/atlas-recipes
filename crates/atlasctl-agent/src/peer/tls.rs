@@ -165,6 +165,10 @@ pub struct PinnedPeerVerifier {
     supported: rustls::crypto::WebPkiSupportedAlgorithms,
 }
 
+/// The words a refused-because-unpinned handshake carries, so a caller that
+/// only sees the TLS error can still tell "not paired" from "broken".
+pub const NOT_PAIRED_MARKER: &str = "is not paired";
+
 /// When a peer that is not pinned may still complete a handshake.
 #[derive(Clone)]
 pub enum Unpinned {
@@ -261,7 +265,9 @@ impl PinnedPeerVerifier {
         if pinned {
             Ok(())
         } else {
-            Err(rustls::Error::General(format!("peer {id} is not paired")))
+            Err(rustls::Error::General(format!(
+                "peer {id} {NOT_PAIRED_MARKER}"
+            )))
         }
     }
 }

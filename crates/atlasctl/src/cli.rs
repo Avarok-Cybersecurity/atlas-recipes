@@ -63,6 +63,10 @@ pub enum Command {
 
     /// Check this machine for problems, including a compromised sparkrun install.
     Doctor,
+
+    /// Run a certification gate on a paired node and bring the records back.
+    #[command(subcommand)]
+    Bench(BenchCmd),
 }
 
 /// Recipe subcommands.
@@ -289,8 +293,10 @@ pub struct AgentTokenArgs {
     pub rotate: bool,
 }
 
+pub mod bench_args;
 mod lifecycle_args;
 mod registry_args;
+pub use bench_args::BenchCmd;
 pub use lifecycle_args::{LogsArgs, RunArgs, StopArgs};
 pub use registry_args::{
     ListArgs, RegistryAddArgs, RegistryCmd, RegistryRemoveArgs, RegistryUpdateArgs, SearchArgs,

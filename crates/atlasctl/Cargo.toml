@@ -25,6 +25,11 @@ serde_yaml_ng.workspace = true
 atlasctl-protocol = { version = "0.6.1", path = "../atlasctl-protocol" } # x-release-please-version
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2.workspace = true
+hex = "0.4"
+base64 = "0.22"
 
 [dev-dependencies]
 # The recording mocks live behind a feature so they never ship in a release

@@ -39,19 +39,84 @@ const SKIP_BUDGET: usize = 8;
 
 pub type Tls = tokio_rustls::client::TlsStream<tokio::net::TcpStream>;
 
+/// Why a dial did not produce an authenticated peer. Typed, because a caller
+/// that reports to a human or a script must tell "nothing there" from "there,
+/// but we are strangers" without reading prose.
+#[derive(Debug, thiserror::Error)]
+pub enum DialError {
+    #[error("{addr} did not answer within {timeout:?}")]
+    Timeout { addr: SocketAddr, timeout: Duration },
+    #[error("connecting to {addr}: {source}")]
+    Connect {
+        addr: SocketAddr,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("TLS handshake with {addr} timed out")]
+    HandshakeTimeout { addr: SocketAddr },
+    /// Either side refused the other's certificate, or the handshake broke.
+    /// [`DialError::not_paired`] says whether this machine refused the peer.
+    #[error("TLS handshake with {addr}: {source}")]
+    Handshake {
+        addr: SocketAddr,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{addr} sent no certificate")]
+    NoCertificate { addr: SocketAddr },
+    #[error("{addr}: {source}")]
+    Identity {
+        addr: SocketAddr,
+        #[source]
+        source: anyhow::Error,
+    },
+}
+
+impl DialError {
+    /// True when the handshake failed because THIS machine has no pin for the
+    /// peer that answered. A refusal from the other side arrives as a bare
+    /// alert and cannot be told from a broken link here.
+    #[must_use]
+    pub fn not_paired(&self) -> bool {
+        matches!(self, Self::Handshake { source, .. }
+            if source.to_string().contains(super::tls::NOT_PAIRED_MARKER))
+    }
+
+    /// Whether a later attempt could reasonably succeed without anyone
+    /// changing anything: a silent or refusing address, not a refused key.
+    #[must_use]
+    pub fn transient(&self) -> bool {
+        matches!(
+            self,
+            Self::Timeout { .. } | Self::Connect { .. } | Self::HandshakeTimeout { .. }
+        )
+    }
+}
+
+/// A peer that answered but speaks a protocol below bench.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "{name} ({}) speaks peer protocol {version_max} and cannot carry bench frames \
+     (this build speaks up to {PEER_PROTOCOL_MAX}); upgrade it", peer.short()
+)]
+pub struct UnsupportedPeer {
+    pub name: String,
+    pub peer: NodeId,
+    pub version_max: u32,
+}
+
 /// Refuse, by name, a peer that cannot decode bench frames.
 ///
 /// # Errors
-/// If the hello advertises less than [`BENCH_MIN_VERSION`].
-pub fn ensure_bench_capable(hello: &Hello, peer: NodeId) -> Result<()> {
+/// [`UnsupportedPeer`] if the hello advertises less than [`BENCH_MIN_VERSION`].
+pub fn ensure_bench_capable(hello: &Hello, peer: NodeId) -> Result<(), UnsupportedPeer> {
     let version_max = hello.version_max.unwrap_or(PEER_PROTOCOL_VERSION);
     if version_max < BENCH_MIN_VERSION {
-        bail!(
-            "{} ({}) speaks peer protocol {version_max} and cannot carry bench frames \
-             (this build speaks up to {PEER_PROTOCOL_MAX}); upgrade it",
-            hello.name,
-            peer.short()
-        );
+        return Err(UnsupportedPeer {
+            name: hello.name.clone(),
+            peer,
+            version_max,
+        });
     }
     Ok(())
 }
@@ -74,23 +139,28 @@ pub async fn dial_any(
     let connector = tokio_rustls::TlsConnector::from(Arc::new(cfg));
     let tcp = tokio::time::timeout(DIAL_TIMEOUT, tokio::net::TcpStream::connect(addr))
         .await
-        .map_err(|_| anyhow::anyhow!("{addr} did not answer within {DIAL_TIMEOUT:?}"))?
-        .with_context(|| format!("connecting to {addr}"))?;
+        .map_err(|_| DialError::Timeout {
+            addr,
+            timeout: DIAL_TIMEOUT,
+        })?
+        .map_err(|source| DialError::Connect { addr, source })?;
     let name = rustls::pki_types::ServerName::try_from("peer.atlas.invalid")
         .context("building a server name")?
         .to_owned();
     let tls = tokio::time::timeout(DIAL_TIMEOUT, connector.connect(name, tcp))
         .await
-        .map_err(|_| anyhow::anyhow!("TLS handshake with {addr} timed out"))?
-        .context("TLS handshake")?;
+        .map_err(|_| DialError::HandshakeTimeout { addr })?
+        .map_err(|source| DialError::Handshake { addr, source })?;
     let peer_id = {
         let (_, conn) = tls.get_ref();
         let cert = conn
             .peer_certificates()
             .and_then(<[_]>::first)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("{addr} sent no certificate"))?;
-        peer_identity(&cert)?.0
+            .ok_or(DialError::NoCertificate { addr })?;
+        peer_identity(&cert)
+            .map_err(|source| DialError::Identity { addr, source })?
+            .0
     };
     Ok((tls, peer_id))
 }
@@ -139,6 +209,15 @@ where
     bail!("{addr} kept sending vitals instead of answering the bench request")
 }
 
+/// The node answered an attach with a refusal instead of a stream.
+#[derive(Debug, thiserror::Error)]
+#[error("{addr} refused the attach: {refusal}")]
+pub struct AttachRefused {
+    pub addr: SocketAddr,
+    pub by: NodeId,
+    pub refusal: atlasctl_protocol::msg::BenchRefusal,
+}
+
 /// An attached job stream.
 pub struct Attached {
     tls: Tls,
@@ -177,7 +256,14 @@ impl Attached {
             match frame {
                 PeerFrame::Vitals { .. } => continue,
                 PeerFrame::BenchEvent { event } => {
-                    if matches!(event.kind, EventKind::Heartbeat { .. }) {
+                    if let EventKind::Heartbeat { state, seq_high } = &event.kind {
+                        // A terminal job with nothing past what we already
+                        // hold: the node is telling us there is no more to
+                        // come, and the stream ends here on purpose.
+                        if state.is_terminal() && *seq_high <= self.last_seq {
+                            self.done = true;
+                            return Ok(None);
+                        }
                         continue;
                     }
                     if event.seq <= self.last_seq {
@@ -200,9 +286,14 @@ impl Attached {
                     return Ok(Some(event));
                 }
                 PeerFrame::BenchReply {
-                    rep: BenchRep::Refused { refusal, .. },
+                    rep: BenchRep::Refused { by, refusal },
                 } => {
-                    bail!("{} refused the attach: {refusal}", self.addr)
+                    return Err(AttachRefused {
+                        addr: self.addr,
+                        by,
+                        refusal,
+                    }
+                    .into());
                 }
                 other => bail!("expected a bench event from {}, got {other:?}", self.addr),
             }

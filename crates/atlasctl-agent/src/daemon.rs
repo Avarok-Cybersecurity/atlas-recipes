@@ -54,6 +54,9 @@ mod peer_serve;
 mod peer_serve_tests;
 
 #[cfg(test)]
+#[path = "daemon/bench_loopback_tests.rs"]
+mod bench_loopback_tests;
+#[cfg(test)]
 #[path = "daemon/relay_grant_tests.rs"]
 mod relay_grant_tests;
 #[cfg(test)]

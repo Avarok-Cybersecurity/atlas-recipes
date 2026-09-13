@@ -120,6 +120,19 @@ pub(super) async fn spawn_serving(
     answer_budget: Duration,
     launcher: Arc<dyn Launcher>,
 ) -> u16 {
+    spawn_serving_bench(a, port, answer_budget, launcher, None, None).await
+}
+
+/// [`spawn_serving`] with a bench host (or the reason there is none), so a
+/// test can drive the bench frames through the production dispatch.
+pub(super) async fn spawn_serving_bench(
+    a: &mut TestAgent,
+    port: u16,
+    answer_budget: Duration,
+    launcher: Arc<dyn Launcher>,
+    bench: Option<Arc<crate::bench::BenchHost>>,
+    bench_disabled: Option<String>,
+) -> u16 {
     let listener = tokio::net::TcpListener::bind((a.ip, port))
         .await
         .expect("bind");
@@ -144,8 +157,8 @@ pub(super) async fn spawn_serving(
         )),
         peer_port: a.port,
         answer_budget,
-        bench: None,
-        bench_disabled: None,
+        bench,
+        bench_disabled,
     });
     let accepted = Arc::clone(&a.accepted);
     tokio::spawn(async move {

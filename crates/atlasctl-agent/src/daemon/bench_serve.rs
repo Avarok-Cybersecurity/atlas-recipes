@@ -177,6 +177,7 @@ pub(crate) async fn serve_attach<S>(
                 return;
             }
             if done {
+                let _ = tokio::io::AsyncWriteExt::shutdown(stream).await;
                 return;
             }
         }
@@ -186,11 +187,6 @@ pub(crate) async fn serve_attach<S>(
             .store
             .load(&job)
             .map_or(atlasctl_protocol::msg::bench::JobState::Done, |r| r.state);
-        if state.is_terminal() && journal.seq_high() < next {
-            // Terminal with nothing left to send (e.g. cancelled while
-            // queued and the Done already replayed above).
-            return;
-        }
         let heartbeat = BenchEvent {
             job: job.clone(),
             seq: journal.seq_high(),
@@ -200,6 +196,19 @@ pub(crate) async fn serve_attach<S>(
                 seq_high: journal.seq_high(),
             },
         };
+        if state.is_terminal() && journal.seq_high() < next {
+            // Terminal with nothing left to send (the client attached past
+            // the end). One heartbeat carries that fact — terminal state,
+            // `seq_high` below what it asked for — so the client can end
+            // its stream deliberately rather than on a dropped socket.
+            let _ = tokio::time::timeout(
+                WRITE_TIMEOUT,
+                write_frame(stream, &PeerFrame::BenchEvent { event: heartbeat }),
+            )
+            .await;
+            let _ = tokio::io::AsyncWriteExt::shutdown(stream).await;
+            return;
+        }
         tokio::select! {
             changed = watch.changed() => {
                 if changed.is_err() {
