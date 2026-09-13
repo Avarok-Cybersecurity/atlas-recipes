@@ -1,74 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! The live facts a speed-class equivalence check needs, read from the same
-//! three places Atlas's own hardware collector reads them: `nvidia-smi` for
-//! the clock ceiling and the clock-event reasons, sysfs for the chassis
-//! zones, procfs for memory. Facts only; nothing here decides anything.
+//! three places Atlas's own hardware collector reads them: the accelerator
+//! provider (`telemetry::nvidia`) for the clock ceiling and the clock-event
+//! reasons, sysfs for the chassis zones, procfs for memory. Facts only;
+//! nothing here decides anything.
 
 use atlasctl_protocol::msg::bench_node::HostThermal;
 use std::path::Path;
-
-fn run(args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new("nvidia-smi")
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-/// `clocks.max.sm` for the first GPU, MHz.
-pub fn parse_clock_max(csv: &str) -> Option<f64> {
-    let first = csv.lines().next()?.trim();
-    let n: f64 = first.parse().ok()?;
-    (n > 0.0).then_some(n)
-}
-
-/// Whether any thermal reason under "Clocks Event Reasons" is `Active`.
-///
-/// `None` when the block is absent. SW Power Capping is excluded on purpose:
-/// on GB10 it is the steady state of a power-limited part and says nothing
-/// about a thermal fault.
-pub fn parse_throttle_thermal(text: &str) -> Option<bool> {
-    let mut in_reasons = false;
-    let mut seen = false;
-    let mut any = false;
-    for line in text.lines() {
-        let t = line.trim();
-        if t.starts_with("Clocks Event Reasons Counters") {
-            in_reasons = false;
-            continue;
-        }
-        if t.starts_with("Clocks Event Reasons") {
-            in_reasons = true;
-            continue;
-        }
-        let Some((key, raw)) = t.split_once(':') else {
-            if !t.is_empty() {
-                in_reasons = false;
-            }
-            continue;
-        };
-        if !in_reasons {
-            continue;
-        }
-        let active = match raw.trim() {
-            "Active" => true,
-            "Not Active" => false,
-            _ => continue,
-        };
-        if matches!(
-            key.trim(),
-            "SW Thermal Slowdown" | "HW Thermal Slowdown" | "HW Power Brake Slowdown"
-        ) {
-            seen = true;
-            any |= active;
-        }
-    }
-    seen.then_some(any)
-}
 
 /// Every `thermal_zone*/temp` under `root`, °C, in numeric zone order.
 pub fn read_zones(root: &Path) -> Vec<f64> {
@@ -93,12 +32,8 @@ pub fn read_zones(root: &Path) -> Vec<f64> {
 pub fn collect() -> HostThermal {
     HostThermal {
         chassis_temps_c: read_zones(Path::new("/sys/class/thermal")),
-        throttle_thermal: run(&["-q", "-d", "PERFORMANCE"])
-            .as_deref()
-            .and_then(parse_throttle_thermal),
-        sm_clock_max_mhz: run(&["--query-gpu=clocks.max.sm", "--format=csv,noheader,nounits"])
-            .as_deref()
-            .and_then(parse_clock_max),
+        throttle_thermal: crate::telemetry::nvidia::throttle_thermal(),
+        sm_clock_max_mhz: crate::telemetry::nvidia::clock_max_mhz(),
         mem_total_kb: crate::telemetry::meminfo::read()
             .total_bytes
             .map(|b| b / 1024),
@@ -110,51 +45,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_thermal_reasons_are_read_from_the_reasons_block_only() {
-        // Verbatim from `nvidia-smi -q -d PERFORMANCE` on a GB10 (driver
-        // 580), with HW Thermal Slowdown flipped to Active.
-        let text = "\
-    Clocks Event Reasons
-        Idle                                           : Not Active
-        Applications Clocks Setting                    : Not Active
-        SW Power Cap                                   : Active
-        HW Slowdown                                    : Not Active
-            HW Thermal Slowdown                        : Active
-            HW Power Brake Slowdown                    : Not Active
-        Sync Boost                                     : Not Active
-        SW Thermal Slowdown                            : Not Active
-    Clocks Event Reasons Counters
-        SW Thermal Slowdown                            : 12 us
-";
-        assert_eq!(parse_throttle_thermal(text), Some(true));
-        let cool = text.replace(
-            "HW Thermal Slowdown                        : Active",
-            "HW Thermal Slowdown                        : Not Active",
-        );
-        // NEGATIVE CONTROL for the spelling: the counters-block name is not
-        // the reasons-block name, and a fixture with the wrong one would pass
-        // by never matching.
-        assert_eq!(
-            parse_throttle_thermal(
-                "    Clocks Event Reasons\n        HW Power Brake Slowdown : Active\n"
-            ),
-            Some(true)
-        );
-        // SW power capping alone is not a thermal alert.
-        assert_eq!(parse_throttle_thermal(&cool), Some(false));
-        // NEGATIVE CONTROL: no reasons block at all is unknown, not false.
-        assert_eq!(parse_throttle_thermal("    Performance State : P0\n"), None);
-        // A counters block is not read as reasons.
-        let only_counters =
-            "    Clocks Event Reasons Counters\n        HW Thermal Slowdown : 5 us\n";
-        assert_eq!(parse_throttle_thermal(only_counters), None);
-    }
-
-    #[test]
-    fn the_clock_ceiling_and_zones_parse_as_numbers_or_not_at_all() {
-        assert_eq!(parse_clock_max("3003\n"), Some(3003.0));
-        assert_eq!(parse_clock_max("[N/A]\n"), None);
-        assert_eq!(parse_clock_max("0\n"), None);
+    fn the_zones_parse_as_numbers_or_not_at_all() {
         let dir = std::env::temp_dir().join(format!("zones-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         for (n, t) in [(0, "65000"), (10, "59000"), (2, "notanumber"), (1, "62500")] {

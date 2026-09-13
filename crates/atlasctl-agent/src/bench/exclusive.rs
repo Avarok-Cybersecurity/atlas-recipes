@@ -139,26 +139,9 @@ pub fn spark_pids() -> Vec<u32> {
         .unwrap_or_default()
 }
 
-/// `nvidia-smi --query-compute-apps=pid,process_name`.
+/// The compute apps holding the device, `pid, process_name` per line.
 pub fn gpu_apps() -> Vec<String> {
-    std::process::Command::new("nvidia-smi")
-        .args([
-            "--query-compute-apps=pid,process_name",
-            "--format=csv,noheader",
-        ])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
+    crate::telemetry::nvidia::compute_apps()
 }
 
 /// `MemAvailable / MemTotal`, the same reading Atlas's self-start applies.

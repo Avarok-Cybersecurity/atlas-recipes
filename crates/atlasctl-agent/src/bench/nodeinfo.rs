@@ -8,45 +8,6 @@ use atlasctl_protocol::fleet::Metric;
 use atlasctl_protocol::msg::bench::Sha;
 use atlasctl_protocol::msg::bench_node::{BenchNodeInfo, BuiltSha, GpuInfo, RepoInfo};
 
-/// `nvidia-smi` header line → the CUDA version it names (`13.0`).
-fn cuda_version() -> String {
-    std::process::Command::new("nvidia-smi")
-        .stdin(std::process::Stdio::null())
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| {
-            let text = String::from_utf8_lossy(&o.stdout).to_string();
-            let i = text.find("CUDA Version:")?;
-            text[i + 13..].split_whitespace().next().map(str::to_owned)
-        })
-        .unwrap_or_default()
-}
-
-/// `nvidia-smi --query-gpu=name,driver_version,count`.
-fn gpu_identity() -> Option<(String, String, u32)> {
-    let out = std::process::Command::new("nvidia-smi")
-        .args([
-            "--query-gpu=name,driver_version,count",
-            "--format=csv,noheader",
-        ])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let line = String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .next()?
-        .to_string();
-    let mut parts = line.split(',').map(str::trim);
-    let name = parts.next()?.to_string();
-    let driver = parts.next()?.to_string();
-    let count = parts.next()?.parse().unwrap_or(1);
-    Some((name, driver, count))
-}
-
 /// The signing identity Atlas would use: fingerprint = first 16 hex of
 /// SHA-256(public key), the same rule `atlas-plugin`'s `signing.rs` applies.
 fn signer(atlas_home: &std::path::Path) -> (Option<String>, Option<String>) {
@@ -125,11 +86,11 @@ pub fn node_info(host: &BenchHost) -> BenchNodeInfo {
         .as_ref()
         .map(|n| n.name.clone())
         .unwrap_or_else(|| atlasctl_protocol::fleet::DisplayName::new("unknown"));
-    let gpu = gpu_identity().map(|(gname, driver, count)| GpuInfo {
+    let gpu = crate::telemetry::nvidia::identity().map(|(gname, driver, count)| GpuInfo {
         name: gname,
         count,
         driver_version: driver,
-        cuda_version: cuda_version(),
+        cuda_version: crate::telemetry::nvidia::cuda_version(),
         sm_clock_mhz: vitals
             .as_ref()
             .map_or(Metric::Unsupported, |v| v.sm_clock_mhz),
