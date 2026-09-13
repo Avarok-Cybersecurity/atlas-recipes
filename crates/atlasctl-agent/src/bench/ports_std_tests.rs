@@ -4,7 +4,6 @@ use super::*;
 use crate::bench::child::{parse_progress, parse_verdict, sanitize};
 use atlasctl_protocol::msg::bench::MAX_LOG_LINE_BYTES;
 use atlasctl_protocol::msg::bench_event::VerdictKind;
-use std::sync::Arc;
 
 #[test]
 fn the_verdict_line_is_parsed_exactly_as_atlas_prints_it() {
@@ -206,7 +205,7 @@ fn spawn_and_wait_read_a_real_child() {
         ..plan
     };
     let child = ports.spawn(&plan).unwrap();
-    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel = std::sync::Arc::new(AtomicBool::new(false));
     let c2 = cancel.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(500));
