@@ -41,6 +41,9 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     // rather than as whichever of the three state files happened to be touched
     // first — which is how it surfaced as a bare `Permission denied`.
     crate::configdir::ensure_usable(&config_dir)?;
+    // Read before anything binds: a bench.yaml that names a missing checkout
+    // is a misconfiguration to refuse now, not a job to fail hours later.
+    let bench_config = atlasctl_agent::bench::BenchConfig::load(&config_dir)?;
 
     // Acquired only when a browser will actually be served. A node that exists
     // to hold a rank talks to its peers over mutually authenticated TLS and
@@ -392,6 +395,34 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         // Serving the peer channel is what turns a pairing into a working
         // link: it is how a peer's real vitals and verified link class arrive,
         // rather than a beacon's unauthenticated word for them.
+        // Bench: present only when the operator wrote bench.yaml. Absent is a
+        // disabled surface that says so; present-but-wrong refused at
+        // startup above, before any port was bound.
+        let (bench, bench_disabled) = match &bench_config {
+            Ok(cfg) => match atlasctl_agent::bench::BenchHost::new(
+                cfg.clone(),
+                identity.id(),
+                Arc::clone(&fleet),
+            ) {
+                Ok(host) => {
+                    eprintln!(
+                        "bench: enabled (repo {}, home {}, class {})",
+                        cfg.atlas_repo.display(),
+                        cfg.atlas_home.display(),
+                        cfg.hardware
+                    );
+                    (Some(host), None)
+                }
+                Err(e) => {
+                    eprintln!("bench: disabled — {e:#}");
+                    (None, Some(format!("{e:#}")))
+                }
+            },
+            Err(disabled) => {
+                eprintln!("bench: disabled — {}", disabled.0);
+                (None, Some(disabled.0.clone()))
+            }
+        };
         atlasctl_agent::daemon::spawn_peer_work(atlasctl_agent::daemon::PeerWork {
             fleet: Arc::clone(&fleet),
             identity: Arc::clone(&identity),
@@ -402,6 +433,8 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
             joining: Arc::clone(&joining),
             accelerator: accelerator.clone(),
             control: control_host,
+            bench,
+            bench_disabled,
         });
 
         atlasctl_agent::daemon::spawn_all(

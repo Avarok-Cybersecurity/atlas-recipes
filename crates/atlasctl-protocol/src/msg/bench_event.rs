@@ -161,8 +161,9 @@ pub enum EventKind {
     LogTruncated {
         dropped_bytes: u64,
     },
+    /// Nested, not flattened: `Verdict.kind` would collide with this
+    /// enum's own `kind` tag.
     Verdict {
-        #[serde(flatten)]
         verdict: Verdict,
     },
     Artifact {

@@ -144,6 +144,8 @@ pub(super) async fn spawn_serving(
         )),
         peer_port: a.port,
         answer_budget,
+        bench: None,
+        bench_disabled: None,
     });
     let accepted = Arc::clone(&a.accepted);
     tokio::spawn(async move {

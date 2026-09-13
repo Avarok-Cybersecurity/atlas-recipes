@@ -15,8 +15,10 @@ atlasctl-protocol.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json = "1"
+serde_yaml_ng.workspace = true
+base64 = "0.22"
 axum = { version = "0.8", features = ["ws"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "process", "fs", "io-util", "time"] }
 subtle = "2"
 thiserror.workspace = true
 ed25519-dalek = { version = "3", default-features = false, features = ["pkcs8", "alloc"] }

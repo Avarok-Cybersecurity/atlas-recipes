@@ -50,6 +50,11 @@ pub(crate) struct PeerServe {
     /// a field rather than the constant inlined so a test does not need a
     /// real minute to prove the timeout path.
     pub answer_budget: Duration,
+    /// The bench host, when this agent has a `bench.yaml`. `None` still
+    /// answers `NodeInfo` (saying why) and refuses everything else.
+    pub bench: Option<Arc<crate::bench::BenchHost>>,
+    /// Why bench is off, for the `NodeInfo` answer.
+    pub bench_disabled: Option<String>,
 }
 
 /// Introduce ourselves and then answer this pinned peer until it hangs up.
@@ -132,6 +137,25 @@ where
             },
             PeerFrame::ControlTo { node, req } => PeerFrame::ControlReply {
                 rep: relay_control(ctx, sender, node, req).await,
+            },
+            // Attach turns the connection into an event stream and ends it
+            // when the job is done; every other bench request is one reply.
+            PeerFrame::Bench {
+                req: atlasctl_protocol::msg::BenchReq::Attach { job, from_seq },
+            } => {
+                super::bench_serve::serve_attach(stream, ctx, sender, job, from_seq).await;
+                return;
+            }
+            PeerFrame::Bench { req } => PeerFrame::BenchReply {
+                rep: super::bench_serve::terminal_bench(
+                    ctx.bench.as_ref(),
+                    sender,
+                    &ctx.pins,
+                    local,
+                    ctx.fleet.local_name(),
+                    ctx.bench_disabled.as_deref(),
+                    req,
+                ),
             },
             // Anything else is out of place mid-serving — a hello, a pairing
             // frame — and the conversation ends, exactly as before the
