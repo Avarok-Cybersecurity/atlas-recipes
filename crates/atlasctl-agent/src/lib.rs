@@ -38,4 +38,4 @@ pub mod token;
 pub mod transport;
 
 /// Port the browser control channel listens on.
-pub const DEFAULT_PORT: u16 = 34333;
+pub use atlasctl_protocol::DEFAULT_BROWSER_PORT as DEFAULT_PORT;
