@@ -341,3 +341,58 @@ async fn an_unpinned_caller_never_gets_past_the_handshake() {
     let d = e.downcast_ref::<DialError>().expect("typed");
     assert!(d.not_paired(), "{d}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn revoking_the_grant_cuts_an_attached_stream_at_its_next_event() {
+    let (node, sub, sock) = fleet("bl-revoke", true).await;
+    let (_, rep) = send_bench(
+        &sub.identity,
+        sub.pins.clone(),
+        sock,
+        &intro(),
+        &submit("k-revoke"),
+    )
+    .await
+    .expect("submit");
+    let BenchRep::Accepted { job, .. } = rep else {
+        panic!("{rep:?}")
+    };
+    // Attach while the job is queued (no worker: it stays queued), read the
+    // Queued event, then revoke.
+    let mut stream = attach(&sub.identity, sub.pins.clone(), sock, &intro(), &job, 1)
+        .await
+        .expect("attach");
+    let first = stream.next().await.expect("event").expect("queued");
+    assert!(matches!(first.kind, EventKind::Queued { .. }));
+    assert!(node.pins.set_bench(sub.id(), false).expect("revoke"));
+    // Something has to wake the server's loop: cancelling the job appends
+    // a Done event. The stream must end on the refusal, never deliver it.
+    let (_, c) = send_bench(
+        &sub.identity,
+        sub.pins.clone(),
+        sock,
+        &intro(),
+        &BenchReq::Cancel { job: job.clone() },
+    )
+    .await
+    .expect("cancel reply");
+    // NEGATIVE CONTROL for the revocation itself: the cancel is refused
+    // too, since the grant is gone for every frame.
+    assert!(
+        matches!(
+            c,
+            BenchRep::Refused {
+                refusal: BenchRefusal::NotGranted { .. },
+                ..
+            }
+        ),
+        "{c:?}"
+    );
+    // The server loop wakes on the journal or its heartbeat tick; either
+    // way the next thing the client sees is the refusal.
+    let e = tokio::time::timeout(Duration::from_secs(20), stream.next())
+        .await
+        .expect("within a heartbeat")
+        .expect_err("cut");
+    assert!(e.downcast_ref::<AttachRefused>().is_some(), "{e:#}");
+}

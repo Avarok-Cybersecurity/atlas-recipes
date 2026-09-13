@@ -159,6 +159,13 @@ pub(crate) async fn serve_attach<S>(
     let mut watch = journal.watch();
     let mut next = from_seq.max(1);
     loop {
+        // The grant is re-read every pass: a revocation cuts an attached
+        // stream at its next event, not at its next connection.
+        if let Err(refusal) = grant_of(&ctx.pins, sender, local) {
+            let _ = write_frame(stream, &refuse(refusal)).await;
+            let _ = tokio::io::AsyncWriteExt::shutdown(stream).await;
+            return;
+        }
         // Everything journaled since `next`.
         let events = match journal.replay(next) {
             Ok(e) => e,
