@@ -5,8 +5,29 @@
 //! mean. Pure functions over `/proc` and text; [`ports_std`](super::ports_std)
 //! is the only caller that spawns.
 
+use anyhow::Result;
 use atlasctl_protocol::msg::bench::MAX_LOG_LINE_BYTES;
 use atlasctl_protocol::msg::bench_event::{EventKind, Verdict, VerdictKind};
+
+/// Put the child in its own process group, so a cancel can reach the whole
+/// tree (`kill_group`) and not just the shell that fronted it.
+///
+/// # Errors
+/// On a platform without process groups: a bench child that cannot be
+/// cancelled as a unit must not be started at all.
+#[cfg(unix)]
+pub fn in_own_process_group(cmd: &mut std::process::Command) -> Result<&mut std::process::Command> {
+    use std::os::unix::process::CommandExt;
+    Ok(cmd.process_group(0))
+}
+
+#[cfg(not(unix))]
+pub fn in_own_process_group(cmd: &mut std::process::Command) -> Result<&mut std::process::Command> {
+    let _ = cmd;
+    anyhow::bail!(
+        "bench jobs run on Linux only: a child needs its own process group to be cancellable"
+    )
+}
 
 /// `/proc/<pid>/stat` field 22, the process start time in clock ticks — the
 /// thing that tells a live child from a pid the kernel reused.

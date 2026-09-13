@@ -123,6 +123,14 @@ impl BenchConfig {
     /// If the file exists but does not parse or names something that is not
     /// there.
     pub fn load(dir: &Path) -> Result<Result<Self, Disabled>> {
+        // The runner needs process groups and `/proc`: a bench.yaml on any
+        // other platform is a disabled surface that says why, not a job
+        // that fails at its first spawn.
+        if !cfg!(unix) {
+            return Ok(Err(Disabled(
+                "bench jobs run on Linux only (process groups, /proc)".into(),
+            )));
+        }
         let path = dir.join(FILE);
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,

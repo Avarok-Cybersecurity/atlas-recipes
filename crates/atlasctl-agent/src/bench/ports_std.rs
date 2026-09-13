@@ -199,21 +199,20 @@ impl Ports for StdPorts {
     }
 
     fn build(&self, sha: &Sha, worktree: &Path, cancel: &AtomicBool) -> Result<BuildResult> {
-        use std::os::unix::process::CommandExt;
         let started = Instant::now();
         std::fs::create_dir_all(self.cfg.target_dir())?;
         let log = self.build_dir(sha).join("build.log");
         std::fs::create_dir_all(self.build_dir(sha))?;
         let logf = std::fs::File::create(&log)?;
-        let mut child = std::process::Command::new("cargo")
-            .args(["build", "--release", "--bin", "spark"])
+        let mut cmd = std::process::Command::new("cargo");
+        cmd.args(["build", "--release", "--bin", "spark"])
             .current_dir(worktree)
             .env_clear()
             .envs(self.cfg.child_env())
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::from(logf.try_clone()?))
-            .stderr(std::process::Stdio::from(logf))
-            .process_group(0)
+            .stderr(std::process::Stdio::from(logf));
+        let mut child = super::child::in_own_process_group(&mut cmd)?
             .spawn()
             .context("spawning cargo")?;
         let timeout = Duration::from_secs(u64::from(self.cfg.build_timeout_s));
@@ -316,21 +315,20 @@ impl Ports for StdPorts {
     }
 
     fn spawn(&self, plan: &RunPlan) -> Result<ChildHandle> {
-        use std::os::unix::process::CommandExt;
         let (program, args) = plan.argv.split_first().context("empty argv")?;
         let logf = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&plan.log_path)?;
-        let child = std::process::Command::new(program)
-            .args(args)
+        let mut cmd = std::process::Command::new(program);
+        cmd.args(args)
             .current_dir(&plan.cwd)
             .env_clear()
             .envs(plan.env.iter().cloned())
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::from(logf.try_clone()?))
-            .stderr(std::process::Stdio::from(logf))
-            .process_group(0)
+            .stderr(std::process::Stdio::from(logf));
+        let child = super::child::in_own_process_group(&mut cmd)?
             .spawn()
             .with_context(|| format!("spawning {program}"))?;
         let pid = child.id();

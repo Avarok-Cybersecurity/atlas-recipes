@@ -47,6 +47,7 @@ fn log_lines_are_sanitised_and_bounded() {
     assert!(s.ends_with('…'));
 }
 
+#[cfg(unix)]
 #[test]
 fn start_ticks_reads_our_own_process_and_identifies_it() {
     let me = std::process::id();
@@ -135,6 +136,7 @@ fn a_cached_binary_is_a_hit_only_when_provenance_and_bytes_agree() {
 
 /// A real child in its own process group: its output is tailed into events,
 /// its verdict line is read, and a cancel kills it.
+#[cfg(unix)]
 #[test]
 fn spawn_and_wait_read_a_real_child() {
     let dir = std::env::temp_dir().join(format!("bench-child-{}", std::process::id()));
