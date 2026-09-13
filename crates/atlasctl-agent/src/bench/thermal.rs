@@ -61,7 +61,7 @@ pub fn parse_throttle_thermal(text: &str) -> Option<bool> {
         };
         if matches!(
             key.trim(),
-            "SW Thermal Slowdown" | "HW Thermal Slowdown" | "HW Power Braking"
+            "SW Thermal Slowdown" | "HW Thermal Slowdown" | "HW Power Brake Slowdown"
         ) {
             seen = true;
             any |= active;
@@ -111,20 +111,34 @@ mod tests {
 
     #[test]
     fn the_thermal_reasons_are_read_from_the_reasons_block_only() {
+        // Verbatim from `nvidia-smi -q -d PERFORMANCE` on a GB10 (driver
+        // 580), with HW Thermal Slowdown flipped to Active.
         let text = "\
     Clocks Event Reasons
-        Idle                              : Not Active
-        SW Power Capping                  : Active
-        SW Thermal Slowdown               : Not Active
-        HW Thermal Slowdown               : Active
-        HW Power Braking                  : Not Active
+        Idle                                           : Not Active
+        Applications Clocks Setting                    : Not Active
+        SW Power Cap                                   : Active
+        HW Slowdown                                    : Not Active
+            HW Thermal Slowdown                        : Active
+            HW Power Brake Slowdown                    : Not Active
+        Sync Boost                                     : Not Active
+        SW Thermal Slowdown                            : Not Active
     Clocks Event Reasons Counters
-        SW Thermal Slowdown               : 12 us
+        SW Thermal Slowdown                            : 12 us
 ";
         assert_eq!(parse_throttle_thermal(text), Some(true));
         let cool = text.replace(
-            "HW Thermal Slowdown               : Active",
-            "HW Thermal Slowdown               : Not Active",
+            "HW Thermal Slowdown                        : Active",
+            "HW Thermal Slowdown                        : Not Active",
+        );
+        // NEGATIVE CONTROL for the spelling: the counters-block name is not
+        // the reasons-block name, and a fixture with the wrong one would pass
+        // by never matching.
+        assert_eq!(
+            parse_throttle_thermal(
+                "    Clocks Event Reasons\n        HW Power Brake Slowdown : Active\n"
+            ),
+            Some(true)
         );
         // SW power capping alone is not a thermal alert.
         assert_eq!(parse_throttle_thermal(&cool), Some(false));
