@@ -162,6 +162,16 @@ pub struct Pin {
     /// pin into a license to stop the operator's local workloads.
     #[serde(default)]
     pub controller: bool,
+    /// Whether this peer may submit BENCHMARK JOBS here: have this machine
+    /// build the Atlas checkout its operator configured, at a commit the
+    /// configured remote already has, run one certification gate from it,
+    /// and hand the records back. A separate bit from `controller` because
+    /// it is a different — and strictly stronger — consent: `controller`
+    /// drives the launch surface a browser has; `bench` runs code from a git
+    /// history on this box. Neither bit implies the other, and neither
+    /// arrives by upgrade: it defaults to false for every pin ever written.
+    #[serde(default)]
+    pub bench: bool,
 }
 
 /// The set of peers this machine trusts.
@@ -247,6 +257,21 @@ impl PinStore {
             return Ok(false);
         };
         pin.controller = granted;
+        self.save(&pins)?;
+        Ok(true)
+    }
+
+    /// Grant or revoke the `bench` right on an existing pin. Returns `false`
+    /// when there is no such pin; a right is never created by granting it.
+    ///
+    /// # Errors
+    /// If the pin file cannot be read or written.
+    pub fn set_bench(&self, id: NodeId, granted: bool) -> Result<bool> {
+        let mut pins = self.load()?;
+        let Some(pin) = pins.get_mut(&id) else {
+            return Ok(false);
+        };
+        pin.bench = granted;
         self.save(&pins)?;
         Ok(true)
     }

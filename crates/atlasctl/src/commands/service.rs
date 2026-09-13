@@ -110,7 +110,7 @@ pub fn install(args: &crate::cli::AgentInstallArgs) -> Result<()> {
         );
     }
     if let Some(join) = join {
-        join_fleet(&join, args.grant_control)?;
+        join_fleet(&join, args.grant_control, args.grant_bench)?;
     } else {
         println!("\nPair your browser with: atlasctl agent token");
     }
@@ -123,7 +123,7 @@ pub fn install(args: &crate::cli::AgentInstallArgs) -> Result<()> {
 /// inverse of `atlasctl peer add`. Everything about what a pairing means is
 /// still [`atlasctl_agent::peer::join::dial_and_pair`]; only the direction
 /// differs.
-fn join_fleet(join: &crate::joinarg::Join, grant_control: bool) -> Result<()> {
+fn join_fleet(join: &crate::joinarg::Join, grant_control: bool, grant_bench: bool) -> Result<()> {
     use atlasctl_agent::identity::{Identity, PinStore};
 
     let dir = crate::hostinfo::config_dir()?;
@@ -186,6 +186,19 @@ fn join_fleet(join: &crate::joinarg::Join, grant_control: bool) -> Result<()> {
         // implied by joining, and never decided by the machine that invited us.
         grant_control,
     )?;
+    // The bench grant is a second write on purpose: `record_pairing` mints a
+    // pin with `bench: false`, and the right is added afterwards by the same
+    // hand that typed `--grant-bench`. If the second write fails the pin
+    // stands and the exact command to finish the job is printed.
+    if grant_bench {
+        match pins.set_bench(paired.node, true) {
+            Ok(true) => println!("  bench granted: this fleet may run certification gates here"),
+            Ok(false) | Err(_) => println!(
+                "  the bench grant was NOT written; run `atlasctl peer grant-bench {}`",
+                paired.node.short()
+            ),
+        }
+    }
 
     // Sanitised: the name is the peer's, and the peer is not trusted yet.
     println!(

@@ -25,6 +25,21 @@ fn main() -> std::process::ExitCode {
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
+            // `bench` has a distinct exit code per failure class and, under
+            // `--json`, puts the error on stdout where its caller is reading.
+            if let Some(b) = e.downcast_ref::<commands::bench::exit::BenchError>() {
+                if b.reported {
+                    // Already part of the command's own output.
+                } else if b.json {
+                    match serde_json::to_string(&b.obj) {
+                        Ok(line) => println!("{line}"),
+                        Err(e) => eprintln!("error: {b}\n  (and could not encode it: {e})"),
+                    }
+                } else {
+                    eprintln!("error: {b}");
+                }
+                return b.exit.exit();
+            }
             // One line per cause, so a nested failure reads as a chain rather
             // than a wall.
             eprintln!("error: {e}");
@@ -68,6 +83,9 @@ fn run() -> Result<()> {
         Command::Peer(PeerCmd::Remove(a)) => commands::peer::remove(&a),
         Command::Peer(PeerCmd::GrantControl(a)) => commands::peer::grant_control(&a),
         Command::Peer(PeerCmd::RevokeControl(a)) => commands::peer::revoke_control(&a),
+        Command::Peer(PeerCmd::GrantBench(a)) => commands::peer::grant_bench(&a),
+        Command::Peer(PeerCmd::RevokeBench(a)) => commands::peer::revoke_bench(&a),
         Command::Doctor => commands::doctor::run(),
+        Command::Bench(c) => commands::bench::dispatch(&c).map_err(Into::into),
     }
 }

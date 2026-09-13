@@ -145,3 +145,198 @@ mod tests {
         assert_eq!(parse(""), Reading::default());
     }
 }
+
+// ── The bench surface's questions ──────────────────────────────────────────
+//
+// What a bench node reports about its accelerator beyond the per-second
+// sample above: identity, the CUDA version, the clock ceiling, the thermal
+// clock-event reasons, and the compute apps holding the device. Each is one
+// `nvidia-smi` invocation, kept here — the provider module — so no neutral
+// module carries the vendor's tool name. Parsing is separate from running,
+// and tested on captured output.
+
+/// Run `nvidia-smi` with `args`; `None` when it is absent or unhappy.
+fn run(args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new("nvidia-smi")
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// `(name, driver_version, count)` of the first GPU.
+pub fn identity() -> Option<(String, String, u32)> {
+    let text = run(&[
+        "--query-gpu=name,driver_version,count",
+        "--format=csv,noheader",
+    ])?;
+    parse_identity(&text)
+}
+
+pub fn parse_identity(csv: &str) -> Option<(String, String, u32)> {
+    let mut parts = csv.lines().next()?.split(',').map(str::trim);
+    let name = parts.next()?.to_string();
+    let driver = parts.next()?.to_string();
+    let count = parts.next()?.parse().unwrap_or(1);
+    Some((name, driver, count))
+}
+
+/// The CUDA version the driver header names (`13.0`); empty when unknown.
+pub fn cuda_version() -> String {
+    run(&[])
+        .as_deref()
+        .and_then(parse_cuda_version)
+        .unwrap_or_default()
+}
+
+pub fn parse_cuda_version(header: &str) -> Option<String> {
+    let i = header.find("CUDA Version:")?;
+    header[i + 13..]
+        .split_whitespace()
+        .next()
+        .map(str::to_owned)
+}
+
+/// `clocks.max.sm` of the first GPU, MHz.
+pub fn clock_max_mhz() -> Option<f64> {
+    run(&["--query-gpu=clocks.max.sm", "--format=csv,noheader,nounits"])
+        .as_deref()
+        .and_then(parse_clock_max)
+}
+
+pub fn parse_clock_max(csv: &str) -> Option<f64> {
+    let n: f64 = csv.lines().next()?.trim().parse().ok()?;
+    (n > 0.0).then_some(n)
+}
+
+/// Whether any THERMAL reason under "Clocks Event Reasons" is `Active`.
+/// `None` when the block is absent. SW Power Capping is excluded on
+/// purpose: on GB10 it is the steady state of a power-limited part.
+pub fn throttle_thermal() -> Option<bool> {
+    run(&["-q", "-d", "PERFORMANCE"])
+        .as_deref()
+        .and_then(parse_throttle_thermal)
+}
+
+pub fn parse_throttle_thermal(text: &str) -> Option<bool> {
+    let mut in_reasons = false;
+    let mut seen = false;
+    let mut any = false;
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with("Clocks Event Reasons Counters") {
+            in_reasons = false;
+            continue;
+        }
+        if t.starts_with("Clocks Event Reasons") {
+            in_reasons = true;
+            continue;
+        }
+        let Some((key, raw)) = t.split_once(':') else {
+            if !t.is_empty() {
+                in_reasons = false;
+            }
+            continue;
+        };
+        if !in_reasons {
+            continue;
+        }
+        let active = match raw.trim() {
+            "Active" => true,
+            "Not Active" => false,
+            _ => continue,
+        };
+        if matches!(
+            key.trim(),
+            "SW Thermal Slowdown" | "HW Thermal Slowdown" | "HW Power Brake Slowdown"
+        ) {
+            seen = true;
+            any |= active;
+        }
+    }
+    seen.then_some(any)
+}
+
+/// `pid, process_name` of every compute app on the device, one per line.
+pub fn compute_apps() -> Vec<String> {
+    run(&[
+        "--query-compute-apps=pid,process_name",
+        "--format=csv,noheader",
+    ])
+    .map(|text| {
+        text.lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_owned)
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod bench_probe_tests {
+    use super::*;
+
+    #[test]
+    fn the_thermal_reasons_are_read_from_the_reasons_block_only() {
+        // Verbatim from `nvidia-smi -q -d PERFORMANCE` on a GB10 (driver
+        // 580), with HW Thermal Slowdown flipped to Active.
+        let text = "\
+    Clocks Event Reasons
+        Idle                                           : Not Active
+        Applications Clocks Setting                    : Not Active
+        SW Power Cap                                   : Active
+        HW Slowdown                                    : Not Active
+            HW Thermal Slowdown                        : Active
+            HW Power Brake Slowdown                    : Not Active
+        Sync Boost                                     : Not Active
+        SW Thermal Slowdown                            : Not Active
+    Clocks Event Reasons Counters
+        SW Thermal Slowdown                            : 12 us
+";
+        assert_eq!(parse_throttle_thermal(text), Some(true));
+        let cool = text.replace(
+            "HW Thermal Slowdown                        : Active",
+            "HW Thermal Slowdown                        : Not Active",
+        );
+        // NEGATIVE CONTROL for the spelling: the counters-block name is not
+        // the reasons-block name, and a fixture with the wrong one would pass
+        // by never matching.
+        assert_eq!(
+            parse_throttle_thermal(
+                "    Clocks Event Reasons\n        HW Power Brake Slowdown : Active\n"
+            ),
+            Some(true)
+        );
+        // SW power capping alone is not a thermal alert.
+        assert_eq!(parse_throttle_thermal(&cool), Some(false));
+        // NEGATIVE CONTROL: no reasons block at all is unknown, not false.
+        assert_eq!(parse_throttle_thermal("    Performance State : P0\n"), None);
+        // A counters block is not read as reasons.
+        let only_counters =
+            "    Clocks Event Reasons Counters\n        HW Thermal Slowdown : 5 us\n";
+        assert_eq!(parse_throttle_thermal(only_counters), None);
+    }
+
+    #[test]
+    fn identity_cuda_and_clock_ceiling_parse_from_captured_output() {
+        assert_eq!(
+            parse_identity("NVIDIA GB10, 580.126.09, 1\n"),
+            Some(("NVIDIA GB10".into(), "580.126.09".into(), 1))
+        );
+        assert_eq!(parse_identity(""), None);
+        assert_eq!(
+            parse_cuda_version(
+                "| NVIDIA-SMI 580.126.09    Driver Version: 580.126.09    CUDA Version: 13.0     |"
+            ),
+            Some("13.0".into())
+        );
+        assert_eq!(parse_cuda_version("no header"), None);
+        assert_eq!(parse_clock_max("3003\n"), Some(3003.0));
+        assert_eq!(parse_clock_max("[N/A]\n"), None);
+        assert_eq!(parse_clock_max("0\n"), None);
+    }
+}

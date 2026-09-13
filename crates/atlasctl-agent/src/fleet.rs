@@ -425,6 +425,12 @@ impl LocalFleet {
         self.seen.lock().ok()
     }
 
+    /// This machine's display name.
+    #[must_use]
+    pub fn local_name(&self) -> DisplayName {
+        self.name.clone()
+    }
+
     /// This machine's id and a fresh vitals sample, when anything can supply
     /// one.
     ///

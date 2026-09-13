@@ -18,9 +18,22 @@ pub use fleet::{
     NodeDescriptor, NodeId, NodeIdError, NodeVitals, PairingState, Severity,
 };
 pub use id::{RecipeId, RecipeIdError};
-pub use msg::{AgentError, ClientMsg, RecipeInfo, RunningLaunch, ServerMsg};
+pub use msg::{
+    AgentError, BenchEvent, BenchNodeInfo, BenchRefusal, BenchRep, BenchReq, ClientMsg, GateId,
+    JobId, JobKey, JobState, RecipeInfo, RunningLaunch, ServerMsg, Sha,
+};
 pub use settings::{Bound, Group, SettingError, SettingSpec, SettingValue};
 pub use telemetry::{DeviceStats, EngineStats, LaunchPhase, Stats, TelemetryCaps};
+
+/// The loopback port the browser channel listens on.
+///
+/// Defined here, in the crate every side depends on, so the CLI, the agent and
+/// a remote client all mean the same number when they omit a port.
+pub const DEFAULT_BROWSER_PORT: u16 = 34333;
+
+/// The port the mutually-authenticated peer channel listens on. This is the
+/// port a node address means when it omits one (`10.10.10.2`, `dgx3.local`).
+pub const DEFAULT_PEER_PORT: u16 = 34334;
 
 /// Protocol version this build speaks.
 ///

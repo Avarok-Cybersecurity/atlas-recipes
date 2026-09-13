@@ -40,19 +40,20 @@ pub fn list() -> Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     println!(
-        "{:<20}  {:<20}  {:<12}  CONTROL",
-        "NAME", "FINGERPRINT", "PAIRED"
+        "{:<20}  {:<20}  {:<12}  {:<8}  BENCH",
+        "NAME", "FINGERPRINT", "PAIRED", "CONTROL"
     );
     for pin in pins.values() {
         println!(
-            "{:<20}  {:<20}  {:<12}  {}",
+            "{:<20}  {:<20}  {:<12}  {:<8}  {}",
             pin.name.as_str(),
             pin.id.short(),
             age_text(pin.paired_at, now),
-            // The grant that lets that machine drive this one. Invisible until
+            // The grants that let that machine drive this one. Invisible until
             // now, which made it impossible to audit: an operator could not
             // answer "who can run commands on my box?" from anywhere.
-            if pin.controller { "yes" } else { "—" }
+            if pin.controller { "yes" } else { "—" },
+            if pin.bench { "yes" } else { "—" }
         );
     }
     Ok(())
@@ -271,6 +272,44 @@ pub fn revoke_control(args: &PeerNodeArgs) -> Result<()> {
     );
     println!("Revoked control from {name} ({}).", node.short());
     println!("The machine stays paired; control is refused on its next request.");
+    Ok(())
+}
+
+/// Let a paired machine submit benchmark jobs here.
+///
+/// # Errors
+/// If the prefix matches no peer, or more than one.
+pub fn grant_bench(args: &PeerNodeArgs) -> Result<()> {
+    let pins = PinStore::new(&crate::hostinfo::usable_config_dir()?);
+    let (node, name) = resolve_prefix(&pins, &args.node)?;
+    anyhow::ensure!(
+        pins.set_bench(node, true)?,
+        "{name} disappeared from the pin store before the grant was written"
+    );
+    println!("Granted bench to {name} ({}).", node.short());
+    println!("It may now have this machine build its configured Atlas checkout at a");
+    println!("commit the trusted remote already has, run one certification gate from");
+    println!("it, and take the records back. It gains no control over launches.");
+    println!(
+        "Withdraw with `atlasctl peer revoke-bench {}`.",
+        node.short()
+    );
+    Ok(())
+}
+
+/// Withdraw the bench grant.
+///
+/// # Errors
+/// If the prefix matches no peer, or more than one.
+pub fn revoke_bench(args: &PeerNodeArgs) -> Result<()> {
+    let pins = PinStore::new(&crate::hostinfo::usable_config_dir()?);
+    let (node, name) = resolve_prefix(&pins, &args.node)?;
+    anyhow::ensure!(
+        pins.set_bench(node, false)?,
+        "{name} disappeared from the pin store before the revocation was written"
+    );
+    println!("Revoked bench from {name} ({}).", node.short());
+    println!("The machine stays paired; a running job finishes, a new one is refused.");
     Ok(())
 }
 

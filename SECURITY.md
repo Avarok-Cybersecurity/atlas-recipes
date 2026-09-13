@@ -122,6 +122,39 @@ so the operator can compare them afterwards. If they do not match, unpair —
 that is a smaller window than the browser flow offers, and it is the price of a
 one-shot code that nobody has to be present to accept.
 
+## The bench grant
+
+A second, separate right: `atlasctl peer grant-bench <fingerprint>`. It is
+never implied by `controller`, and a machine that has neither is still
+paired — identity and authority are different decisions.
+
+What it consents to is narrow and worth stating in full, because it is a
+code-execution right: **the granted peer may have this node build the Atlas
+checkout named in its own `bench.yaml`, at any commit that is already
+reachable from the remote that file names, run one certification gate that
+the built binary itself lists, and read back the records that run wrote.**
+The request carries a commit, a gate id, validated parameters, a checkpoint
+name, a box class, a run cap and a note — no argv, no path, no environment,
+no URL. The node renders the command from its own configuration and runs it
+as the agent's user, in its own process group, under a scrubbed environment
+(`HOME USER LANG TERM`, a `PATH` the operator chose, `ATLAS_HOME`,
+`CARGO_TARGET_DIR`, and the keys in `bench.yaml`).
+
+The bound that matters is the remote: a peer cannot make this node run code
+that has not been pushed where the node's operator trusts. `allow_unpublished_shas`
+lifts that, and is off unless the operator writes otherwise.
+
+What the grant does *not* give: a shell, a file read outside the job's own
+artifacts (names are checked against the job's manifest, never resolved as
+paths), a second concurrent job, or a job while the box is otherwise busy.
+Every refusal is typed and names its fix; none of them is a timeout.
+
+Revocation is `peer revoke-bench` and takes effect on the next frame, not
+the next connection: the grant is re-read per request, so a stream already
+attached is cut at its next event.
+
+`docs/BENCH.md` has the file layout, the event schema and the exit codes.
+
 ## Reproducing the parity claim
 
 Serve commands are byte-identical to the reference implementation's across the

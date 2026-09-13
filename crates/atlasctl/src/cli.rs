@@ -63,6 +63,10 @@ pub enum Command {
 
     /// Check this machine for problems, including a compromised sparkrun install.
     Doctor,
+
+    /// Run a certification gate on a paired node and bring the records back.
+    #[command(subcommand)]
+    Bench(BenchCmd),
 }
 
 /// Recipe subcommands.
@@ -157,6 +161,15 @@ pub struct AgentInstallArgs {
     /// it can be read before it is run.
     #[arg(long, requires = "join")]
     pub grant_control: bool,
+
+    /// Let the fleet you are joining submit BENCHMARK JOBS to this machine:
+    /// build its configured Atlas checkout at a commit and run one gate.
+    ///
+    /// Only meaningful with `--join`, and separate from `--grant-control`:
+    /// this is the stronger right (it runs code from a git history here), so
+    /// it is said on its own, on the line the operator reads before running.
+    #[arg(long, requires = "join")]
+    pub grant_bench: bool,
 }
 
 /// `agent pair` arguments.
@@ -187,6 +200,14 @@ pub enum PeerCmd {
     GrantControl(PeerNodeArgs),
     /// Withdraw that grant. Takes effect on the machine's next connection.
     RevokeControl(PeerNodeArgs),
+    /// Let a paired machine submit benchmark jobs here: build this machine's
+    /// configured Atlas checkout at a commit its remote already has, run one
+    /// certification gate, and take the records. A stronger right than
+    /// control — it runs code from a git history on this box — and a
+    /// separate one: neither grant implies the other.
+    GrantBench(PeerNodeArgs),
+    /// Withdraw the bench grant. Takes effect on the machine's next request.
+    RevokeBench(PeerNodeArgs),
 }
 
 /// `peer add` arguments.
@@ -272,157 +293,15 @@ pub struct AgentTokenArgs {
     pub rotate: bool,
 }
 
-/// Registry subcommands.
-#[derive(Subcommand, Debug)]
-pub enum RegistryCmd {
-    /// List configured registries.
-    List,
-    /// Add a registry. Added registries supply recipe data only; they can never
-    /// cause a command to run.
-    Add(RegistryAddArgs),
-    /// Remove a registry.
-    Remove(RegistryRemoveArgs),
-    /// Update registries from git.
-    Update(RegistryUpdateArgs),
-}
-
-/// `recipe list` arguments.
-#[derive(Args, Debug)]
-pub struct ListArgs {
-    /// Only show recipes from this registry.
-    #[arg(long, value_name = "NAME")]
-    pub registry: Option<String>,
-
-    /// Include recipes that cannot be launched, with the reason.
-    #[arg(long)]
-    pub all: bool,
-}
-
-/// `recipe show` arguments.
-#[derive(Args, Debug)]
-pub struct ShowArgs {
-    /// Recipe reference: `name` or `@registry/name`.
-    pub recipe: String,
-
-    /// Print the `docker run` command this recipe implies and exit.
-    #[arg(long)]
-    pub docker: bool,
-
-    /// With `--docker`, keep host specifics symbolic so the command can be
-    /// pasted on another machine.
-    #[arg(long)]
-    pub portable: bool,
-}
-
-/// `recipe search` arguments.
-#[derive(Args, Debug)]
-pub struct SearchArgs {
-    /// Text to look for.
-    pub query: String,
-}
-
-/// `run` arguments.
-#[derive(Args, Debug)]
-pub struct RunArgs {
-    /// Recipe reference: `name` or `@registry/name`.
-    pub recipe: String,
-
-    /// Override a recipe setting, e.g. `-o max_model_len=8192`.
-    #[arg(short = 'o', long = "option", value_name = "KEY=VALUE")]
-    pub options: Vec<String>,
-
-    /// Port the model server listens on.
-    #[arg(long)]
-    pub port: Option<u16>,
-
-    /// Use a different container image than the recipe names.
-    #[arg(long, value_name = "IMAGE")]
-    pub image: Option<String>,
-
-    /// Print the command instead of running it.
-    #[arg(long)]
-    pub print: bool,
-
-    /// With `--print`, keep host specifics symbolic.
-    #[arg(long)]
-    pub portable: bool,
-
-    /// Keep the container after it exits, so its logs survive a crash.
-    #[arg(long)]
-    pub no_rm: bool,
-
-    /// Skip pulling the image.
-    #[arg(long)]
-    pub no_pull: bool,
-
-    /// This node's rank in a multi-node launch.
-    #[arg(long, requires_all = ["world_size", "master_addr"])]
-    pub rank: Option<u16>,
-
-    /// Total nodes in a multi-node launch.
-    #[arg(long)]
-    pub world_size: Option<u16>,
-
-    /// Address all ranks rendezvous on.
-    #[arg(long, value_name = "ADDR")]
-    pub master_addr: Option<String>,
-
-    /// Port all ranks rendezvous on.
-    #[arg(long, default_value_t = atlasctl_core::docker::translate::DEFAULT_MASTER_PORT)]
-    pub master_port: u16,
-}
-
-/// `stop` arguments.
-#[derive(Args, Debug)]
-pub struct StopArgs {
-    /// Recipe name, or omit with `--all`.
-    pub recipe: Option<String>,
-
-    /// Stop every recipe atlasctl started.
-    #[arg(long)]
-    pub all: bool,
-}
-
-/// `logs` arguments.
-#[derive(Args, Debug)]
-pub struct LogsArgs {
-    /// Recipe name.
-    pub recipe: String,
-
-    /// Follow the log stream.
-    #[arg(short, long)]
-    pub follow: bool,
-
-    /// Lines of history to show first.
-    #[arg(long, default_value_t = 100)]
-    pub tail: u32,
-}
-
-/// `registry add` arguments.
-#[derive(Args, Debug)]
-pub struct RegistryAddArgs {
-    /// Local name for the registry.
-    pub name: String,
-    /// Git URL to clone.
-    pub url: String,
-    /// Subdirectory within the repository that holds recipes.
-    #[arg(long, default_value = "recipes")]
-    pub subpath: String,
-}
-
-/// `registry remove` arguments.
-#[derive(Args, Debug)]
-pub struct RegistryRemoveArgs {
-    /// Registry to remove.
-    pub name: String,
-}
-
-/// `registry update` arguments.
-#[derive(Args, Debug)]
-pub struct RegistryUpdateArgs {
-    /// Update only this registry.
-    pub name: Option<String>,
-}
+pub mod bench_args;
+mod lifecycle_args;
+mod registry_args;
+pub use bench_args::BenchCmd;
+pub use lifecycle_args::{LogsArgs, RunArgs, StopArgs};
+pub use registry_args::{
+    ListArgs, RegistryAddArgs, RegistryCmd, RegistryRemoveArgs, RegistryUpdateArgs, SearchArgs,
+    ShowArgs,
+};
 
 #[cfg(test)]
 mod tests {
@@ -472,12 +351,40 @@ mod tests {
         .expect("valid");
 
         let grant = |c: Cli| match c.command {
-            Command::Agent(AgentCmd::Install(a)) => (a.grant_control, a.join),
+            Command::Agent(AgentCmd::Install(a)) => (a.grant_control, a.join, a.grant_bench),
             other => panic!("expected agent install, got {other:?}"),
         };
         assert!(grant(with).0);
         // Off unless asked: a privilege must never arrive by upgrading, and the
         // joiner's pin is written from this value.
         assert!(!grant(without).0);
+    }
+
+    /// The bench grant is its own flag with the same shape: refused without
+    /// `--join`, off by default, and independent of `--grant-control`.
+    #[test]
+    fn grant_bench_is_separate_and_needs_join() {
+        assert!(Cli::try_parse_from(["atlasctl", "agent", "install", "--grant-bench"]).is_err());
+        let c = Cli::try_parse_from([
+            "atlasctl",
+            "agent",
+            "install",
+            "--join",
+            "12345678@10.10.10.1",
+            "--grant-bench",
+        ])
+        .expect("valid");
+        match c.command {
+            Command::Agent(AgentCmd::Install(a)) => {
+                assert!(a.grant_bench && !a.grant_control);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            Cli::try_parse_from(["atlasctl", "peer", "grant-bench", "abcd"])
+                .expect("valid")
+                .command,
+            Command::Peer(PeerCmd::GrantBench(_))
+        ));
     }
 }

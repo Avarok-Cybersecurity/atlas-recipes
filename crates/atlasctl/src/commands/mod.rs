@@ -5,6 +5,7 @@
 pub mod agent;
 pub mod agentinfo;
 pub mod agentpair;
+pub mod bench;
 pub mod doctor;
 pub mod doctor_checks;
 pub mod lifecycle;

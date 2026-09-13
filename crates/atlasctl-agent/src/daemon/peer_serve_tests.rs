@@ -140,6 +140,8 @@ fn rig(tag: &str) -> Rig {
         peer_port: 34334,
         // Tests never reach a real dial; the budget only has to exist.
         answer_budget: Duration::from_secs(2),
+        bench: None,
+        bench_disabled: None,
     });
     Rig {
         _tmp: tmp,

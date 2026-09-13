@@ -14,6 +14,7 @@
 //! "launch one of the recipes this machine already has, with in-range
 //! parameters", not remote code execution.
 
+pub mod bench;
 pub mod bindfail;
 pub mod cluster;
 pub mod control;
@@ -40,8 +41,9 @@ mod wire_tests;
 #[path = "peer/pair_tests.rs"]
 mod pair_tests;
 
-/// Port the peer channel listens on.
-pub const DEFAULT_PEER_PORT: u16 = 34334;
+/// Port the peer channel listens on — the protocol crate's number, re-exported
+/// so every existing call site keeps its path.
+pub use atlasctl_protocol::DEFAULT_PEER_PORT;
 
 /// Whether this process's peer listener has ever come up, and on which port.
 ///

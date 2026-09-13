@@ -14,6 +14,7 @@
 /// `clippy::type_complexity` objects to, correctly.
 pub type BoxFut<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 
+pub mod bench;
 pub mod cluster;
 pub mod clusterdriver;
 pub mod control;
@@ -38,4 +39,4 @@ pub mod token;
 pub mod transport;
 
 /// Port the browser control channel listens on.
-pub const DEFAULT_PORT: u16 = 34333;
+pub use atlasctl_protocol::DEFAULT_BROWSER_PORT as DEFAULT_PORT;

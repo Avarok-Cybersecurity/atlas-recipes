@@ -44,6 +44,7 @@ pub const PEER_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 // The vitals and prune timers live in `daemon/housekeeping.rs`. They are
 // timers over local state; this file is the machine-to-machine half.
+mod bench_serve;
 mod housekeeping;
 mod join;
 mod peer_serve;
@@ -52,6 +53,9 @@ mod peer_serve;
 #[path = "daemon/peer_serve_tests.rs"]
 mod peer_serve_tests;
 
+#[cfg(test)]
+#[path = "daemon/bench_loopback_tests.rs"]
+mod bench_loopback_tests;
 #[cfg(test)]
 #[path = "daemon/relay_grant_tests.rs"]
 mod relay_grant_tests;
@@ -109,6 +113,10 @@ pub struct PeerWork {
     /// The control core a peer's terminal `Control` executes through — the
     /// same seven verbs, the same validation, as this machine's own browser.
     pub control: Arc<crate::control::ControlHost>,
+    /// The bench host, when this agent has a `bench.yaml`.
+    pub bench: Option<Arc<crate::bench::BenchHost>>,
+    /// Why bench is off, otherwise.
+    pub bench_disabled: Option<String>,
 }
 
 /// How long to wait before trying the peer port again.
@@ -119,15 +127,23 @@ pub struct PeerWork {
 const PEER_BIND_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub fn spawn_peer_work(w: PeerWork) {
-    spawn_peer_listener(
-        Arc::clone(&w.fleet),
-        Arc::clone(&w.identity),
-        w.pins.clone(),
-        w.peer_port,
-        w.rank,
-        w.joining,
-        w.control,
-    );
+    // One serving context for every connection, so the answer budget and the
+    // control core cannot differ between two peers of the same agent.
+    let serve = Arc::new(peer_serve::PeerServe {
+        identity: Arc::clone(&w.identity),
+        pins: w.pins.clone(),
+        fleet: Arc::clone(&w.fleet),
+        rank: w.rank,
+        control: w.control,
+        peer_port: w.peer_port,
+        answer_budget: crate::peer::control::RELAY_ANSWER_BUDGET,
+        bench: w.bench.clone(),
+        bench_disabled: w.bench_disabled,
+    });
+    spawn_peer_listener(serve, w.joining);
+    if let Some(host) = w.bench {
+        tokio::spawn(crate::bench::runner::run(host));
+    }
     spawn_peer_poll(
         w.fleet,
         w.identity,
@@ -140,25 +156,13 @@ pub fn spawn_peer_work(w: PeerWork) {
 
 /// Accept connections from paired peers.
 fn spawn_peer_listener(
-    fleet: Arc<crate::fleet::LocalFleet>,
-    identity: Arc<crate::identity::Identity>,
-    pins: crate::identity::PinStore,
-    port: u16,
-    rank: Arc<dyn RankService>,
+    serve: Arc<peer_serve::PeerServe>,
     joining: Arc<crate::joining::JoinWindow>,
-    control: Arc<crate::control::ControlHost>,
 ) {
-    // One serving context for every connection, so the answer budget and the
-    // control core cannot differ between two peers of the same agent.
-    let serve = Arc::new(peer_serve::PeerServe {
-        identity: Arc::clone(&identity),
-        pins: pins.clone(),
-        fleet: Arc::clone(&fleet),
-        rank,
-        control,
-        peer_port: port,
-        answer_budget: crate::peer::control::RELAY_ANSWER_BUDGET,
-    });
+    let port = serve.peer_port;
+    let identity = Arc::clone(&serve.identity);
+    let pins = serve.pins.clone();
+    let fleet = Arc::clone(&serve.fleet);
     tokio::spawn(async move {
         // Set once the first bind failure has been reported, so the retry loop
         // does not repeat itself forever.

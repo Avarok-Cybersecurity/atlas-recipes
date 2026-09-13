@@ -12,59 +12,6 @@ use atlasctl_core::docker::profile::{NvidiaDevices, ROOTLESS_V1};
 use atlasctl_core::io::{ProcessRunner, StdProcessRunner};
 use std::sync::Arc;
 
-/// Lets the background loops and the server share one fleet.
-///
-/// `AgentState` wants an owned `Box<dyn FleetView>` while the daemon loops need
-/// an `Arc`; this forwards rather than duplicating the state, so a peer
-/// discovered by the loops is visible to the next browser request.
-struct FleetHandle(Arc<atlasctl_agent::fleet::LocalFleet>);
-
-impl atlasctl_agent::fleet::FleetView for FleetHandle {
-    fn nodes(&self) -> Vec<atlasctl_protocol::fleet::NodeDescriptor> {
-        self.0.nodes()
-    }
-
-    fn pair<'a>(
-        &'a self,
-        node: atlasctl_protocol::fleet::NodeId,
-        code: &'a str,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = anyhow::Result<atlasctl_agent::fleet::PairOutcome>>
-                + Send
-                + 'a,
-        >,
-    > {
-        self.0.pair(node, code)
-    }
-
-    fn pair_at<'a>(
-        &'a self,
-        target: &'a str,
-        code: &'a str,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = anyhow::Result<atlasctl_agent::fleet::PairOutcome>>
-                + Send
-                + 'a,
-        >,
-    > {
-        self.0.pair_at(target, code)
-    }
-
-    fn trust(
-        &self,
-        outcome: &atlasctl_agent::fleet::PairOutcome,
-        allow_control: bool,
-    ) -> anyhow::Result<()> {
-        self.0.trust(outcome, allow_control)
-    }
-
-    fn unpair(&self, node: atlasctl_protocol::fleet::NodeId) -> anyhow::Result<bool> {
-        self.0.unpair(node)
-    }
-}
-
 /// Whether this machine can actually run a recipe, and why not if it cannot.
 ///
 /// Probed once at startup and reported to the client, so a browser can say
@@ -94,6 +41,9 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     // rather than as whichever of the three state files happened to be touched
     // first — which is how it surfaced as a bare `Permission denied`.
     crate::configdir::ensure_usable(&config_dir)?;
+    // Read before anything binds: a bench.yaml that names a missing checkout
+    // is a misconfiguration to refuse now, not a job to fail hours later.
+    let bench_config = atlasctl_agent::bench::BenchConfig::load(&config_dir)?;
 
     // Acquired only when a browser will actually be served. A node that exists
     // to hold a rank talks to its peers over mutually authenticated TLS and
@@ -445,6 +395,34 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
         // Serving the peer channel is what turns a pairing into a working
         // link: it is how a peer's real vitals and verified link class arrive,
         // rather than a beacon's unauthenticated word for them.
+        // Bench: present only when the operator wrote bench.yaml. Absent is a
+        // disabled surface that says so; present-but-wrong refused at
+        // startup above, before any port was bound.
+        let (bench, bench_disabled) = match &bench_config {
+            Ok(cfg) => match atlasctl_agent::bench::BenchHost::new(
+                cfg.clone(),
+                identity.id(),
+                Arc::clone(&fleet),
+            ) {
+                Ok(host) => {
+                    eprintln!(
+                        "bench: enabled (repo {}, home {}, class {})",
+                        cfg.atlas_repo.display(),
+                        cfg.atlas_home.display(),
+                        cfg.hardware
+                    );
+                    (Some(host), None)
+                }
+                Err(e) => {
+                    eprintln!("bench: disabled — {e:#}");
+                    (None, Some(format!("{e:#}")))
+                }
+            },
+            Err(disabled) => {
+                eprintln!("bench: disabled — {}", disabled.0);
+                (None, Some(disabled.0.clone()))
+            }
+        };
         atlasctl_agent::daemon::spawn_peer_work(atlasctl_agent::daemon::PeerWork {
             fleet: Arc::clone(&fleet),
             identity: Arc::clone(&identity),
@@ -455,6 +433,8 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
             joining: Arc::clone(&joining),
             accelerator: accelerator.clone(),
             control: control_host,
+            bench,
+            bench_disabled,
         });
 
         atlasctl_agent::daemon::spawn_all(
@@ -482,6 +462,8 @@ pub fn run(args: &AgentRunArgs) -> Result<()> {
     })
 }
 
+mod fleethandle;
 mod linkline;
 
+use fleethandle::FleetHandle;
 use linkline::link_line;

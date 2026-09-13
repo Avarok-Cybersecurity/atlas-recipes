@@ -72,6 +72,25 @@ atlasctl run <recipe> --rank 1 --world-size 2 --master-addr 10.10.10.1
 A multi-node recipe refuses to launch on a single node rather than quietly
 serving something smaller than the recipe describes.
 
+### Running certification gates on other machines
+
+A paired node that has been granted `bench` (`atlasctl peer grant-bench
+<fingerprint>` on that node) will build a commit of its Atlas checkout and
+run one certification gate for you, streaming progress and handing the
+signed records back:
+
+```sh
+atlasctl bench nodes 10.10.10.2,dgx3.local            # what each node can run
+atlasctl bench run 10.10.10.2 --sha <40-hex> --gate decode-floor --out-dir ./records
+atlasctl bench attach 10.10.10.2 <job id>             # re-follow a running job
+```
+
+Port omitted means 34334; `.local` names work without nss-mdns. Every
+subcommand takes `--json` and has a distinct exit code per failure class —
+`spark bench certify --with-nodes` in the Atlas repository drives it that
+way. See `docs/BENCH.md` for the node's `bench.yaml`, the event schema and
+the exit codes, and `SECURITY.md` for what the grant permits.
+
 ## When a model does not start
 
 Launches run detached and with `--rm`, so a container that fails at load is
@@ -105,7 +124,7 @@ Two, and they fail independently, which is why they are worth telling apart.
 | port | bound on | who talks to it |
 |---|---|---|
 | 34333 | loopback only | the website, on this machine |
-| 34334 | all interfaces | other machines — pairing, joining, and cluster work |
+| 34334 | all interfaces | other machines — pairing, joining, cluster work, and bench jobs |
 
 34333 never leaves the machine, so nothing in a firewall applies to it.
 
