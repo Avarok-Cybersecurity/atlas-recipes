@@ -277,6 +277,18 @@ mod tests {
         )
     }
 
+    /// On any other platform the answer is the platform, not the file: a
+    /// bench.yaml that would load on Linux is still a disabled surface here.
+    #[cfg(not(unix))]
+    #[test]
+    fn a_non_unix_host_is_disabled_before_the_file_is_read() {
+        let p = tmp();
+        std::fs::write(p.join(FILE), minimal(&p)).unwrap();
+        let r = BenchConfig::load(&p).unwrap();
+        assert!(r.unwrap_err().0.contains("Linux only"));
+    }
+
+    #[cfg(unix)]
     #[test]
     fn no_file_means_disabled_with_a_reason_not_an_error() {
         let p = tmp();
@@ -284,6 +296,7 @@ mod tests {
         assert!(r.unwrap_err().0.contains("bench.yaml"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_minimal_file_loads_with_the_documented_defaults() {
         let p = tmp();
@@ -303,6 +316,7 @@ mod tests {
 
     /// NEGATIVE CONTROLS: every named thing must exist; an unknown key is a
     /// typo, not a silent no-op.
+    #[cfg(unix)]
     #[test]
     fn a_wrong_file_is_refused_naming_the_key() {
         let p = tmp();
@@ -335,6 +349,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn path_prepend_goes_first_and_is_not_exported_itself() {
         let p = tmp();
