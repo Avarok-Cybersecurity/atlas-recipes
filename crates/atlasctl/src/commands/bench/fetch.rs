@@ -31,9 +31,13 @@ pub struct Fetched {
 
 /// The place an artifact may be written, or why not.
 ///
+/// The manifest `name` is the key a chunk is requested by; `relative_path` is
+/// where the file belongs, and the two need not agree — the node offers its
+/// `child.log` as `.certify/<sha>/<gate>.log` (`docs/BENCH.md`).
+///
 /// # Errors
-/// `bad_args` for an absolute path, a `..`, an empty path, or a path whose
-/// last component is not the artifact's own name.
+/// `bad_args` for an absolute path, a `..`, an empty path, or a trailing
+/// separator: anything that could land outside `out_dir`.
 pub fn destination(out_dir: &Path, meta: &ArtifactMeta) -> Result<PathBuf, BenchError> {
     let rel = &meta.relative_path;
     if rel.is_empty() {
@@ -53,13 +57,6 @@ pub fn destination(out_dir: &Path, meta: &ArtifactMeta) -> Result<PathBuf, Bench
         return Err(BenchError::bad_args(format!(
             "artifact {} names {rel:?}, which is not a plain relative path",
             meta.name
-        )));
-    }
-    let rel = Path::new(rel);
-    if rel.file_name().and_then(|f| f.to_str()) != Some(meta.name.as_str()) {
-        return Err(BenchError::bad_args(format!(
-            "artifact {} would be written as {:?}; the file name must match",
-            meta.name, meta.relative_path
         )));
     }
     Ok(out_dir.join(rel))

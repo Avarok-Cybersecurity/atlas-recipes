@@ -27,8 +27,26 @@ fn an_artifact_lands_at_its_relative_path_under_the_out_dir() {
     );
 }
 
+/// The node's manifest names the child log `child.log` and places it as
+/// `.certify/<sha>/<gate>.log` — the two fields are a key and a place, not one
+/// string twice. Campaign attempt 2 of stack #1073 lost a finished
+/// `bfcl-subset-echolp-b` shard to a CLI that insisted they match.
 #[test]
-fn paths_that_escape_or_lie_about_their_name_are_refused() {
+fn an_artifact_may_land_under_a_different_name_than_its_manifest_key() {
+    let out = Path::new("/tmp/certify");
+    let m = meta(
+        "child.log",
+        ".certify/732ead61db/bfcl-subset-echolp-b.log",
+        b"log",
+    );
+    assert_eq!(
+        destination(out, &m).unwrap(),
+        PathBuf::from("/tmp/certify/.certify/732ead61db/bfcl-subset-echolp-b.log")
+    );
+}
+
+#[test]
+fn paths_that_escape_the_out_dir_are_refused() {
     let out = Path::new("/tmp/certify");
     for (name, rel) in [
         ("r.json", "/etc/r.json"),
@@ -36,8 +54,8 @@ fn paths_that_escape_or_lie_about_their_name_are_refused() {
         ("r.json", ".benchmarks/../../r.json"),
         ("r.json", ".benchmarks/./r.json"),
         ("r.json", ""),
-        ("r.json", ".benchmarks/other.json"),
         ("r.json", ".benchmarks/r.json/"),
+        ("r.json", ".benchmarks\\r.json"),
     ] {
         let m = meta(name, rel, b"x");
         let e = destination(out, &m).expect_err(rel);
