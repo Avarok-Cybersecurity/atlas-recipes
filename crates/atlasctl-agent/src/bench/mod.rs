@@ -21,6 +21,7 @@ pub mod exclusive;
 pub mod host;
 pub mod job;
 pub mod journal;
+pub mod lease;
 pub mod machine;
 pub mod nodeinfo;
 pub mod ports;

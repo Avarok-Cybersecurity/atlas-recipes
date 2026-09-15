@@ -123,4 +123,6 @@ pub struct Ctx<'a> {
     pub build_timeout: Duration,
     pub stall_timeout: Duration,
     pub allow_unpublished: bool,
+    /// Render `--serve-reuse --serve-lease-owner <agent pid>` into the run.
+    pub serve_reuse: bool,
 }

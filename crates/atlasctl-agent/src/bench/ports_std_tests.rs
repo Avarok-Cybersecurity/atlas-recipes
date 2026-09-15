@@ -85,6 +85,8 @@ fn a_cached_binary_is_a_hit_only_when_provenance_and_bytes_agree() {
         retain_jobs: 1,
         retain_days: 1,
         sync_recipes: false,
+        serve_reuse: false,
+        serve_release_after_s: 600,
         collect_extra: vec![],
     };
     let ports = StdPorts::new(cfg);
@@ -161,6 +163,8 @@ fn spawn_and_wait_read_a_real_child() {
         retain_jobs: 1,
         retain_days: 1,
         sync_recipes: false,
+        serve_reuse: false,
+        serve_release_after_s: 600,
         collect_extra: vec![],
     };
     let ports = StdPorts::new(cfg);

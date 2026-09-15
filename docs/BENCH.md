@@ -69,7 +69,21 @@ retain_jobs: 50
 retain_days: 7
 sync_recipes: true
 collect_extra: []
+serve_reuse: false
+serve_release_after_s: 600
 ```
+
+With `serve_reuse: true` the child runs as `spark benchmark run …
+--serve-reuse --serve-lease-owner <agent pid>`: it does not load the
+checkpoint in its own process but takes the server the previous job left
+running — named in `<atlas_home>/serve-lease.json` — when that server is
+provably the one it would have started (same binary bytes, same recipe
+rendering with the same overrides, verified by Atlas over `GET
+/serve-config`), replaces it otherwise, and leaves it up. Consecutive jobs
+on one recipe pay for one model load. The agent treats that server as its
+own tenant (its `spark` process, its GPU app and the memory it holds do
+not make the box "busy"), stops it after `serve_release_after_s` with
+nothing queued or running, and never touches a lease another owner wrote.
 
 The child's environment is `HOME USER LANG TERM` from the agent, `PATH`
 (with `PATH_PREPEND` in front), `ATLAS_HOME`, `CARGO_TARGET_DIR`
@@ -105,7 +119,8 @@ finds the truth: a child that outlived the agent is resumed by its pid
 and `/proc` start ticks; one that cannot be is recorded `Orphaned`.
 
 The worker runs one job at a time and starts none while the box is busy:
-a `spark` process (ours or not), a GPU compute app, host memory below
+a `spark` process (ours or not — except the server this agent's last job
+left leased, see `serve_reuse`), a GPU compute app, host memory below
 `min_free_fraction`, or the cache disk below `min_free_disk_bytes`.
 Submission checks only the disk floor and the queue; the rest is checked
 right before the child starts, because it changes.

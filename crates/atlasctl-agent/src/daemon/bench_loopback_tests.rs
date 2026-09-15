@@ -44,6 +44,8 @@ fn bench_config(root: &std::path::Path) -> BenchConfig {
         retain_jobs: 5,
         retain_days: 1,
         sync_recipes: false,
+        serve_reuse: false,
+        serve_release_after_s: 600,
         collect_extra: vec![],
     }
 }
