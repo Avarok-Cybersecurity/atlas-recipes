@@ -42,8 +42,11 @@ pub fn ours(atlas_home: &Path) -> Option<Lease> {
     read(atlas_home).filter(|l| l.owner_pid == std::process::id() && alive(l.pid))
 }
 
+/// Is `pid` a live process? Read from procfs; where there is none (the
+/// agent builds on Windows for the CLI's sake) no pid is ever "alive", so a
+/// lease is never ours and the feature is inert rather than wrong.
 pub fn alive(pid: u32) -> bool {
-    Path::new(&format!("/proc/{pid}")).exists()
+    cfg!(target_os = "linux") && Path::new(&format!("/proc/{pid}")).exists()
 }
 
 /// SIGTERM the server's process group, wait up to `grace`, SIGKILL what is
@@ -89,8 +92,10 @@ mod tests {
     }
 
     /// Only a lease this agent owns, naming a live pid, is "ours": another
-    /// owner's is a foreign tenant, and a dead pid is nothing.
+    /// owner's is a foreign tenant, and a dead pid is nothing. Linux only:
+    /// liveness is read from procfs, and elsewhere nothing is alive.
     #[test]
+    #[cfg(target_os = "linux")]
     fn ours_needs_this_owner_and_a_live_pid() {
         let h = home("ours");
         assert_eq!(ours(&h), None);
@@ -103,6 +108,17 @@ mod tests {
         assert_eq!(ours(&h), None, "a dead server is not a lease");
         std::fs::write(path(&h), "junk").unwrap();
         assert_eq!(read(&h), None);
+        let _ = std::fs::remove_dir_all(&h);
+    }
+
+    /// Without procfs a lease is never ours, so nothing is exempted and
+    /// nothing is signalled.
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn without_procfs_no_lease_is_ever_ours() {
+        let h = home("noproc");
+        write(&h, 1, std::process::id());
+        assert_eq!(ours(&h), None);
         let _ = std::fs::remove_dir_all(&h);
     }
 }
