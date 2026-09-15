@@ -13,6 +13,7 @@ use super::child::same_process;
 use super::exclusive;
 use super::host::BenchHost;
 use super::job::JobRecord;
+use super::lease;
 use super::machine::{self, Ctx};
 use super::ports_std::StdPorts;
 use anyhow::Result;
@@ -32,11 +33,16 @@ pub async fn run(host: Arc<BenchHost>) {
     if let Err(e) = recover(&host, &ports).await {
         tracing_warn(&format!("bench: recovery failed: {e:#}"));
     }
+    let mut idle_since: Option<std::time::Instant> = None;
     loop {
         match next_job(&host) {
             Some(job) => {
-                let readings =
-                    exclusive::probe(&host.cfg.cache_dir, host.running().map(|j| j.to_string()));
+                idle_since = None;
+                let readings = exclusive::probe(
+                    &host.cfg.cache_dir,
+                    host.running().map(|j| j.to_string()),
+                    &host.cfg.atlas_home,
+                );
                 let busy = exclusive::judge(
                     &readings,
                     host.cfg.min_free_fraction,
@@ -60,6 +66,7 @@ pub async fn run(host: Arc<BenchHost>) {
                 }
             }
             None => {
+                release_idle_lease(&host, &mut idle_since);
                 tokio::select! {
                     () = host.wake.notified() => {}
                     () = tokio::time::sleep(IDLE_POLL) => {}
@@ -67,6 +74,33 @@ pub async fn run(host: Arc<BenchHost>) {
             }
         }
     }
+}
+
+/// Stop the server the last job left leased once the queue has been empty
+/// for `serve_release_after_s`: a model kept warm for a job that is not
+/// coming is a box nobody else can use.
+fn release_idle_lease(host: &BenchHost, idle_since: &mut Option<std::time::Instant>) {
+    let Some(l) = lease::ours(&host.cfg.atlas_home) else {
+        *idle_since = None;
+        return;
+    };
+    let since = *idle_since.get_or_insert_with(std::time::Instant::now);
+    if since.elapsed() < Duration::from_secs(u64::from(host.cfg.serve_release_after_s)) {
+        return;
+    }
+    tracing_info(&format!(
+        "bench: releasing the leased server (pid {}, port {}, {}) after {} s idle",
+        l.pid,
+        l.port,
+        l.model,
+        since.elapsed().as_secs()
+    ));
+    lease::release(
+        &host.cfg.atlas_home,
+        &l,
+        Duration::from_secs(u64::from(host.cfg.cancel_grace_s)),
+    );
+    *idle_since = None;
 }
 
 fn next_job(host: &BenchHost) -> Option<JobRecord> {
@@ -102,6 +136,7 @@ async fn execute(host: &Arc<BenchHost>, ports: &Arc<StdPorts>, job: JobRecord) {
             build_timeout: Duration::from_secs(u64::from(h.cfg.build_timeout_s)),
             stall_timeout: Duration::from_secs(u64::from(h.cfg.stall_timeout_s)),
             allow_unpublished: h.cfg.allow_unpublished_shas,
+            serve_reuse: h.cfg.serve_reuse,
         };
         machine::run(&ctx, job)
     })
@@ -151,6 +186,7 @@ async fn recover(host: &Arc<BenchHost>, ports: &Arc<StdPorts>) -> Result<()> {
                             build_timeout: Duration::from_secs(u64::from(h.cfg.build_timeout_s)),
                             stall_timeout: Duration::from_secs(u64::from(h.cfg.stall_timeout_s)),
                             allow_unpublished: h.cfg.allow_unpublished_shas,
+                            serve_reuse: h.cfg.serve_reuse,
                         };
                         machine::resume_running(&ctx, job)
                     })
@@ -193,6 +229,7 @@ async fn orphan(
         build_timeout: Duration::ZERO,
         stall_timeout: Duration::ZERO,
         allow_unpublished: false,
+        serve_reuse: false,
     };
     machine::orphan(&ctx, job, why)?;
     Ok(())

@@ -233,6 +233,7 @@ pub(super) fn ctx<'a>(w: &'a World, ports: &'a dyn Ports, cancel: Arc<AtomicBool
         build_timeout: Duration::from_secs(10),
         stall_timeout: Duration::from_secs(10),
         allow_unpublished: false,
+        serve_reuse: false,
     }
 }
 

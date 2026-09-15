@@ -67,6 +67,17 @@ pub struct BenchConfig {
     /// Run `spark sync-recipes` when the home has no recipe index.
     #[serde(default = "default_true")]
     pub sync_recipes: bool,
+    /// Let a gate run leave its server up for the next one
+    /// (`spark benchmark run --serve-reuse`): consecutive jobs on one recipe
+    /// pay for one model load. The next job verifies the server is the one
+    /// it would have started and replaces it otherwise; the agent stops it
+    /// after `serve_release_after_s` idle, and at shutdown.
+    #[serde(default)]
+    pub serve_reuse: bool,
+    /// Seconds the leased server may sit idle (no job queued or running)
+    /// before the agent stops it.
+    #[serde(default = "default_serve_release_after_s")]
+    pub serve_release_after_s: u32,
     /// Extra files to hand back, as globs relative to the child's home,
     /// e.g. `.atlas/artifacts/bfcl/responses-*.jsonl`.
     #[serde(default)]
@@ -103,6 +114,10 @@ fn default_keep_builds() -> u32 {
 fn default_retain_jobs() -> u32 {
     50
 }
+fn default_serve_release_after_s() -> u32 {
+    600
+}
+
 fn default_retain_days() -> u32 {
     7
 }

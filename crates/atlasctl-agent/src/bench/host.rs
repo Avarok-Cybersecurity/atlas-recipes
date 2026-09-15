@@ -227,7 +227,7 @@ impl BenchHost {
         // Disk is checked at submit: a job that cannot even be journaled
         // should not be accepted. Memory and the GPU are checked by the
         // worker right before it starts the child, because they change.
-        let readings = exclusive::probe(&self.cfg.cache_dir, None);
+        let readings = exclusive::probe(&self.cfg.cache_dir, None, &self.cfg.atlas_home);
         if let Some(free) = readings.disk_free_bytes
             && free < self.cfg.min_free_disk_bytes
         {

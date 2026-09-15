@@ -263,6 +263,11 @@ pub fn run(ctx: &Ctx, mut job: JobRecord) -> Result<Outcome> {
         ctx.hardware.to_string(),
         "--yes".into(),
     ];
+    if ctx.serve_reuse {
+        argv.push("--serve-reuse".into());
+        argv.push("--serve-lease-owner".into());
+        argv.push(std::process::id().to_string());
+    }
     if let Some(c) = &job.spec.checkpoint {
         argv.push("--checkpoint".into());
         argv.push(c.clone());

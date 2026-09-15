@@ -52,6 +52,25 @@ fn the_happy_path_walks_every_stage_and_renders_the_argv_itself() {
     assert_eq!(stored.seq_high, 9);
 }
 
+/// With `serve_reuse` the child is told to take (or leave) the leased
+/// server, and told whose it is — the agent's own pid — so a lease this
+/// agent did not start is never taken. Without it, nothing changes.
+#[test]
+fn serve_reuse_renders_the_lease_flags_with_this_agents_pid() {
+    let w = world();
+    let s = Script::happy();
+    let mut c = ctx(&w, &s, Arc::new(AtomicBool::new(false)));
+    c.serve_reuse = true;
+    run(&c, w.job.clone()).unwrap();
+    let want = format!(
+        "spawn /cache/build/x/spark benchmark run decode-floor --pull-request-gate --hardware gb10 \
+         --yes --serve-reuse --serve-lease-owner {} --param osl=8",
+        std::process::id()
+    );
+    let calls = s.calls();
+    assert!(calls.iter().any(|c| c.starts_with(&want)), "{calls:?}");
+}
+
 #[test]
 fn a_missing_commit_is_fetched_once_and_then_refused() {
     let w = world();

@@ -106,8 +106,11 @@ pub fn node_info(host: &BenchHost) -> BenchNodeInfo {
             .map_or(Metric::Unsupported, |v| v.memory_used_frac),
         memory_is_unified: true,
     });
-    let readings =
-        super::exclusive::probe(&host.cfg.cache_dir, host.running().map(|j| j.to_string()));
+    let readings = super::exclusive::probe(
+        &host.cfg.cache_dir,
+        host.running().map(|j| j.to_string()),
+        &host.cfg.atlas_home,
+    );
     let busy = super::exclusive::judge(
         &readings,
         host.cfg.min_free_fraction,

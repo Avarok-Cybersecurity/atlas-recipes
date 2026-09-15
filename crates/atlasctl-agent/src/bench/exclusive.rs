@@ -70,6 +70,12 @@ pub struct Readings {
     pub running_job: Option<String>,
     pub free_fraction: Option<f64>,
     pub disk_free_bytes: Option<u64>,
+    /// The pid of the server THIS agent's last job left leased (`lease`),
+    /// when it is alive: our own tenant, not a foreign one. Its `spark`
+    /// process and its GPU app are not "in the way", and the memory it holds
+    /// is ours to reclaim — the next child reuses or replaces it, and checks
+    /// the box's headroom itself before starting anew.
+    pub leased: Option<u32>,
 }
 
 /// Every reason not to start, in the order an operator should read them.
@@ -79,13 +85,27 @@ pub fn judge(r: &Readings, min_free_fraction: f64, min_free_disk: u64) -> Vec<Bu
     if let Some(j) = &r.running_job {
         out.push(Busy::Job(j.clone()));
     }
-    if !r.spark_pids.is_empty() {
-        out.push(Busy::Spark(r.spark_pids.clone()));
+    let sparks: Vec<u32> = r
+        .spark_pids
+        .iter()
+        .copied()
+        .filter(|p| Some(*p) != r.leased)
+        .collect();
+    if !sparks.is_empty() {
+        out.push(Busy::Spark(sparks));
     }
+    let leased_app = r.leased.map(|p| format!("{p},"));
     for a in &r.gpu_apps {
+        if leased_app
+            .as_deref()
+            .is_some_and(|prefix| a.starts_with(prefix))
+        {
+            continue;
+        }
         out.push(Busy::GpuApp(a.clone()));
     }
     match r.free_fraction {
+        Some(_) if r.leased.is_some() => {}
         Some(frac) if frac < min_free_fraction => out.push(Busy::Memory {
             available_frac: frac,
             required_frac: min_free_fraction,
@@ -110,14 +130,16 @@ pub fn judge(r: &Readings, min_free_fraction: f64, min_free_disk: u64) -> Vec<Bu
     out
 }
 
-/// Read the machine. `cache_dir` is where the disk floor applies.
-pub fn probe(cache_dir: &Path, running_job: Option<String>) -> Readings {
+/// Read the machine. `cache_dir` is where the disk floor applies;
+/// `atlas_home` is where a leased server of ours would be named.
+pub fn probe(cache_dir: &Path, running_job: Option<String>, atlas_home: &Path) -> Readings {
     Readings {
         spark_pids: spark_pids(),
         gpu_apps: gpu_apps(),
         running_job,
         free_fraction: free_fraction(),
         disk_free_bytes: disk_free(cache_dir),
+        leased: super::lease::ours(atlas_home).map(|l| l.pid),
     }
 }
 
@@ -207,12 +229,45 @@ mod tests {
             running_job: None,
             free_fraction: Some(0.94),
             disk_free_bytes: Some(100 << 30),
+            leased: None,
         }
     }
 
     #[test]
     fn a_free_box_has_no_reason() {
         assert!(judge(&free(), 0.85, 20 << 30).is_empty());
+    }
+
+    /// Our own leased server is not in the way: its spark pid, its GPU app
+    /// and the memory it holds are exempt — and NOTHING ELSE is. A second
+    /// spark, a foreign GPU app, or a lease that names another pid still
+    /// refuse.
+    #[test]
+    fn a_leased_server_of_ours_is_not_in_the_way_but_anything_else_is() {
+        let mut r = free();
+        r.leased = Some(7);
+        r.spark_pids = vec![7];
+        r.gpu_apps = vec!["7, spark".into()];
+        r.free_fraction = Some(0.30);
+        assert!(judge(&r, 0.85, 1).is_empty(), "{:?}", judge(&r, 0.85, 1));
+        // NEGATIVE CONTROLS.
+        let mut r2 = r.clone();
+        r2.spark_pids = vec![7, 8];
+        assert_eq!(judge(&r2, 0.85, 1), vec![Busy::Spark(vec![8])]);
+        let mut r2 = r.clone();
+        r2.gpu_apps.push("9, python".into());
+        assert_eq!(judge(&r2, 0.85, 1), vec![Busy::GpuApp("9, python".into())]);
+        let mut r2 = r.clone();
+        r2.leased = Some(6);
+        assert_eq!(
+            judge(&r2, 0.85, 1),
+            vec![Busy::Spark(vec![7]), Busy::GpuApp("7, spark".into())],
+            "a lease naming another pid exempts nothing that is running"
+        );
+        // An unreadable memory figure still refuses, lease or not.
+        let mut r2 = r;
+        r2.free_fraction = None;
+        assert!(matches!(judge(&r2, 0.85, 1)[0], Busy::Memory { .. }));
     }
 
     /// Each reading flips exactly one reason, named.
