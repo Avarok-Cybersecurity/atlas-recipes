@@ -20,7 +20,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 pub use super::ports::{
-    BuildResult, CacheMiss, CachedBinary, ChildHandle, Ctx, Ports, RunEnd, RunPlan,
+    BuildResult, CacheMiss, CachedBinary, ChildHandle, Ctx, Ports, RecordState, RunEnd, RunPlan,
 };
 
 mod resume;
@@ -284,7 +284,20 @@ pub fn run(ctx: &Ctx, mut job: JobRecord) -> Result<Outcome> {
         stall_timeout: ctx.stall_timeout,
         max_run: Duration::from_secs(u64::from(job.spec.max_run_s)),
     };
-    let started_s = ctx.ports.now_ms() / 1000;
+    // What the gate's record directory held BEFORE this child ran. The job is
+    // credited with the difference, so a record the previous job on this node
+    // wrote cannot be handed back as this job's — even when the two ran a
+    // second apart in the same worktree.
+    job.records_before = match ctx.ports.record_state(&worktree, gate.as_str()) {
+        Ok(b) => b,
+        Err(e) => {
+            return finish(
+                ctx,
+                &mut job,
+                failed(JobState::Running, format!("reading the record dir: {e:#}")),
+            );
+        }
+    };
     let child = match ctx.ports.spawn(&plan) {
         Ok(c) => c,
         Err(e) => {
@@ -336,7 +349,7 @@ pub fn run(ctx: &Ctx, mut job: JobRecord) -> Result<Outcome> {
     let dest = ctx.store.artifacts_dir(&job.id);
     let artifacts = match ctx
         .ports
-        .collect(&worktree, gate.as_str(), started_s, &dest)
+        .collect(&worktree, gate.as_str(), &job.records_before, &dest)
     {
         Ok(a) => a,
         Err(e) => {

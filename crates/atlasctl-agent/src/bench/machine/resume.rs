@@ -74,12 +74,10 @@ pub fn resume_running(ctx: &Ctx, mut job: JobRecord) -> Result<Outcome> {
     }
     transition(ctx, &mut job, JobState::Collecting)?;
     let dest = ctx.store.artifacts_dir(&job.id);
-    let artifacts = match ctx.ports.collect(
-        &worktree,
-        gate.as_str(),
-        job.updated_at_s.saturating_sub(1),
-        &dest,
-    ) {
+    let artifacts = match ctx
+        .ports
+        .collect(&worktree, gate.as_str(), &job.records_before, &dest)
+    {
         Ok(a) => a,
         Err(e) => {
             return finish(

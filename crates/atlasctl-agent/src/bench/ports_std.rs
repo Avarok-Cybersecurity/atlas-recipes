@@ -14,12 +14,13 @@ use super::child::{
 };
 use super::config::BenchConfig;
 use super::job::write_atomic;
-use super::machine::{BuildResult, CacheMiss, CachedBinary, ChildHandle, Ports, RunEnd, RunPlan};
+use super::machine::{
+    BuildResult, CacheMiss, CachedBinary, ChildHandle, Ports, RecordState, RunEnd, RunPlan,
+};
+use super::records;
 use anyhow::{Context, Result, bail};
 use atlasctl_protocol::msg::bench::{MAX_LOG_LINES_PER_EVENT, Sha};
-use atlasctl_protocol::msg::bench_event::{
-    ArtifactKind, ArtifactMeta, EventKind, LogStream, Verdict,
-};
+use atlasctl_protocol::msg::bench_event::{ArtifactMeta, EventKind, LogStream, Verdict};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -439,53 +440,18 @@ impl Ports for StdPorts {
         }
     }
 
+    fn record_state(&self, worktree: &Path, gate: &str) -> Result<RecordState> {
+        Ok(records::state(&worktree.join(".benchmarks").join(gate)))
+    }
+
     fn collect(
         &self,
         worktree: &Path,
         gate: &str,
-        since_s: u64,
+        before: &RecordState,
         dest: &Path,
     ) -> Result<Vec<ArtifactMeta>> {
-        std::fs::create_dir_all(dest)?;
-        let mut out = Vec::new();
-        let dir = worktree.join(".benchmarks").join(gate);
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for e in entries.flatten() {
-                let p = e.path();
-                let name = e.file_name().to_string_lossy().to_string();
-                let modified = e
-                    .metadata()
-                    .and_then(|m| m.modified())
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map_or(0, |d| d.as_secs());
-                if modified + 1 < since_s {
-                    continue;
-                }
-                let kind = if name.ends_with(".json.sig") {
-                    ArtifactKind::Signature
-                } else if name.ends_with(".json") {
-                    ArtifactKind::Record
-                } else {
-                    continue;
-                };
-                let target = dest.join(&name);
-                std::fs::copy(&p, &target)?;
-                let (sha256, bytes) = sha256_file(&target)?;
-                out.push(ArtifactMeta {
-                    name,
-                    relative_path: format!(
-                        ".benchmarks/{gate}/{}",
-                        e.file_name().to_string_lossy()
-                    ),
-                    bytes,
-                    sha256,
-                    kind,
-                });
-            }
-        }
-        out.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(out)
+        records::collect(worktree, gate, before, dest)
     }
 }
 

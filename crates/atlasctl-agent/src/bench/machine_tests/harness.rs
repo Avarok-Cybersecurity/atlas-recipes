@@ -166,7 +166,12 @@ impl Ports for Script {
         });
         Ok(self.end.clone())
     }
-    fn collect(&self, _: &Path, _: &str, _: u64, _: &Path) -> Result<Vec<ArtifactMeta>> {
+    fn record_state(&self, _: &Path, _: &str) -> Result<RecordState> {
+        self.log("record_state");
+        Ok(RecordState::new())
+    }
+
+    fn collect(&self, _: &Path, _: &str, _: &RecordState, _: &Path) -> Result<Vec<ArtifactMeta>> {
         self.log("collect");
         Ok(self.artifacts.clone())
     }
@@ -208,6 +213,7 @@ pub(super) fn world() -> World {
         child_pid: None,
         child_start_ticks: None,
         binary_sha256: None,
+        records_before: Default::default(),
         seq_high: 0,
         outcome: None,
     };
