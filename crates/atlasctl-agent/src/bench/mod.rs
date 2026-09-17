@@ -26,6 +26,7 @@ pub mod machine;
 pub mod nodeinfo;
 pub mod ports;
 pub mod ports_std;
+pub mod records;
 pub mod runner;
 pub mod thermal;
 
