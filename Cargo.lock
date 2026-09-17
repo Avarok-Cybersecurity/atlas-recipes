@@ -99,14 +99,14 @@ dependencies = [
 
 [[package]]
 name = "atlas-recipes-data"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "include_dir",
 ]
 
 [[package]]
 name = "atlasctl"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "atlasctl-agent",
@@ -127,7 +127,7 @@ dependencies = [
 
 [[package]]
 name = "atlasctl-agent"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "atlasctl-core",
@@ -157,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "atlasctl-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "atlas-recipes-data",
