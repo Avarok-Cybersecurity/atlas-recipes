@@ -44,6 +44,12 @@ pub struct JobRecord {
     pub child_start_ticks: Option<u64>,
     /// The commit's built binary, once known.
     pub binary_sha256: Option<String>,
+    /// What the gate's record directory held the moment before the child
+    /// started. Persisted because the attribution has to survive an agent
+    /// restart: `resume` has no other way to tell this job's record from one a
+    /// previous job left in the same worktree.
+    #[serde(default)]
+    pub records_before: crate::bench::ports::RecordState,
     pub seq_high: u64,
     pub outcome: Option<Outcome>,
 }
@@ -255,6 +261,7 @@ mod tests {
             child_pid: None,
             child_start_ticks: None,
             binary_sha256: None,
+            records_before: Default::default(),
             seq_high: 0,
             outcome: None,
         }

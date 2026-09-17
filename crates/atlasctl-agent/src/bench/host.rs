@@ -250,6 +250,7 @@ impl BenchHost {
             child_pid: None,
             child_start_ticks: None,
             binary_sha256: None,
+            records_before: Default::default(),
             seq_high: 0,
             outcome: None,
         };

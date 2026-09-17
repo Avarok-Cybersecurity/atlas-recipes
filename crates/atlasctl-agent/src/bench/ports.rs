@@ -101,15 +101,31 @@ pub trait Ports: Send + Sync {
         cancel: &AtomicBool,
         emit: &dyn Fn(EventKind),
     ) -> Result<RunEnd>;
-    /// The gate's new records and any extras, copied into `dest`.
+    /// Every record file the gate's directory holds right now, and when each
+    /// was last written. Taken immediately before the child starts, so
+    /// [`Ports::collect`] can return what THIS job wrote and nothing else.
+    fn record_state(&self, worktree: &Path, gate: &str) -> Result<RecordState>;
+    /// The records this job wrote — those absent from `before`, and those whose
+    /// contents were rewritten since it was taken — copied into `dest`.
     fn collect(
         &self,
         worktree: &Path,
         gate: &str,
-        since_s: u64,
+        before: &RecordState,
         dest: &Path,
     ) -> Result<Vec<ArtifactMeta>>;
 }
+
+/// What the gate's record directory held before a job ran: file name -> last
+/// write, in nanoseconds since the epoch.
+///
+/// A job is attributed the files that are NOT in this map, plus any whose
+/// timestamp has moved — never "everything modified since a wall-clock
+/// instant". That instant is what lost the `bfcl-subset-echolp` shard on
+/// 2026-09-17: the previous job on the same node wrote its record in the same
+/// second the next job started, the one-second slack in the window kept it, and
+/// the submitter refused a job that returned two records for one gate.
+pub type RecordState = std::collections::BTreeMap<String, u128>;
 
 /// The node running this job, for `Cancelled { by }`.
 pub struct Ctx<'a> {
