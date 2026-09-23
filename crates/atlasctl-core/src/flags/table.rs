@@ -20,7 +20,7 @@
 
 use super::{FlagKind, FlagSpec};
 
-/// Every serve flag the `atlas` runtime understands: 57 keys, 9 of them bare toggles.
+/// Every serve flag the `atlas` runtime understands: 58 keys, 9 of them bare toggles.
 #[rustfmt::skip] // One line per flag: this is a lookup table, and reading it
 // against the reference implementation is the point.
 /// The port `spark serve` listens on when a recipe does not name one.
@@ -33,7 +33,7 @@ use super::{FlagKind, FlagSpec};
 /// a port nothing is listening on, moments after a successful launch.
 pub const DEFAULT_SERVE_PORT: &str = "8888";
 
-pub static ATLAS_FLAGS: [FlagSpec; 57] = [
+pub static ATLAS_FLAGS: [FlagSpec; 58] = [
     FlagSpec {
         key: "port",
         flag: "--port",
@@ -323,5 +323,12 @@ pub static ATLAS_FLAGS: [FlagSpec; 57] = [
         key: "video_allow_ffmpeg",
         flag: "--video-allow-ffmpeg",
         kind: FlagKind::BoolToggle,
+    },
+    // A value flag (`--w4a4-downcast true`), not a bare toggle: the engine
+    // declares it `<bool>` with a default of false, like `gdn_fused_norm`.
+    FlagSpec {
+        key: "w4a4_downcast",
+        flag: "--w4a4-downcast",
+        kind: FlagKind::Value,
     },
 ];

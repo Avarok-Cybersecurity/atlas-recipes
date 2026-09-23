@@ -160,3 +160,10 @@ defaults:
   # need the server's ffmpeg subprocess decoder, which is off unless the
   # recipe pins it. Inert for the agentic/BFCL gates — they send no video.
   video_allow_ffmpeg: true
+  # NVFP4 activations for the attention/GDN projections and small-M FFN steps
+  # (engine default: off). Faster and lower energy at slightly lower
+  # precision; the accuracy bar is the agentic-webserver gate passing. The
+  # BFCL sibling (qwen3.8-27b-nvfp4-unsloth-bfcl) deliberately leaves it off:
+  # it is the accuracy reference. Needs an engine carrying
+  # Avarok-Cybersecurity/atlas#1246 — an older `spark serve` rejects the flag.
+  w4a4_downcast: true

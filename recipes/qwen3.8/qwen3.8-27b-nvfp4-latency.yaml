@@ -129,3 +129,10 @@ defaults:
   # Batched varlen prefill helps TTFT whenever more than one request arrives
   # together, and is inert for a solo request (it keeps the inline chunk-0 path).
   prefill_varlen_batch: true
+  # NVFP4 activations for the attention/GDN projections and small-M FFN steps
+  # (engine default: off). Faster and lower energy at slightly lower
+  # precision; the accuracy bar is the agentic-webserver gate passing. The
+  # BFCL sibling (qwen3.8-27b-nvfp4-unsloth-bfcl) deliberately leaves it off:
+  # it is the accuracy reference. Needs an engine carrying
+  # Avarok-Cybersecurity/atlas#1246 — an older `spark serve` rejects the flag.
+  w4a4_downcast: true
