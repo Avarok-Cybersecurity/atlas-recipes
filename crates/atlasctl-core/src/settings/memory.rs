@@ -342,6 +342,17 @@ pub static EXPOSED_MEMORY: &[(&str, Disposition)] = &[
         ),
     ),
     (
+        "w4a4_downcast",
+        e(
+            BoolValue,
+            "W4A4 downcast",
+            "Quantize activations to NVFP4 for attention/GDN projections and small-M FFN steps: faster and lower energy, at slightly lower precision.",
+            None,
+            Performance,
+            true,
+        ),
+    ),
+    (
         "mtp_gate",
         e(
             Enum(MTP_GATES),

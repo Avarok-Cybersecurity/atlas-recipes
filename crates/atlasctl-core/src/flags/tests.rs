@@ -12,11 +12,12 @@ fn cfg(pairs: &[(&str, ScalarValue)]) -> BTreeMap<String, ScalarValue> {
 
 #[test]
 fn table_matches_the_reference_shape() {
-    // 48 from the reference implementation, plus the 9 it dropped. The counts
+    // 48 from the reference implementation, plus the 9 it dropped, plus
+    // `w4a4_downcast` (Avarok-Cybersecurity/atlas#1246). The counts
     // are here to make a change deliberate, not to police it: what the table
     // must *cover* is checked against the engine snapshot in `flags::coverage`,
     // which is an authority this number is not.
-    assert_eq!(ATLAS_FLAGS.len(), 57, "flag count changed");
+    assert_eq!(ATLAS_FLAGS.len(), 58, "flag count changed");
     assert_eq!(
         ATLAS_FLAGS
             .iter()
