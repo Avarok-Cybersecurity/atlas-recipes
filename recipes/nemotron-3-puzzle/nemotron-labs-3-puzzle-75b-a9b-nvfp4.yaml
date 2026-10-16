@@ -1,0 +1,109 @@
+recipe_version: "2"
+model: nvidia/NVIDIA-Nemotron-Labs-3-Puzzle-75B-A9B-NVFP4
+runtime: atlas
+container: avarok/atlas-gb10:latest
+max_nodes: 1
+
+metadata:
+  description: |
+    Nemotron-Labs-3-Puzzle-75B-A9B — NVIDIA hybrid Mamba-2 + LatentMoE +
+    Attention on a single GB10. 88 layers (8 attention, 40 SSM), 512
+    experts, latent MoE (moe_latent_size 4096 -> 1024), native-FP8 SSM
+    projections, NVFP4 MoE.
+
+    Measured on a GB10 (2026-08-13), 798 requests, zero errors / zero
+    warnings / zero panics in the server log:
+      boot          44.7 s   (168 kernel modules, 0 unresolved)
+      decode        21.7 tok/s single-stream
+      prefill     ~1540 tok/s at 25K context
+      needle       18/18 PASS, start/mid/end depths x 562 -> 25084 tokens
+      prefix cache 94.6% hit rate, 368829 tokens reused
+      agentic      3-step chained tool loop PASS (both sampling profiles)
+
+    ── REQUIRES AN IMAGE NEWER THAN :latest ──
+    As of 2026-08-13 this recipe does NOT serve correctly on the
+    published `avarok/atlas-gb10:latest`. Two engine fixes are required
+    and neither is on atlas `main` yet:
+
+      atlas#462  Nemotron-H is NoPE. Atlas applied rotary embedding to
+                 the whole family, which kills long-context retrieval
+                 above ~52 tokens. Boot MUST log `rotary_dim=0`; if it
+                 logs a non-zero rotary_dim, needle recall is dead and
+                 no serve flag can recover it.
+      atlas#462  MODEL.toml `[behavior].no_decode_graphs`. Decode-graph
+                 replay crashes this model with CUDA 700 at EXACTLY 64
+                 prompt tokens. Boot MUST log "Decode graphs disabled by
+                 MODEL.toml [behavior].no_decode_graphs".
+
+    Do not publish this recipe until an image carrying both is out —
+    a recipe that boots and then silently returns wrong long-context
+    answers is worse than no recipe. See the checkpoint note in the
+    repo README for the precedent.
+
+    ── KV MUST BE bf16, NOT fp8 ──
+    Served from the target's `[behavior].default_kv_dtype`, so the
+    recipe does not need to force it — but do not override it. fp8 KV
+    corrupts this thinking model's long reasoning context (hallucinated
+    tool schemas, non-sequiturs). This matches vLLM's own guidance for
+    the checkpoint. Verify: "KV cache dtype: bf16 (from MODEL.toml
+    default_kv_dtype)".
+
+    ── SSM PROJECTIONS MUST LOAD AS NATIVE FP8 ──
+    The checkpoint ships in_proj/out_proj as FP8. An earlier Atlas path
+    took FP8 -> BF16 -> NVFP4, double-quantizing already-quantized
+    weights and measurably degrading quality. Verify all 40 SSM layers
+    log `quant=Fp8 native_fp8=true native_bf16=false native_prefill=true`
+    and ZERO layers report the BF16 arm.
+
+    ── SAMPLING: use_sampling_presets_for_core IS LOAD-BEARING ──
+    This checkpoint's generation_config.json carries temperature=1.0,
+    an evaluation default rather than an agentic one. Without the
+    target's `use_sampling_presets_for_core` opt-in, core sampling falls
+    through to 1.0 and the 0.6/0.7 presets are silently ignored, so
+    agentic runs decode far hotter than intended. Measured on the Holo
+    sibling: opting in moved tool-call pass rate from 4/8 to 7/8 at C=8.
+
+    ── KNOWN: temp-0 output is not byte-reproducible under concurrency ──
+    Characterized 2026-08-13, reproducible across repeated trials:
+      C=1        deterministic (1 distinct output over 5 repeats)
+      C>=2       every reply differs from the C=1 baseline, while all
+                 peers within a batch agree
+      C>=5       peers split into 2 groups
+    This is FP accumulation order varying with batch shape, NOT a race
+    and NOT cross-request contamination — a 24-stream secret-leak probe
+    found 0 leaks, and 96 sessions under forced Marconi eviction found
+    0 contaminated. Short factual answers stay stable at C=8; long prose
+    drifts. Use C=1 if you require byte-identical greedy output.
+
+    ── SCOPE OF THESE NUMBERS ──
+    Measured with a locally built binary (atlas `main` + the Nemotron
+    stack: #462 NoPE/Lightning base, #467 batched decode, #475 milestone
+    B). What is documented here is the serve configuration; re-verify the
+    boot signal lines on whatever image you actually pull.
+  maintainer: avarok
+  category: agent
+  model_params: 75B
+  model_dtype: nvfp4
+  quantization: nvfp4
+  kv_dtype: bf16
+
+defaults:
+  port: 8888
+  host: 0.0.0.0
+  # 32K is the needle-VERIFIED regime (18/18 to 25084 tokens). The KV
+  # budget is not the constraint — with only 8 attention layers, util
+  # 0.80 leaves ~15.9 GB for KV = 130608 blocks = ~2.09M KV tokens — so
+  # this ceiling is set by what was measured, not by what fits. Raise it
+  # only alongside a needle run at the new length.
+  max_model_len: 32768
+  max_num_seqs: 8
+  # Inherited from MODEL.toml [behavior].default_kv_dtype. Stated here
+  # so an operator reading the recipe sees it; do NOT change to fp8.
+  kv_cache_dtype: bf16
+  gpu_memory_utilization: 0.80
+  scheduling_policy: slai
+  enable_prefix_caching: true
+  # Marconi SSM snapshots. 64 slots held 0 evictions across a 96-session
+  # forced-eviction probe (96 sessions against 64 slots, shuffled
+  # revisit) with 0 contaminated sessions and a 94.6% prefix hit rate.
+  ssm_cache_slots: 64
