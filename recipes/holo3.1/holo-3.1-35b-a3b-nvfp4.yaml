@@ -1,0 +1,155 @@
+recipe_version: "2"
+model: Hcompany/Holo-3.1-35B-A3B-NVFP4
+runtime: atlas
+container: avarok/atlas-gb10:latest
+max_nodes: 1
+
+metadata:
+  description: |
+    Holo-3.1-35B-A3B (GDN-hybrid MoE, ModelOpt MIXED_PRECISION: FP8
+    attention + FP8 SSM projections, NVFP4 MoE) on a single GB10.
+
+    Measured on a GB10 (2026-07-29), solo, 3 samples per point:
+      prefill  6467 tok/s @ ISL 3k   |  6193 tok/s @ ISL 8k
+      decode     69 tok/s @ ISL 3k   |    56 tok/s @ ISL 8k
+    Agentic (bench/agentic/conc_harness.py, distinct tasks per slot,
+    ONE rep per level -- this harness swings at C>=4, so treat pass rates
+    as indicative and repeat 3x before quoting them). This recipe's
+    config (native FP8 attention):
+      C=1  1/1 pass   24.9 s   agg 30.0 tok/s
+      C=4  3/4 pass  105.4 s   agg 48.3 tok/s
+      C=8  6/8 pass  218.6 s   agg 56.6 tok/s
+    KV health clean at every level (decref/evict/exhaustion/preempt = 0).
+
+    ── THE UNLOCK ──
+    ATLAS_HOLO_LOW_MEMORY_MOE=1 is load-bearing. Without it
+    FAST_MOE_MODE=full and MOE_GROUPED_CUTLASS are SILENTLY IGNORED and
+    the MoE falls back to slow w4a16 (~20% prefill / 8% decode).
+    VERIFY IT ENGAGED — the log must show, once per layer, x40:
+      CUTLASS grouped SFB: built 256 experts gate/up (N=512 K=2048) ...
+
+    Env stack (all opt-in; set every one of them):
+      ATLAS_HOLO_LOW_MEMORY_MOE=1      # THE unlock, see above
+      ATLAS_HOLO_FAST_MOE_MODE=full
+      ATLAS_HOLO_FAST_MOE_LAYERS=0-39
+      ATLAS_HOLO_MOE_GROUPED_CUTLASS=1
+      ATLAS_HOLO_MOE_GROUPED_DOWN=1
+      ATLAS_MOE_PREFILL_EXACT_TILES=1
+      ATLAS_HOLO_NATIVE_FP8_ATTN=1     # see the attention note below
+      ATLAS_HOLO_NATIVE_FP8_SSM=1
+      ATLAS_GDN_FLASHINFER=1           # SEE "THE GDN TRAP" BELOW -- this one
+                                       # fails OPEN and costs ~45% prefill
+      ATLAS_GDN_LIB=/abs/path/to/libatlasgdn.so   # REQUIRED, see below
+      ATLAS_FLASHINFER_PREFILL=1
+      ATLAS_CUBLAS_GEMM=1
+      ATLAS_CUTLASS_WORKSPACE_MB=512
+      ATLAS_PREFILL_VARLEN=1
+      ATLAS_PREFILL_CODISPATCH=1
+      ATLAS_Q12_BATCHED=1
+      ATLAS_Q12_BATCHED_FIRST_CHUNK=1
+      ATLAS_MAX_BATCH_TOKENS=16384
+      ATLAS_SSM_BATCHED_RECURRENT=1
+
+    ── THE GDN TRAP: ATLAS_GDN_FLASHINFER FAILS OPEN ──
+    Re-measured 2026-08-13 on a GB10. This is the single biggest thing
+    that can go wrong with this recipe, and it goes wrong quietly.
+
+    `ATLAS_GDN_FLASHINFER=1` makes the engine dlopen the AOT FlashInfer
+    GDN library. If that dlopen fails it logs one WARN and serves anyway
+    on the FLA fallback -- correct output, much slower prefill. Setting
+    the flag is NOT the same as engaging the kernel.
+
+    Two ways it fails, and BOTH must be fixed:
+      1. The loader dlopens the bare name `libatlasgdn.so` unless
+         `ATLAS_GDN_LIB` gives an absolute path. Set `ATLAS_GDN_LIB`.
+      2. libatlasgdn.so itself links `libcute_dsl_runtime.so`, which
+         ships in the `nvidia_cutlass_dsl` Python package, NOT with
+         CUDA. Its directory must be on `LD_LIBRARY_PATH` or the dlopen
+         still fails even with an absolute ATLAS_GDN_LIB.
+      Check before serving:  ldd libatlasgdn.so | grep "not found"
+
+    Measured cost of getting this wrong, same box, same binary, same
+    flags, ONLY the GDN library resolving or not (aggregate prefill
+    tok/s; the fallback column is two independent boots agreeing within
+    1%, the loaded column is one run):
+
+      ISL / conc     FLA fallback     GDN loaded     delta
+       3k  C=1           3292            4602        +40%
+       3k  C=4           3718            5419        +46%
+       3k  C=8           3801            5580        +47%
+       8k  C=1           5817            5809          ~0
+       8k  C=4           3919            5868        +50%
+       8k  C=8           3951            5919        +50%
+
+    Note the shape: at C=1/8k the fallback is already fine, so a
+    single-stream smoke test CANNOT detect this. The loss is entirely at
+    concurrency, which is where the recipe's headline numbers live.
+
+    VERIFY, every deploy:
+      INFO ... ATLAS_GDN_FLASHINFER: FlashInfer GDN kernel loaded (opt-in)
+    and the absence of:
+      WARN ... dlopen('...') failed — falling back to FLA
+
+    ── KV MUST BE bf16, NOT fp8 ──
+    Paged FlashInfer requires bf16 KV. Setting fp8 here silently
+    disables the FI paged-prefill path; it is not a memory/quality knob
+    on this model, it changes which prefill kernel runs.
+
+    ── ATTENTION: do NOT also set ATLAS_HOLO_FP4_PROJ_DECODE=1 ──
+    That flag VETOES native-FP8 attention. The loader guard is
+      (native_fp8 || native_modelopt_attn) && !(force_nvfp4_all || fp4_proj_decode)
+    so with it set, the 10 full-attention layers take the BF16->NVFP4 arm
+    even though ATLAS_HOLO_NATIVE_FP8_ATTN=1 still LOGS "routing ...
+    through native FP8". This checkpoint ships those projections as
+    F8_E4M3 with weight_scale/input_scale, so the real path becomes
+    FP8 -> BF16 -> NVFP4: a double-quant of already-quantized weights.
+
+    Measured cost of the flag, same box, only it differing:
+      throughput (3 samples)      prefill 3k/8k      decode 3k/8k
+        with FP4_PROJ_DECODE      6467 / 6193        69.0 / 56.0
+        without (this recipe)     6342 / 6192        66.3 / 54.0
+      agentic C=1 / C=4 / C=8     pass         makespan       agg
+        with FP4_PROJ_DECODE      1/1 3/4 5/8  22 /128/223 s  29.9/50.6/53.3
+        without (this recipe)     1/1 3/4 6/8  25 /105/219 s  30.0/48.3/56.6
+    Prefill is UNCHANGED (identical at 8k) -- it is a decode-bandwidth
+    knob (w4a16_gemv vs w8a16_gemv), not the prefill unlock it is
+    sometimes described as. Its ~4% raw-decode edge did NOT survive into
+    the agentic sweep: without it, C=8 was better on pass rate (6/8 vs
+    5/8), makespan and aggregate. So this recipe keeps native FP8
+    attention; the flag is not recommended.
+    Verify: the log shows "Layer N: loading attention FP8 native
+    (zero-copy)" x10 and ZERO "Layer N: BF16 -> NVFP4" lines.
+
+    ── SCOPE OF THESE NUMBERS ──
+    Measured with a locally built binary (Avarok-Cybersecurity/atlas
+    main + PRs #381/#382, which touch only the SSM spill tier and do not
+    affect any path above). The serve configuration itself is what is
+    being documented here; re-verify the two signal lines on whatever
+    image you actually pull.
+  maintainer: avarok
+  category: agent
+  model_params: 35B
+  model_dtype: nvfp4
+  quantization: nvfp4
+  kv_dtype: bf16
+
+defaults:
+  port: 8888
+  host: 0.0.0.0
+  # 128K context. Atlas preallocates inference buffers + SSM pool + GDN
+  # chunked-prefill against max_model_len x batch, so raising batch here
+  # costs preflight headroom; 8 fits at util 0.80 with KV overcommit.
+  max_model_len: 131072
+  max_batch_size: 8
+  max_num_seqs: 8
+  kv_cache_dtype: bf16
+  gpu_memory_utilization: 0.80
+  scheduling_policy: slai
+  enable_prefix_caching: true
+  # Marconi SSM snapshots. Replay on a partial hit is bounded by
+  # interval x block_size (32 x 16 = 512 tokens); 32 slots held 0
+  # evictions with 27 restores across an agentic C=1/4/8 sweep.
+  ssm_cache_slots: 32
+  ssm_checkpoint_interval: 32
+  tool_max_tokens: 32768
+  disable_thinking: true
