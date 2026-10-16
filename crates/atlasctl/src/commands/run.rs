@@ -7,6 +7,7 @@ use crate::hostinfo;
 use crate::validate;
 use anyhow::{Result, bail};
 use atlasctl_core::chain::UserConfig;
+use atlasctl_core::docker::DockerFault;
 use atlasctl_core::docker::collective::NcclRoce;
 use atlasctl_core::docker::profile::{NvidiaDevices, ROOTLESS_V1};
 use atlasctl_core::docker::translate::{LaunchContext, translate};
@@ -167,8 +168,14 @@ pub fn run(args: &RunArgs) -> Result<()> {
     let argv = plan.docker.to_argv();
     let out = runner.run(&argv)?;
     if !out.success() {
+        // The raw stderr on its own is what a DGX Spark owner was left holding
+        // when the only thing wrong was their group membership. Lead with the
+        // diagnosis and the fix; keep the raw text underneath, because a
+        // message that hides what actually happened is its own kind of unhelpful.
+        let fault = DockerFault::classify(&out.stderr);
         bail!(
-            "`docker run` failed with status {}:\n{}",
+            "{}\n\n`docker run` exited {} with:\n{}",
+            fault.advice(),
             out.status,
             out.stderr.trim()
         );
