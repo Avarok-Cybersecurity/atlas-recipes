@@ -1,0 +1,72 @@
+recipe_version: "2"
+model: poolside/Laguna-S-2.1-NVFP4
+runtime: atlas
+container: avarok/atlas-gb10:dev
+max_nodes: 1
+
+metadata:
+  description: |
+    Poolside Laguna S 2.1 NVFP4 on one GB10, without DFlash. Laguna is a
+    117.6B-total / 8.5B-active MoE with 48 attention layers and no SSM layers.
+
+    This profile is measured on Atlas PR #350. It uses the checkpoint's native
+    FP8 KV scheme, keeps the BF16 lm-head, and exposes 200K logical context via
+    KV overcommit while limiting Atlas's physical allocation to 80% of unified
+    memory. Prefix caching is enabled for agentic loops; SSM snapshot storage is
+    explicitly disabled because Laguna has no SSM state. Thinking is enabled by
+    default for agentic coding, as recommended by Poolside, and clients can
+    still disable it per request through the Jinja `enable_thinking` control.
+
+    The 16K prefill chunk is the measured balanced setting. Exact MoE tiles
+    improved cold 8K TTFT by 3.7%. The NFS prefetch flag is intentional: Laguna's
+    14 checkpoint shards are commonly served from an NFS-backed Hugging Face
+    cache. DFlash is deliberately omitted until its separate correctness and
+    quality gate is complete.
+  maintainer: monumental-systems
+  category: agent
+  model_params: 117.6B
+  model_dtype: nvfp4
+  quantization: nvfp4
+  kv_dtype: fp8
+
+defaults:
+  port: 8888
+  host: 0.0.0.0
+  max_model_len: 200000
+  max_num_seqs: 4
+  max_batch_size: 4
+  max_prefill_tokens: 16384
+  kv_cache_dtype: fp8
+  lm_head_dtype: bf16
+  gpu_memory_utilization: 0.80
+  swap_space_gb: 4
+  ssm_cache_slots: 0
+  max_thinking_budget: 1024
+  scheduling_policy: slai
+  tbt_deadline_ms: 100
+
+env:
+  ATLAS_KV_OVERCOMMIT: "1"
+  ATLAS_MOE_PREFILL_EXACT_TILES: "1"
+
+# Explicit command until sparkrun's Atlas runtime exposes structured mappings
+# for swap_space_gb and fast_load_prefetch_shards. Keep this in lockstep with
+# the defaults above so CLI overrides for the standard keys still render.
+command: |
+  spark serve poolside/Laguna-S-2.1-NVFP4 \
+    --port {port} \
+    --host {host} \
+    --max-seq-len {max_model_len} \
+    --max-num-seqs {max_num_seqs} \
+    --max-batch-size {max_batch_size} \
+    --max-prefill-tokens {max_prefill_tokens} \
+    --kv-cache-dtype {kv_cache_dtype} \
+    --lm-head-dtype {lm_head_dtype} \
+    --gpu-memory-utilization {gpu_memory_utilization} \
+    --swap-space-gb {swap_space_gb} \
+    --fast-load-prefetch-shards \
+    --enable-prefix-caching \
+    --ssm-cache-slots {ssm_cache_slots} \
+    --max-thinking-budget {max_thinking_budget} \
+    --scheduling-policy {scheduling_policy} \
+    --tbt-deadline-ms {tbt_deadline_ms}
